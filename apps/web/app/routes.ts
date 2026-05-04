@@ -1,7 +1,7 @@
 import {
-  type RouteConfig,
   index,
   layout,
+  type RouteConfig,
   route,
 } from "@react-router/dev/routes";
 
@@ -12,6 +12,7 @@ export default [
     route("/events", "routes/events.tsx"),
     route("/sponsors", "routes/sponsors.tsx"),
     route("/team", "routes/team.tsx"),
+    route("/over-the-years", "routes/over-the-years.tsx"),
   ]),
   route("sign-in/*", "routes/sign-in.tsx"),
   route("sign-up/*", "routes/sign-up.tsx"),
