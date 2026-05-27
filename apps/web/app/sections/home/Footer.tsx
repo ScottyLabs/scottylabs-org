@@ -48,6 +48,21 @@ const socialLinks = [
     color: "gray",
   },
 ];
+
+const legalDocs = [
+  {
+    label: "IRS determination letter",
+    url: "https://assets.scottylabs.org/legal/irs-determination-letter.pdf",
+  },
+  {
+    label: "Articles of incorporation",
+    url: "https://assets.scottylabs.org/legal/articles-of-incorporation.pdf",
+  },
+  {
+    label: "Form 1023-EZ",
+    url: "https://assets.scottylabs.org/legal/form-1023-ez.pdf",
+  },
+];
 export default function Footer() {
   return (
     <footer className={css["footer-container"]}>
@@ -75,6 +90,24 @@ export default function Footer() {
             </React.Fragment>
           );
         })}
+      </div>
+      <div className={css["footer__legal"]}>
+        <div>ScottyLabs is a 501(c)(3) tax-exempt nonprofit organization.</div>
+        <div>
+          502 W 7th St Ste 100, Erie, PA 16502
+          {" · "}EIN 42-2037653
+          {" · "}D-U-N-S 145005627
+        </div>
+        <div className={css["footer__legal-docs"]}>
+          {legalDocs.map(({ label, url }, i) => (
+            <React.Fragment key={url}>
+              {i > 0 && " · "}
+              <a href={url} target="_blank" rel="noreferrer">
+                {label}
+              </a>
+            </React.Fragment>
+          ))}
+        </div>
       </div>
     </footer>
   );

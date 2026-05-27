@@ -76,3 +76,23 @@
     width: 20px;
   }
 }
+.footer__legal {
+  max-width: 1300px;
+  margin: 0 auto;
+  padding: 16px 40px 20px;
+  border-top: 1px solid var(--black-200);
+  color: var(--black-500);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  & a {
+    color: var(--blue-600);
+  }
+  & a:hover {
+    text-decoration: underline;
+  }
+}
