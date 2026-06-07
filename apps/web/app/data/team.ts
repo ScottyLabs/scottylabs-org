@@ -77,7 +77,7 @@ export const PEOPLE = {
   "andy-gao": {
     name: "Andy Gao",
     photo: "AndyGao.jpg",
-    linkedin: "https://www.linkedin.com/in/agao1224/",
+    linkedin: "https://www.linkedin.com/in/anonyms",
   },
   "angela-lou": {
     name: "Angela Lou",
