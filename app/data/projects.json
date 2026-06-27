@@ -1,0 +1,18 @@
+[
+  {
+    "slug": "link-shortener",
+    "name": "Link Shortener",
+    "description": "ScottyLabs link shortener service",
+    "url": "https://cmu.lol",
+    "leads": [
+      "anish",
+      "thesuperRL"
+    ],
+    "members": [
+      "XboxBedrock"
+    ],
+    "repos": [
+      "link-shortener"
+    ]
+  }
+]
