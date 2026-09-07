@@ -489,10 +489,10 @@ export const PEOPLE = {
     photo: "LeonLiu.jpg",
     linkedin: "https://www.linkedin.com/in/leon-liu-6950632a3/",
   },
-  "li-ying": {
-    name: "Li Ying",
-    photo: "LiYing.jpg",
-    linkedin: "https://www.linkedin.com/in/li-ying-9a5667357/",
+  "etash-jhanji": {
+    name: "Etash Jhanji",
+    photo: "EtashJhanji.jpg",
+    linkedin: "https://www.linkedin.com/in/etashj/",
   },
   "lois-chang": {
     name: "Lois Chang",
