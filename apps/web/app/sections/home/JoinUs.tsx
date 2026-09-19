@@ -16,7 +16,7 @@ const recurringEvents = [
     locations: [
       { department: "Tech", location: "Tepper 2612" },
       { department: "Design", location: "Tepper 3801" },
-      { department: "Labrador", location: "Swartz Center (Tepper 2713)" },
+      { department: "Labrador", location: "Swartz Center (Tepper 3713)" },
       // { department: "Bootcamp", location: "Tepper 2613" },
       { department: "Events/Outreach/Finance", location: "Tepper 3808" },
     ],
