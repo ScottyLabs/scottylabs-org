@@ -935,7 +935,7 @@ export const YEARS: Year[] = [
           role: "ScottyLabs AI (SLAI) Tech Lead",
         },
         {
-          person: "li-ying",
+          person: "etash-jhanji",
           role: "CMU Courses Tech Lead",
         },
         {
@@ -1069,7 +1069,7 @@ export const YEARS: Year[] = [
           role: "DevOps Tech Lead",
         },
         {
-          person: "li-ying",
+          person: "etash-jhanji",
           role: "CMU Courses Tech Lead",
         },
         {
