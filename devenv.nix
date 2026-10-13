@@ -12,6 +12,7 @@
     deno = {
       enable = true;
       react.enable = true;
+      dirs = [ "sites/web" ];
     };
     secrets.enable = true;
 
