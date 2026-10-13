@@ -35,17 +35,12 @@ function Hero() {
           </div>
 
           <div className={css["action-buttons"]}>
-            <Link
-              to={
-                "https://docs.google.com/forms/d/e/1FAIpQLSeO0p_cphDFP8eM9cVYy_cOWWqtJbhMCc7RIPJfHL0vWSV6mA/viewform"
-              }
-              target="_blank"
-            >
-              <Button label="Join Us for 2026 Recruitment" variant="primary" />
-            </Link>
             <Link to={"https://tartanconnect.cmu.edu/scottylabs/club_signup"} target="_blank">
-              <Button label="Club Signup" variant="outlined" />
+              <Button label="Join our mailing list" variant="primary" />
             </Link>
+            <a href="mailto:hello@scottylabs.org">
+              <Button label="Reach out" variant="outlined" />
+            </a>
           </div>
 
           <link rel="preload" href={heroBg} as="image" />

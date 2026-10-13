@@ -4,7 +4,6 @@ import instagramIcon from "../../assets/icons/socials/instagram.svg";
 import linkedinIcon from "../../assets/icons/socials/linkedin.svg";
 import mediumIcon from "../../assets/icons/socials/medium.svg";
 import slackIcon from "../../assets/icons/socials/slack.svg";
-import emailIcon from "../../assets/icons/socials/email.svg";
 import divider from "../../assets/icons/socials/social-divider.png";
 import React from "react";
 // I didn't use the go.scottylabs.org links because they take over 1s to redirect you to the actual destination
@@ -39,12 +38,6 @@ const socialLinks = [
     name: "Slack",
     url: "https://join.slack.com/t/scottylabs/shared_invite/zt-3bgp5in0l-T5KKNY70k70CvVVqLcKlDg",
     color: "#4A154B",
-  },
-  {
-    icon: emailIcon,
-    name: "Email us!",
-    url: "mailto:hello@scottylabs.org",
-    color: "gray",
   },
 ];
 
