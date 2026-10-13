@@ -11,7 +11,7 @@
 
     deno = {
       enable = true;
-      react.enable = true;
+      svelte.enable = true;
       dirs = [ "sites/web" ];
     };
     secrets.enable = true;

@@ -1,0 +1,181 @@
+<script lang="ts">
+  import { sponsors } from "#lib/sections/sponsors/sponsors.ts";
+  import appLovin from "#lib/assets/sponsors-page/sponsors/applovin-axon.png";
+
+  const premierSponsors = sponsors.filter((s) => s.type === "premier");
+  const partnerSponsors = sponsors.filter((s) => s.type === "partner");
+  const lowestSponsors = sponsors.filter((s) => s.type === "lowest");
+</script>
+
+{#snippet sponsorTile({ imageUrl, websiteUrl }: { imageUrl: string; websiteUrl: string })}
+  <a href={websiteUrl} target="_blank" rel="noreferrer" class="sponsor">
+    {#if imageUrl}
+      <img src={imageUrl} alt={imageUrl} />
+    {/if}
+  </a>
+{/snippet}
+
+<div class="main-container">
+  <h2 class="header">Thank you to our 2025 Sponsors!</h2>
+  <div class="title-sponsor-container">
+    <h2>TITLE SPONSOR</h2>
+    <a href="https://www.applovin.com/en" target="_blank" rel="noreferrer">
+      <img src={appLovin} alt="AppLovin" />
+    </a>
+  </div>
+
+  <div class="sponsors-container sponsors-container--premier">
+    {#each premierSponsors as { imageUrl, websiteUrl } (websiteUrl)}
+      <div class="sponsors-container--premier__inner-container">
+        {@render sponsorTile({ imageUrl, websiteUrl })}
+      </div>
+    {/each}
+  </div>
+  <div class="sponsors-container sponsors-container--partner">
+    {#each partnerSponsors as { imageUrl, websiteUrl } (websiteUrl)}
+      {@render sponsorTile({ imageUrl, websiteUrl })}
+    {/each}
+  </div>
+  <div class="sponsors-container sponsors-container--smaller">
+    {#each lowestSponsors as { imageUrl, websiteUrl } (websiteUrl)}
+      {@render sponsorTile({ imageUrl, websiteUrl })}
+    {/each}
+  </div>
+</div>
+
+<style>
+  .main-container {
+    margin-bottom: 100px;
+    .header {
+      font-size: 2rem;
+      font-weight: 700;
+      margin-top: 83px;
+      margin-bottom: 41px;
+      text-align: center;
+
+      color: var(--black-900);
+    }
+    .title-sponsor-container {
+      text-align: center;
+      color: var(--black-900);
+      h2 {
+        font-size: 1.5rem;
+      }
+      img {
+        margin-top: 20px;
+        transition: 0.2s all;
+        height: auto;
+        padding-inline: 30px;
+        @media (max-width: 768px) {
+          padding-inline: 0;
+        }
+        max-width: min(800px, 100%);
+        box-sizing: border-box;
+        &:hover {
+          transform: scale(1.04);
+        }
+      }
+      margin-bottom: 50px;
+    }
+    .sponsors-container {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 10px;
+
+      &.sponsors-container--premier {
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        position: relative;
+        .sponsors-container--premier__inner-container {
+          position: relative;
+          padding: 3px;
+          background: linear-gradient(221deg, hsla(39, 99%, 86%, 1) 0%, rgb(243, 201, 123) 60%);
+          border-radius: 5px;
+        }
+        .sponsor {
+          padding: 30px 30px;
+          height: 40px;
+          display: block;
+          background-color: hsl(42, 93%, 99%);
+          outline-offset: -3px;
+          overflow: hidden;
+
+          &:hover {
+            outline-color: transparent;
+            background: hsl(43, 88%, 93%);
+          }
+          &:hover {
+            &::before {
+              animation: shine 0.4s forwards linear;
+            }
+          }
+          &::before {
+            content: "";
+            display: block;
+            width: 0px;
+            height: 86%;
+            position: absolute;
+            top: 7%;
+            left: 0%;
+
+            opacity: 0;
+            background: white;
+            box-shadow: 0 0 18px 8px white;
+            transform: skewX(20deg);
+          }
+        }
+      }
+      &.sponsors-container--partner {
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        & .sponsor {
+          background-color: hsl(200, 15%, 98%);
+          height: 30px;
+          padding: 25px 15px;
+          outline-offset: -2px;
+          outline: 2px solid hsl(200, 15%, 94%);
+        }
+      }
+      &.sponsors-container--smaller {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        & .sponsor {
+          height: 30px;
+          padding: 20px 30px;
+          outline-offset: -2px;
+          outline: 2px solid hsl(200, 15%, 91%);
+        }
+      }
+      .sponsor {
+        background-color: var(--tile-bg-color);
+        border-radius: 5px;
+        transition: 0.1s all;
+        outline: 2px solid transparent;
+        img {
+          height: 100%;
+          width: 100%;
+          -webkit-user-drag: none;
+          object-fit: contain;
+          object-position: center;
+        }
+        &:hover {
+          background-color: hsl(200, 65%, 94%);
+          outline-offset: 0px;
+          outline-color: hsl(200, 15%, 41%);
+        }
+      }
+    }
+  }
+
+  @keyframes shine {
+    0% {
+      left: 10%;
+    }
+    40% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 0.5;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+</style>

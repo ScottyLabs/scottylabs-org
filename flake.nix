@@ -41,7 +41,7 @@
             src = ./sites/web;
             pname = "scottylabs-org-web";
             version = "0.1.0";
-            output = "build/client";
+            output = "build";
           };
         }
       );

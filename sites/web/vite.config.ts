@@ -1,19 +1,15 @@
+import adapter from "@sveltejs/adapter-static";
+import { sveltekit } from "@sveltejs/kit/vite";
 import { defineConfig } from "vite";
 import { ViteImageOptimizer } from "vite-plugin-image-optimizer";
-import { reactRouter } from "@react-router/dev/vite";
 
-// https://vite.dev/config/
 export default defineConfig({
   plugins: [
-    reactRouter(),
+    sveltekit({ adapter: adapter() }),
     ViteImageOptimizer({
       jpg: {
         quality: 90,
       },
     }),
   ],
-  envPrefix: ["VITE_", "POSTHOG_"],
-  ssr: {
-    noExternal: ["posthog-js"],
-  },
 });

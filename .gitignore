@@ -9,7 +9,7 @@ result
 
 # JS / deno
 node_modules/
-sites/web/.react-router/
+sites/web/.svelte-kit/
 sites/web/build/
 
 # Secrets

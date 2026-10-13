@@ -1,7 +1,7 @@
 {
   "nodeModulesDir": "auto",
   "tasks": {
-    "dev": "react-router dev",
-    "build": "react-router typegen && tsc -b && react-router build"
+    "dev": "vite dev",
+    "build": "vite build"
   }
 }
