@@ -10,10 +10,7 @@ import {
 import { ClerkProvider } from "@clerk/react-router";
 import type { Route } from "./+types/root";
 import "./index.css";
-import { QueryClientProvider, QueryClient } from "@tanstack/react-query";
-import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import { StrictMode } from "react";
-import { tsr } from "./utils/tsr";
 import satoshiFont from "./assets/fonts/Satoshi-Regular.woff2";
 import satoshiFontBold from "./assets/fonts/Satoshi-Bold.woff2";
 import satoshiFontMedium from "./assets/fonts/Satoshi-Medium.woff2";
@@ -31,37 +28,6 @@ import {
 } from "@clerk/react-router";
 import env from "./utils/env";
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      /**
-       * 5s should be enough to just keep identical query waterfalls low
-       * @example if one page components uses a query that is also used further down the tree
-       */
-      staleTime: 5000,
-
-      // Don't retry on 404s and other client errors
-      retry: (failureCount, error) => {
-        if (error instanceof Response) {
-          // Don't retry on client errors (4xx)
-          if (error.status >= 400 && error.status < 500) {
-            return false;
-          }
-          // Retry on server errors (5xx)
-          return failureCount < 3;
-        }
-        // Retry network errors
-        if (error instanceof TypeError && error.message === "Failed to fetch") {
-          return failureCount < 3;
-        }
-        return false;
-      },
-
-      refetchOnWindowFocus: true,
-      refetchOnReconnect: true,
-    },
-  },
-});
 export async function loader(args: Route.LoaderArgs) {
   return rootAuthLoader(args);
 }
@@ -131,15 +97,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
       <body>
         <StrictMode>
           <PostHogProvider>
-            <QueryClientProvider client={queryClient}>
-              <tsr.ReactQueryProvider>
-                {children}
+            {children}
 
-                <ScrollRestoration />
-                <Scripts />
-              </tsr.ReactQueryProvider>
-              <ReactQueryDevtools />
-            </QueryClientProvider>
+            <ScrollRestoration />
+            <Scripts />
           </PostHogProvider>
         </StrictMode>
       </body>

@@ -51,9 +51,6 @@ function Hero() {
             >
               <Button label="Club Signup" variant="outlined" />
             </Link>
-            {/* <Link to={"/projects"} prefetch="viewport">
-              <Button label="View Projects" variant="outlined" />
-            </Link> */}
           </div>
 
           <link rel="preload" href={heroBg} as="image" />

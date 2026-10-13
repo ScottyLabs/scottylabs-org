@@ -9,11 +9,7 @@ export function getAllImageLinksInAssetDirectory(
     | "carousel-images"
     | "design-app-icons"
     | "code-app-icons"
-    | "tartanhacks-photos"
-    | "cmu-courses"
-    | "cmu-eats"
-    | "cmu-maps"
-    | "lost-and-found",
+    | "tartanhacks-photos",
 ): string[] {
   switch (dir) {
     case "carousel-images":
@@ -43,38 +39,6 @@ export function getAllImageLinksInAssetDirectory(
     case "tartanhacks-photos":
       return Object.values(
         import.meta.glob("../assets/irl/tartanhacks/*", {
-          eager: true,
-          query: "url",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as Record<string, any>,
-      ).map((data) => data.default);
-    case "cmu-courses":
-      return Object.values(
-        import.meta.glob("../assets/projects-page/cmu-courses/*", {
-          eager: true,
-          query: "url",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as Record<string, any>,
-      ).map((data) => data.default);
-    case "cmu-eats":
-      return Object.values(
-        import.meta.glob("../assets/projects-page/cmu-eats/*", {
-          eager: true,
-          query: "url",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as Record<string, any>,
-      ).map((data) => data.default);
-    case "cmu-maps":
-      return Object.values(
-        import.meta.glob("../assets/projects-page/cmu-maps/*", {
-          eager: true,
-          query: "url",
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        }) as Record<string, any>,
-      ).map((data) => data.default);
-    case "lost-and-found":
-      return Object.values(
-        import.meta.glob("../assets/projects-page/lost-and-found/*", {
           eager: true,
           query: "url",
           // eslint-disable-next-line @typescript-eslint/no-explicit-any

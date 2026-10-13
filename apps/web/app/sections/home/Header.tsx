@@ -3,16 +3,10 @@ import clsx from "clsx";
 
 import scottylabsLogo from "../../assets/scottylabs-logo.svg";
 import teamIcon from "../../assets/icons/team.svg";
-import projectsIcon from "../../assets/icons/projects.svg";
 import eventsIcon from "../../assets/icons/events.svg";
 import sponsorsIcon from "../../assets/icons/sponsors.svg";
 import { NavLink, useLocation } from "react-router";
 const navLinks = [
-  {
-    icon: projectsIcon,
-    url: "/projects",
-    text: "Projects",
-  },
   // {
   //   icon: eventsIcon,
   //   url: "/events",
