@@ -1,24 +1,17 @@
 import css from "./JoinUs.module.css";
 const recurringEvents = [
   {
-    name: "GBM",
-    time: "Every other Wednesday, 5-6 PM",
-    locations: [
-      {
-        department: "All",
-        location: "Location TBD",
-      },
-    ],
-  },
-  {
     name: "Committee Work Sessions",
     time: "Saturdays, 4-6 PM",
     locations: [
-      { department: "Tech", location: "Tepper 2612" },
+      { department: "Tech", location: "Tepper 2700, 2701, 2613" },
+      { department: "Finance/Events/Outreach", location: "Tepper 3808" },
       { department: "Design", location: "Tepper 3801" },
-      { department: "Labrador", location: "Swartz Center (Tepper 3713)" },
-      // { department: "Bootcamp", location: "Tepper 2613" },
-      { department: "Events/Outreach/Finance", location: "Tepper 3808" },
+      { department: "Foundry", location: "Tepper 2612" },
+      {
+        department: "Labrador",
+        location: "Swartz Center for Entrepreneurship (Tepper 3713)",
+      },
     ],
   },
 ];
