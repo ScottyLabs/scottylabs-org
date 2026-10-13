@@ -1,6 +1,6 @@
 # ScottyLabs.org!
 
-The official landing page for ScottyLabs, as well as the host for Clerk authentication.
+The official landing page for ScottyLabs.
 
 The site lives in `/apps/web`.
 

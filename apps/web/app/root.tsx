@@ -7,7 +7,6 @@ import {
   Scripts,
   ScrollRestoration,
 } from "react-router";
-import { ClerkProvider } from "@clerk/react-router";
 import type { Route } from "./+types/root";
 import "./index.css";
 import { StrictMode } from "react";
@@ -19,18 +18,6 @@ import jetbrainsMono from "./assets/fonts/JetBrainsMono-Regular.ttf";
 import errorCSS from "./Error.module.css";
 import errorRyo from "./assets/ryo.webp";
 import { PostHogProvider } from "./providers/PostHogProvider";
-import { rootAuthLoader } from "@clerk/react-router/ssr.server";
-import {
-  SignedIn,
-  SignedOut,
-  UserButton,
-  SignInButton,
-} from "@clerk/react-router";
-import env from "./utils/env";
-
-export async function loader(args: Route.LoaderArgs) {
-  return rootAuthLoader(args);
-}
 export const links: Route.LinksFunction = () => [
   {
     rel: "icon",
@@ -108,26 +95,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function App({ loaderData }: Route.ComponentProps) {
-  return (
-    <ClerkProvider
-      loaderData={loaderData}
-      allowedRedirectOrigins={env.VITE_PUBLIC_CLERK_ALLOWED_REDIRECT_ORIGINS}
-      localization={{
-        signIn: {
-          start: {
-            subtitle: "Welcome! Please use your andrew email to log in",
-          },
-        },
-        formFieldInputPlaceholder__emailAddress: "andrewid@andrew.cmu.edu",
-      }}
-    >
-      {/* <SignedIn>
-        <UserButton />
-      </SignedIn> */}
-      <Outlet />
-    </ClerkProvider>
-  );
+export default function App() {
+  return <Outlet />;
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {

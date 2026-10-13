@@ -13,6 +13,4 @@ export default [
     route("/team", "routes/team.tsx"),
     route("/over-the-years", "routes/over-the-years.tsx"),
   ]),
-  route("sign-in/*", "routes/sign-in.tsx"),
-  route("sign-up/*", "routes/sign-up.tsx"),
 ] satisfies RouteConfig;
