@@ -9,6 +9,7 @@ export function PostHogProvider({ children }: { children: React.ReactNode }) {
     if (POSTHOG_KEY === undefined) return;
     posthog.init(POSTHOG_KEY, {
       api_host: POSTHOG_HOST,
+      ui_host: "https://us.posthog.com",
       defaults: "2025-05-24",
     });
   }, []);
