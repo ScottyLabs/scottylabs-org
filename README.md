@@ -2,10 +2,12 @@
 
 The official landing page for ScottyLabs.
 
-The site lives in `/apps/web`.
+## Getting started
 
-For .env variables, check the latest Railway deployment. If you don't have access, ask Eric Xu on Slack.
+Log in to OpenBao and set up devenv by following kennel's [local development](https://docs.kennel.scottylabs.org/guides/secrets.html#local-development) and [devenv setup](https://docs.kennel.scottylabs.org/guides/deploying.html#2-set-up-devenv) guides.
 
-To run the site: `pnpm -F @apps/web dev`
+Run the dev server with hot reloading:
 
-Frontend: React + Vite + Typescript
+```bash
+cd sites/web && deno task dev
+```
