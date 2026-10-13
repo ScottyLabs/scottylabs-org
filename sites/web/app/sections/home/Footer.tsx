@@ -2,16 +2,14 @@ import css from "./Footer.module.css";
 import tartanConnectIcon from "../../assets/icons/socials/tartan-connect.png";
 import instagramIcon from "../../assets/icons/socials/instagram.svg";
 import linkedinIcon from "../../assets/icons/socials/linkedin.svg";
-import mediumIcon from "../../assets/icons/socials/medium.svg";
+import discordIcon from "../../assets/icons/socials/discord.svg";
 import slackIcon from "../../assets/icons/socials/slack.svg";
 import divider from "../../assets/icons/socials/social-divider.png";
 import React from "react";
-// I didn't use the go.scottylabs.org links because they take over 1s to redirect you to the actual destination
-// if that's fixed, I can replace these with go.scottylabs.org
 const socialLinks = [
   {
     icon: tartanConnectIcon,
-    name: "Tartan Connect",
+    name: "TartanConnect",
     url: "https://tartanconnect.cmu.edu/scottylabs/club_signup",
     color: "hsl(0,100%,30%)",
   },
@@ -28,15 +26,15 @@ const socialLinks = [
     color: "#0E76A8",
   },
   {
-    icon: mediumIcon,
-    name: "Medium",
-    url: "https://medium.com/tartanhacks",
-    color: "black",
+    icon: discordIcon,
+    name: "Discord",
+    url: "https://go.scottylabs.org/discord",
+    color: "#5865F2",
   },
   {
     icon: slackIcon,
     name: "Slack",
-    url: "https://join.slack.com/t/scottylabs/shared_invite/zt-3bgp5in0l-T5KKNY70k70CvVVqLcKlDg",
+    url: "https://go.scottylabs.org/slack",
     color: "#4A154B",
   },
 ];
