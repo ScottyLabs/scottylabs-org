@@ -9,41 +9,46 @@
   };
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    scottylabs = {
-      url = "git+https://git.cmu.dev/ScottyLabs/kennel";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    scottylabs.url = "git+https://git.cmu.dev/ScottyLabs/kennel";
+    nixpkgs.follows = "scottylabs/nixpkgs";
+    flake-parts.follows = "scottylabs/flake-parts";
   };
 
   outputs =
-    {
-      nixpkgs,
-      scottylabs,
-      ...
-    }:
-    let
+    inputs:
+    inputs.flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ inputs.scottylabs.flakeModules.default ];
       systems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
       ];
-      forAllSystems = nixpkgs.lib.genAttrs systems;
-    in
-    {
-      packages = forAllSystems (
-        system:
-        let
-          pkgs = nixpkgs.legacyPackages.${system};
-          helpers = scottylabs.mkLib pkgs;
-        in
+
+      perSystem =
+        { helpers, ... }:
         {
-          web = helpers.buildDenoTask {
-            src = ./sites/web;
-            pname = "scottylabs-org-web";
-            version = "0.1.0";
-            output = "build";
+          scottylabs = {
+            project.name = "scottylabs-org";
+            deno = {
+              enable = true;
+              svelte.enable = true;
+              dirs = [ "sites/web" ];
+            };
           };
-        }
-      );
+
+          pre-commit.settings.hooks.oxlint.settings.allow = [
+            "max-lines"
+            "max-lines-per-function"
+          ];
+
+          sites.web = {
+            package = helpers.buildDenoTask {
+              src = ./sites/web;
+              pname = "scottylabs-org-web";
+              output = "build";
+            };
+            customDomain = "scottylabs.org";
+          };
+        };
     };
 }

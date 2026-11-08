@@ -2,7 +2,7 @@
   import "../app.css";
   import { onMount, type Snippet } from "svelte";
   import posthog from "posthog-js";
-  import { POSTHOG_HOST, POSTHOG_KEY } from "$app/env/public";
+  import { PUBLIC_POSTHOG_HOST, PUBLIC_POSTHOG_KEY } from "$app/env/public";
   import Header from "#lib/sections/home/Header.svelte";
   import Footer from "#lib/sections/home/Footer.svelte";
   import satoshiFont from "#lib/assets/fonts/Satoshi-Regular.woff2";
@@ -14,9 +14,9 @@
   let { children }: { children: Snippet } = $props();
 
   onMount(() => {
-    if (POSTHOG_KEY === undefined) return;
-    posthog.init(POSTHOG_KEY, {
-      api_host: POSTHOG_HOST,
+    if (PUBLIC_POSTHOG_KEY === undefined) return;
+    posthog.init(PUBLIC_POSTHOG_KEY, {
+      api_host: PUBLIC_POSTHOG_HOST,
       ui_host: "https://us.posthog.com",
       defaults: "2025-05-24",
     });
