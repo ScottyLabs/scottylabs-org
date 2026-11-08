@@ -7,8 +7,5 @@ node_modules/
 sites/web/.svelte-kit/
 sites/web/build/
 
-# Secrets
-.env
-
 # OS
 .DS_Store
