@@ -48,10 +48,6 @@
       label: "Articles of incorporation",
       url: "https://assets.scottylabs.org/legal/articles-of-incorporation.pdf",
     },
-    {
-      label: "Form 1023-EZ",
-      url: "https://assets.scottylabs.org/legal/form-1023-ez.pdf",
-    },
   ];
   const CURRENT_YEAR = new Date().getFullYear();
 </script>

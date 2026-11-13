@@ -8,7 +8,7 @@ Assets are stored in object storage. Three prefixes are in use:
 
 - `https://assets.scottylabs.org/team-page/<filename>`: leadership headshots, referenced from `PEOPLE.<id>.photo` by filename.
 - `https://assets.scottylabs.org/team-page/history/<filename>`: `/over-the-years` carousel images, referenced from `HISTORY[].photos[].filename`.
-- `https://assets.scottylabs.org/legal/<filename>`: nonprofit legal documents (IRS determination letter, articles of incorporation, Form 1023-EZ) linked from the site footer in `sites/web/src/lib/sections/home/Footer.svelte`.
+- `https://assets.scottylabs.org/legal/<filename>`: nonprofit legal documents (IRS determination letter, articles of incorporation) linked from the site footer in `sites/web/src/lib/sections/home/Footer.svelte`.
 
 The bucket is anonymously readable; do not upload anything that should not be public.
 
