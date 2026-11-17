@@ -8,6 +8,7 @@ export const COMMITTEE_LABELS: Record<Committee, string> = {
   outreach: "Outreach",
   tech: "Tech",
   labrador: "Labrador",
+  foundry: "Foundry",
   design: "Design",
   finance: "Finance",
 };

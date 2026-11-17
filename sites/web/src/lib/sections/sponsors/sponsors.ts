@@ -1,147 +1,52 @@
-import accenture from "../../assets/sponsors-page/sponsors/accenture.svg?inline";
-import agentuity from "../../assets/sponsors-page/sponsors/agentuity.svg?inline";
-import balysany from "../../assets/sponsors-page/sponsors/balysany.svg?inline";
-import citadel from "../../assets/sponsors-page/sponsors/citadel.svg?inline";
-import coderabbit from "../../assets/sponsors-page/sponsors/coderabbit.svg?inline";
-import imc from "../../assets/sponsors-page/sponsors/imc.svg?inline";
-import dedalusLabs from "../../assets/sponsors-page/sponsors/dedalus.webp";
-import deshaw from "../../assets/sponsors-page/sponsors/deshaw.svg?inline";
-import fly from "../../assets/sponsors-page/sponsors/fly.svg?inline";
-import hrt from "../../assets/sponsors-page/sponsors/hrt.svg?inline";
-import janeStreet from "../../assets/sponsors-page/sponsors/janestreet.svg?inline";
-import modal from "../../assets/sponsors-page/sponsors/modal.svg?inline";
-import optiver from "../../assets/sponsors-page/sponsors/optiver.svg?inline";
-import scale from "../../assets/sponsors-page/sponsors/scale.svg?inline";
-import snl from "../../assets/sponsors-page/sponsors/snl.svg?inline";
-import visa from "../../assets/sponsors-page/sponsors/visa.svg?inline";
-import decagon from "../../assets/sponsors-page/sponsors/decagon.svg?inline";
-import ripple from "../../assets/sponsors-page/sponsors/ripple.svg?inline";
-import conway from "../../assets/sponsors-page/sponsors/conway.png";
-import capitalOne from "../../assets/sponsors-page/sponsors/capitalone.svg?inline";
-import transfyr from "../../assets/sponsors-page/sponsors/transfyr.png";
-import bny from "../../assets/sponsors-page/sponsors/bny.png";
-import phoebe from "../../assets/sponsors-page/sponsors/phoebe.svg?inline";
+import accenture from "../../assets/sponsors-page/sponsors/Partner/Accenture.webp";
+import anduril from "../../assets/sponsors-page/sponsors/Partner/Anduril.png";
+import citadel from "../../assets/sponsors-page/sponsors/Partner/Citadel.png";
+import deshaw from "../../assets/sponsors-page/sponsors/Partner/DEShaw&Co.webp";
+import decagon from "../../assets/sponsors-page/sponsors/Partner/Decagon.jpg";
+import optiver from "../../assets/sponsors-page/sponsors/Partner/Optiver.jpg";
+import perplexity from "../../assets/sponsors-page/sponsors/Partner/Perplexity.jpg";
+import recruitHoldings from "../../assets/sponsors-page/sponsors/Partner/Recruit_Holdings.png";
+import runpod from "../../assets/sponsors-page/sponsors/Partner/RunPod.png";
+import sandiaNationalLaboratories from "../../assets/sponsors-page/sponsors/Partner/Sandia_National_Laboratories.webp";
+import capitalOne from "../../assets/sponsors-page/sponsors/Premier/CapitalOne.webp";
+import doordash from "../../assets/sponsors-page/sponsors/Premier/Doordash.jpg";
+import hrt from "../../assets/sponsors-page/sponsors/Premier/HRT.png";
+import mechanize from "../../assets/sponsors-page/sponsors/Premier/Mechanize.png";
+import ripple from "../../assets/sponsors-page/sponsors/Premier/Ripple.png";
+import salesforce from "../../assets/sponsors-page/sponsors/Premier/Salesforce.webp";
+import bobyard from "../../assets/sponsors-page/sponsors/Special Partner/Bobyard.png";
+import fada from "../../assets/sponsors-page/sponsors/Special Partner/F-ADA.png";
+import gm from "../../assets/sponsors-page/sponsors/Special Partner/GM.webp";
+import specialPartnerMechanize from "../../assets/sponsors-page/sponsors/Special Partner/Mechanize.png";
+import redBull from "../../assets/sponsors-page/sponsors/Special Partner/RedBull.png";
+import specialPartnerSalesforce from "../../assets/sponsors-page/sponsors/Special Partner/Salesforce.webp";
+import uber from "../../assets/sponsors-page/sponsors/Special Partner/Uber.png";
+import appLovin from "../../assets/sponsors-page/sponsors/Title/AppLovin.png";
+
 export type SponsorTypes = "lowest" | "partner" | "premier";
 
 export const sponsors = [
-  {
-    imageUrl: accenture,
-    type: "partner",
-    websiteUrl: "https://www.accenture.com",
-  },
-  {
-    imageUrl: agentuity,
-    type: "partner",
-    websiteUrl: "https://agentuity.com/",
-  },
-  {
-    imageUrl: balysany,
-    type: "lowest",
-    websiteUrl: "https://www.bamfunds.com/",
-  },
-  {
-    imageUrl: citadel,
-    type: "partner",
-    websiteUrl: "https://www.citadel.com/",
-  },
-  {
-    imageUrl: coderabbit,
-    type: "premier",
-    websiteUrl: "https://www.coderabbit.ai/",
-  },
-  // {
-  //   imageUrl: commvault,
-  //   type: "partner",
-  //   websiteUrl: "https://www.commvault.com/",
-  // },
-  {
-    imageUrl: deshaw,
-    type: "partner",
-    websiteUrl: "https://www.deshaw.com/",
-  },
-  {
-    imageUrl: fly,
-    type: "partner",
-    websiteUrl: "https://fly.io/",
-  },
-  {
-    imageUrl: hrt,
-    type: "partner",
-    websiteUrl: "https://www.hudsonrivertrading.com/",
-  },
-  {
-    imageUrl: janeStreet,
-    type: "lowest",
-    websiteUrl: "https://www.janestreet.com/",
-  },
-  {
-    imageUrl: modal,
-    type: "partner",
-    websiteUrl: "https://modal.com/",
-  },
-  {
-    imageUrl: optiver,
-    type: "partner",
-    websiteUrl: "https://optiver.com/",
-  },
-  {
-    imageUrl: scale,
-    type: "partner",
-    websiteUrl: "https://scale.com/",
-  },
-  {
-    imageUrl: snl,
-    type: "partner",
-    websiteUrl: "https://www.sandia.gov/",
-  },
-  {
-    imageUrl: visa,
-    type: "premier",
-    websiteUrl: "https://visa.com/",
-  },
-  {
-    imageUrl: decagon,
-    type: "partner",
-    websiteUrl: "https://decagon.ai/",
-  },
-  {
-    imageUrl: ripple,
-    type: "premier",
-    websiteUrl: "https://ripple.com/",
-  },
-  {
-    imageUrl: conway,
-    type: "premier",
-    websiteUrl: "https://conway.ai/",
-  },
-  {
-    imageUrl: dedalusLabs,
-    type: "premier",
-    websiteUrl: "https://www.dedaluslabs.ai/",
-  },
-  {
-    imageUrl: imc,
-    type: "partner",
-    websiteUrl: "https://www.imc.com/",
-  },
-  {
-    imageUrl: capitalOne,
-    type: "premier",
-    websiteUrl: "https://www.capitalone.com/",
-  },
-  {
-    imageUrl: transfyr,
-    type: "partner",
-    websiteUrl: "https://transfyr.ai/",
-  },
-  {
-    imageUrl: bny,
-    type: "premier",
-    websiteUrl: "https://www.bny.com/",
-  },
-  {
-    imageUrl: phoebe,
-    type: "partner",
-    websiteUrl: "https://phoebe.work/",
-  },
+  { imageUrl: capitalOne, type: "premier", websiteUrl: "https://www.capitalone.com/" },
+  { imageUrl: doordash, type: "premier", websiteUrl: "https://www.doordash.com/" },
+  { imageUrl: hrt, type: "premier", websiteUrl: "https://www.hudsonrivertrading.com/" },
+  { imageUrl: mechanize, type: "premier", websiteUrl: "https://mechanize.work/" },
+  { imageUrl: ripple, type: "premier", websiteUrl: "https://ripple.com/" },
+  { imageUrl: salesforce, type: "premier", websiteUrl: "https://www.salesforce.com/" },
+  { imageUrl: accenture, type: "lowest", websiteUrl: "https://www.accenture.com/" },
+  { imageUrl: anduril, type: "lowest", websiteUrl: "https://www.anduril.com/" },
+  { imageUrl: citadel, type: "lowest", websiteUrl: "https://www.citadel.com/" },
+  { imageUrl: deshaw, type: "lowest", websiteUrl: "https://www.deshaw.com/" },
+  { imageUrl: decagon, type: "lowest", websiteUrl: "https://decagon.ai/" },
+  { imageUrl: optiver, type: "lowest", websiteUrl: "https://optiver.com/" },
+  { imageUrl: perplexity, type: "lowest", websiteUrl: "https://www.perplexity.ai/" },
+  { imageUrl: recruitHoldings, type: "lowest", websiteUrl: "https://recruit-holdings.com/" },
+  { imageUrl: runpod, type: "lowest", websiteUrl: "https://www.runpod.io/" },
+  { imageUrl: sandiaNationalLaboratories, type: "lowest", websiteUrl: "https://www.sandia.gov/" },
+  { imageUrl: bobyard, type: "partner", websiteUrl: "https://www.bobyard.com/" },
+  { imageUrl: fada, type: "partner", websiteUrl: "https://www.f-ada.com/" },
+  { imageUrl: gm, type: "partner", websiteUrl: "https://www.gm.com/" },
+  { imageUrl: specialPartnerMechanize, type: "partner", websiteUrl: "https://mechanize.work/" },
+  { imageUrl: redBull, type: "partner", websiteUrl: "https://www.redbull.com/" },
+  { imageUrl: specialPartnerSalesforce, type: "partner", websiteUrl: "https://www.salesforce.com/" },
+  { imageUrl: uber, type: "partner", websiteUrl: "https://www.uber.com/" },
 ] satisfies { imageUrl: string; type: SponsorTypes; websiteUrl: string }[];

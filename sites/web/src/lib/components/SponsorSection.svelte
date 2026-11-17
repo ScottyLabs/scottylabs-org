@@ -16,7 +16,7 @@
 {/snippet}
 
 <div class="main-container">
-  <h2 class="header">Thank you to our 2025 Sponsors!</h2>
+  <h2 class="header">Thank you to our 2026 Sponsors!</h2>
   <div class="title-sponsor-container">
     <h2>TITLE SPONSOR</h2>
     <a href="https://www.applovin.com/en" target="_blank" rel="noreferrer">

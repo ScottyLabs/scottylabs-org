@@ -52,6 +52,8 @@
     "rgba(205, 179, 210, 0.60)",
     // Column 6 - Finance
     "rgba(179, 213, 224, 0.60)",
+    // Column 7 - Foundry
+    "rgba(211, 199, 174, 0.60)",
   ];
 </script>
 
@@ -65,7 +67,7 @@
     <div style="position: relative; z-index: 1; min-width: 1000px">
       <!-- Vertical lines spanning the entire height -->
       <div
-        style="position: absolute; inset: 0; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 12px; pointer-events: none; z-index: 0"
+        style="position: absolute; inset: 0; display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 12px; pointer-events: none; z-index: 0"
       >
         {#each COMMITTEES as committee, idx (committee)}
           <div style="display: flex; justify-content: center; align-items: flex-start">
@@ -82,7 +84,7 @@
           style:margin-bottom={yearIdx === YEARS.length - 1 ? "0" : "60px"}
         >
           <div
-            style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px; margin-bottom: 16px"
+            style="display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; margin-bottom: 16px"
           >
             <div
               style="position: absolute; left: -110px; top: 100px; transform: translateY(-50%); color: #000; font-family: Satoshi, sans-serif; font-size: 20px; font-weight: 700; line-height: 1; white-space: nowrap; z-index: 2"
@@ -91,7 +93,7 @@
             </div>
 
             <div
-              style="position: absolute; top: 100px; left: -20px; width: calc(100% / 7 * 6 + (100% / 7 + 12px) / 2 + 20px); height: 1px; background-color: #819AFF; z-index: 0"
+              style="position: absolute; top: 100px; left: -20px; width: calc(100% / 8 * 7 + (100% / 8 + 12px) / 2 + 20px); height: 1px; background-color: #819AFF; z-index: 0"
             >
               <div
                 style="position: absolute; left: -4px; top: -4px; width: 8px; height: 8px; border-radius: 50%; background-color: #819AFF"
@@ -108,7 +110,7 @@
             {/each}
           </div>
 
-          <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 12px">
+          <div style="display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px">
             {#each COMMITTEES as committee (committee)}
               {@const team = year.teams[committee] ?? []}
               <div

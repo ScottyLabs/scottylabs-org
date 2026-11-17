@@ -6,6 +6,7 @@ export const COMMITTEES = [
   "labrador",
   "design",
   "finance",
+  "foundry",
 ] as const;
 
 export type Committee = (typeof COMMITTEES)[number];
@@ -49,6 +50,9 @@ export const PEOPLE = {
     photo: "AlexanderObolenskiy.jpg",
     linkedin: "https://www.linkedin.com/in/alexander-obolenskiy/",
   },
+  "alex-ru": {
+    name: "Alex Ru",
+  },
   "allen-gu": {
     name: "Allen Gu",
     // Allen requested not to have a photo
@@ -88,6 +92,10 @@ export const PEOPLE = {
     name: "Anika Halappanavar",
     photo: "AnikaHalappanavar.jpg",
     linkedin: "https://www.linkedin.com/in/anika-halappanavar-b4357b20a/",
+  },
+  "anna-david": {
+    name: "Anna David",
+    linkedin: "https://www.linkedin.com/in/anna-david-tech/",
   },
   "anish-pallati": {
     name: "Anish Pallati",
@@ -131,6 +139,7 @@ export const PEOPLE = {
   },
   "bach-ha-lan-vu": {
     name: "Bach Ha Lan Vu",
+    linkedin: "https://www.linkedin.com/in/lan-vu-design/",
   },
   "bradley-teo": {
     name: "Bradley Teo",
@@ -152,6 +161,10 @@ export const PEOPLE = {
     photo: "CassandraZhou.jpg",
     linkedin: "https://www.linkedin.com/in/runxin-zhou/",
   },
+  "catherine-seluzhytskaya": {
+    name: "Catherine Seluzhytskaya",
+    linkedin: "https://www.linkedin.com/in/catherine-seluzhytskaya-253410346/",
+  },
   "chloe-deng": {
     name: "Chloe Deng",
     photo: "ChloeDeng.jpg",
@@ -169,6 +182,7 @@ export const PEOPLE = {
   },
   "christina-li": {
     name: "Christina Li",
+    linkedin: "https://www.linkedin.com/in/christinamli/",
   },
   "connor-mowry": {
     name: "Connor Mowry",
@@ -239,6 +253,10 @@ export const PEOPLE = {
     photo: "EllyseLai.jpg",
     linkedin: "https://www.linkedin.com/in/ellyse-lai/",
   },
+  "emma-wong": {
+    name: "Emma Wong",
+    linkedin: "https://www.linkedin.com/in/emma-wong868/",
+  },
   "emily-guo": {
     name: "Emily Guo",
     photo: "EmilyGuo.jpg",
@@ -274,6 +292,10 @@ export const PEOPLE = {
     photo: "EunsooOh.jpg",
     linkedin: "https://www.linkedin.com/in/eunsoooh/",
   },
+  "eu-rway-chew": {
+    name: "Eu-rway Chew",
+    linkedin: "https://www.linkedin.com/in/eu-rway-chew/",
+  },
   "evan-foster": {
     name: "Evan Foster",
     photo: "EvanFoster.jpg",
@@ -303,6 +325,10 @@ export const PEOPLE = {
     name: "Haresh Muralidharan",
     photo: "HareshMuralidharan.png",
     linkedin: "https://www.linkedin.com/in/haresh-m/",
+  },
+  "helen-fu": {
+    name: "Helen Fu",
+    linkedin: "https://www.linkedin.com/in/helenfu25/",
   },
   "hong-lin": {
     name: "Hong Lin",
@@ -568,6 +594,10 @@ export const PEOPLE = {
     photo: "MihirDhamankar.jpg",
     linkedin: "https://www.linkedin.com/in/mihirdhamankar/",
   },
+  "misha-garg": {
+    name: "Misha Garg",
+    linkedin: "https://www.linkedin.com/in/misha-garg1/",
+  },
   "monisha-gopal": {
     name: "Monisha Gopal",
     photo: "MonishaGopal.jpg",
@@ -582,6 +612,10 @@ export const PEOPLE = {
     name: "Nicolas Ettlin",
     photo: "NicolasEttlin.jpg",
     linkedin: "https://www.linkedin.com/in/ettlin/",
+  },
+  "nikhil-ramanuja": {
+    name: "Nikhil Ramanuja",
+    linkedin: "https://www.linkedin.com/in/nikhil-ramanuja/",
   },
   "nithya-kemp": {
     name: "Nithya Kemp",
@@ -607,6 +641,10 @@ export const PEOPLE = {
     name: "Pi Rey Low",
     photo: "PiReyLow.jpg",
     linkedin: "https://www.linkedin.com/in/pireylow/",
+  },
+  "pranav-kumara": {
+    name: "Pranav Kumara",
+    linkedin: "https://www.linkedin.com/in/pranav-kumara/",
   },
   "preethi-krishnamoorthy": {
     name: "Preethi Krishnamoorthy",
@@ -717,6 +755,10 @@ export const PEOPLE = {
     photo: "ShannonLin.jpg",
     linkedin: "https://www.linkedin.com/in/shannonalin/",
   },
+  "siddarth-radhakrishnan": {
+    name: "Siddarth Radhakrishnan",
+    linkedin: "https://www.linkedin.com/in/sidradh/",
+  },
   "shreeya-khurana": {
     name: "Shreeya Khurana",
     photo: "ShreeyaKhurana.jpg",
@@ -751,6 +793,10 @@ export const PEOPLE = {
     name: "Susan Ni",
     photo: "SusanNi.jpg",
     linkedin: "https://www.linkedin.com/in/susan-ni/",
+  },
+  "sushrut-pola": {
+    name: "Sushrut Pola",
+    linkedin: "https://www.linkedin.com/in/sushrut-pola/",
   },
   "swati-anshu": {
     name: "Swati Anshu",
@@ -801,6 +847,10 @@ export const PEOPLE = {
     name: "Vedanth Ramanathan",
     photo: "VedanthRamanathan.jpg",
     linkedin: "https://www.linkedin.com/in/vedanthramanathan/",
+  },
+  "vidur-kothur": {
+    name: "Vidur Kothur",
+    linkedin: "https://www.linkedin.com/in/vidur-kothur-b79a72314/",
   },
   "vinay-vemuri": {
     name: "Vinay Vemuri",
@@ -865,6 +915,7 @@ export const YEARS: Year[] = [
       outreach: "yuchen-zhou",
       tech: "anish-pallati",
       labrador: "hana-benko",
+      foundry: "pranav-kumara",
       design: "jean-chen",
       finance: "meera-rajendran",
     },
@@ -874,15 +925,19 @@ export const YEARS: Year[] = [
           person: "sara-chokshi",
           role: "Head of Logistics",
         },
+        {
+          person: "helen-fu",
+          role: "Head of Logistics",
+        },
       ],
       outreach: [
         {
-          person: "ryan-kim",
-          role: "Head of Product Strategy",
+          person: "eunsoo-oh",
+          role: "Head of External Partnerships",
         },
         {
-          person: "jonathan-gong",
-          role: "Head of Go-To-Market",
+          person: "ivy-wang",
+          role: "Head of Marketing",
         },
         {
           person: "daisy-zeng",
@@ -893,12 +948,16 @@ export const YEARS: Year[] = [
           role: "Head of Campus Partnerships",
         },
         {
-          person: "eunsoo-oh",
-          role: "Head of External Partnerships",
+          person: "ryan-kim",
+          role: "Head of Product Strategy",
         },
         {
-          person: "ivy-wang",
-          role: "Head of Marketing",
+          person: "jonathan-gong",
+          role: "Head of Go-To-Market",
+        },
+        {
+          person: "eu-rway-chew",
+          role: "Head of Growth Analytics",
         },
       ],
       tech: [
@@ -912,14 +971,14 @@ export const YEARS: Year[] = [
         },
         {
           person: "krit-dass",
-          role: "Terrier (Hackathon Platform) Tech Lead",
+          role: "Terrier Tech Lead",
         },
         {
-          person: "anish-pallati",
+          person: "sushrut-pola",
           role: "O-Quest Tech Lead",
         },
         {
-          person: "jett-chen",
+          person: "siddarth-radhakrishnan",
           role: "CMU Maps Tech Lead",
         },
         {
@@ -932,7 +991,7 @@ export const YEARS: Year[] = [
         },
         {
           person: "krish-saxena",
-          role: "ScottyLabs AI (SLAI) Tech Lead",
+          role: "ScottyLabs AI Tech Lead",
         },
         {
           person: "etash-jhanji",
@@ -947,16 +1006,36 @@ export const YEARS: Year[] = [
           role: "CMU Eats Tech Lead",
         },
         {
-          person: "maelle-allanic",
-          role: "Scotty.lol Tech Lead",
-        },
-        {
-          person: "jessica-cai",
+          person: "vidur-kothur",
           role: "UI Architecture Tech Lead",
         },
         {
           person: "leon-liu",
-          role: "Lost & Found Tech Lead",
+          role: "Lost and Found Tech Lead",
+        },
+        {
+          person: "alex-ru",
+          role: "Lost and Found Tech Lead",
+        },
+        {
+          person: "nikhil-ramanuja",
+          role: "CMU Housing Tech Lead",
+        },
+        {
+          person: "emma-wong",
+          role: "CMU Housing Tech Lead",
+        },
+        {
+          person: "anna-david",
+          role: "CMU Study Tech Lead",
+        },
+        {
+          person: "misha-garg",
+          role: "CMU Study Tech Lead",
+        },
+        {
+          person: "catherine-seluzhytskaya",
+          role: "CMU Study Tech Lead",
         },
       ],
       labrador: [
@@ -1011,6 +1090,16 @@ export const YEARS: Year[] = [
         {
           person: "nandan-nair",
           role: "Head of Sponsorship",
+        },
+      ],
+      foundry: [
+        {
+          person: "thomas-kanz",
+          role: "General Partner",
+        },
+        {
+          person: "anika-halappanavar",
+          role: "Special Advisor",
         },
       ],
     },
