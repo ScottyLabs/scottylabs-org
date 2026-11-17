@@ -4,6 +4,7 @@ export const COMMITTEES = [
   "outreach",
   "tech",
   "labrador",
+  "foundry",
   "design",
   "finance",
   "foundry",
