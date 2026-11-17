@@ -21,7 +21,6 @@ import specialPartnerMechanize from "../../assets/sponsors-page/sponsors/Special
 import redBull from "../../assets/sponsors-page/sponsors/Special Partner/RedBull.png";
 import specialPartnerSalesforce from "../../assets/sponsors-page/sponsors/Special Partner/Salesforce.webp";
 import uber from "../../assets/sponsors-page/sponsors/Special Partner/Uber.png";
-import appLovin from "../../assets/sponsors-page/sponsors/Title/AppLovin.png";
 
 export type SponsorTypes = "lowest" | "partner" | "premier";
 
@@ -32,21 +31,21 @@ export const sponsors = [
   { imageUrl: mechanize, type: "premier", websiteUrl: "https://mechanize.work/" },
   { imageUrl: ripple, type: "premier", websiteUrl: "https://ripple.com/" },
   { imageUrl: salesforce, type: "premier", websiteUrl: "https://www.salesforce.com/" },
-  { imageUrl: accenture, type: "lowest", websiteUrl: "https://www.accenture.com/" },
-  { imageUrl: anduril, type: "lowest", websiteUrl: "https://www.anduril.com/" },
-  { imageUrl: citadel, type: "lowest", websiteUrl: "https://www.citadel.com/" },
-  { imageUrl: deshaw, type: "lowest", websiteUrl: "https://www.deshaw.com/" },
-  { imageUrl: decagon, type: "lowest", websiteUrl: "https://decagon.ai/" },
-  { imageUrl: optiver, type: "lowest", websiteUrl: "https://optiver.com/" },
-  { imageUrl: perplexity, type: "lowest", websiteUrl: "https://www.perplexity.ai/" },
-  { imageUrl: recruitHoldings, type: "lowest", websiteUrl: "https://recruit-holdings.com/" },
-  { imageUrl: runpod, type: "lowest", websiteUrl: "https://www.runpod.io/" },
-  { imageUrl: sandiaNationalLaboratories, type: "lowest", websiteUrl: "https://www.sandia.gov/" },
-  { imageUrl: bobyard, type: "partner", websiteUrl: "https://www.bobyard.com/" },
-  { imageUrl: fada, type: "partner", websiteUrl: "https://www.f-ada.com/" },
-  { imageUrl: gm, type: "partner", websiteUrl: "https://www.gm.com/" },
-  { imageUrl: specialPartnerMechanize, type: "partner", websiteUrl: "https://mechanize.work/" },
-  { imageUrl: redBull, type: "partner", websiteUrl: "https://www.redbull.com/" },
-  { imageUrl: specialPartnerSalesforce, type: "partner", websiteUrl: "https://www.salesforce.com/" },
-  { imageUrl: uber, type: "partner", websiteUrl: "https://www.uber.com/" },
+  { imageUrl: accenture, type: "partner", websiteUrl: "https://www.accenture.com/" },
+  { imageUrl: anduril, type: "partner", websiteUrl: "https://www.anduril.com/" },
+  { imageUrl: citadel, type: "partner", websiteUrl: "https://www.citadel.com/" },
+  { imageUrl: deshaw, type: "partner", websiteUrl: "https://www.deshaw.com/" },
+  { imageUrl: decagon, type: "partner", websiteUrl: "https://decagon.ai/" },
+  { imageUrl: optiver, type: "partner", websiteUrl: "https://optiver.com/" },
+  { imageUrl: perplexity, type: "partner", websiteUrl: "https://www.perplexity.ai/" },
+  { imageUrl: recruitHoldings, type: "partner", websiteUrl: "https://recruit-holdings.com/" },
+  { imageUrl: runpod, type: "partner", websiteUrl: "https://www.runpod.io/" },
+  { imageUrl: sandiaNationalLaboratories, type: "partner", websiteUrl: "https://www.sandia.gov/" },
+  { imageUrl: bobyard, type: "lowest", websiteUrl: "https://www.bobyard.com/" },
+  { imageUrl: fada, type: "lowest", websiteUrl: "https://www.f-ada.com/" },
+  { imageUrl: gm, type: "lowest", websiteUrl: "https://www.gm.com/" },
+  { imageUrl: specialPartnerMechanize, type: "lowest", websiteUrl: "https://mechanize.work/" },
+  { imageUrl: redBull, type: "lowest", websiteUrl: "https://www.redbull.com/" },
+  { imageUrl: specialPartnerSalesforce, type: "lowest", websiteUrl: "https://www.salesforce.com/" },
+  { imageUrl: uber, type: "lowest", websiteUrl: "https://www.uber.com/" },
 ] satisfies { imageUrl: string; type: SponsorTypes; websiteUrl: string }[];
