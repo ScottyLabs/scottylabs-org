@@ -14,23 +14,18 @@ import hrt from "../../assets/sponsors-page/sponsors/Premier/HRT.png";
 import mechanize from "../../assets/sponsors-page/sponsors/Premier/Mechanize.png";
 import ripple from "../../assets/sponsors-page/sponsors/Premier/Ripple.png";
 import salesforce from "../../assets/sponsors-page/sponsors/Premier/Salesforce.webp";
-import bobyard from "../../assets/sponsors-page/sponsors/Special Partner/Bobyard.png";
-import fada from "../../assets/sponsors-page/sponsors/Special Partner/F-ADA.png";
-import gm from "../../assets/sponsors-page/sponsors/Special Partner/GM.webp";
-import specialPartnerMechanize from "../../assets/sponsors-page/sponsors/Special Partner/Mechanize.png";
-import redBull from "../../assets/sponsors-page/sponsors/Special Partner/RedBull.png";
-import specialPartnerSalesforce from "../../assets/sponsors-page/sponsors/Special Partner/Salesforce.webp";
-import uber from "../../assets/sponsors-page/sponsors/Special Partner/Uber.png";
+import jumptrading from "../../assets/sponsors-page/sponsors/Premier/Jump_Trading.png";
 
 export type SponsorTypes = "lowest" | "partner" | "premier";
 
-export const sponsors = [
+export const sponsors: { imageUrl: string; type: SponsorTypes; websiteUrl: string }[] = [
   { imageUrl: capitalOne, type: "premier", websiteUrl: "https://www.capitalone.com/" },
   { imageUrl: doordash, type: "premier", websiteUrl: "https://www.doordash.com/" },
   { imageUrl: hrt, type: "premier", websiteUrl: "https://www.hudsonrivertrading.com/" },
   { imageUrl: mechanize, type: "premier", websiteUrl: "https://mechanize.work/" },
   { imageUrl: ripple, type: "premier", websiteUrl: "https://ripple.com/" },
   { imageUrl: salesforce, type: "premier", websiteUrl: "https://www.salesforce.com/" },
+  { imageUrl: jumptrading, type: "premier", websiteUrl: "https://www.jumptrading.com/" },
   { imageUrl: accenture, type: "partner", websiteUrl: "https://www.accenture.com/" },
   { imageUrl: anduril, type: "partner", websiteUrl: "https://www.anduril.com/" },
   { imageUrl: citadel, type: "partner", websiteUrl: "https://www.citadel.com/" },
@@ -41,11 +36,4 @@ export const sponsors = [
   { imageUrl: recruitHoldings, type: "partner", websiteUrl: "https://recruit-holdings.com/" },
   { imageUrl: runpod, type: "partner", websiteUrl: "https://www.runpod.io/" },
   { imageUrl: sandiaNationalLaboratories, type: "partner", websiteUrl: "https://www.sandia.gov/" },
-  { imageUrl: bobyard, type: "lowest", websiteUrl: "https://www.bobyard.com/" },
-  { imageUrl: fada, type: "lowest", websiteUrl: "https://www.f-ada.com/" },
-  { imageUrl: gm, type: "lowest", websiteUrl: "https://www.gm.com/" },
-  { imageUrl: specialPartnerMechanize, type: "lowest", websiteUrl: "https://mechanize.work/" },
-  { imageUrl: redBull, type: "lowest", websiteUrl: "https://www.redbull.com/" },
-  { imageUrl: specialPartnerSalesforce, type: "lowest", websiteUrl: "https://www.salesforce.com/" },
-  { imageUrl: uber, type: "lowest", websiteUrl: "https://www.uber.com/" },
-] satisfies { imageUrl: string; type: SponsorTypes; websiteUrl: string }[];
+];

@@ -112,7 +112,6 @@
     font-size: var(--text-6xl);
     color: var(--black-900);
     position: relative;
-    _: "Peeks in inspect element";
     content: 'If you want to build the next generation of production-grade products for CMU students and meet other passionate coders like yourself, we would love to have you! And since you found this, email "ilovescottylabs" to hello@scottylabs.org for a special gift!';
   }
   .decoration {
