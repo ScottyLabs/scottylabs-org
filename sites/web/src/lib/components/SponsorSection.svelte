@@ -92,8 +92,8 @@
           border-radius: 5px;
         }
         .sponsor {
-          padding: 30px 30px;
-          height: 40px;
+          padding: 22.5px;
+          height: 62.5px;
           display: block;
           background-color: hsl(42, 93%, 99%);
           outline-offset: -3px;
@@ -128,8 +128,8 @@
         grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
         & .sponsor {
           background-color: hsl(200, 15%, 98%);
-          height: 30px;
-          padding: 25px 15px;
+          height: 48.75px;
+          padding: 19.75px 12.75px;
           outline-offset: -2px;
           outline: 2px solid hsl(200, 15%, 94%);
         }
