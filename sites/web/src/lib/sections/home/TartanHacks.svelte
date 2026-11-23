@@ -87,7 +87,7 @@
 {#snippet statTile()}
   <div class="stat-box">
     <div>
-      <div class="stat-box__number">700+</div>
+      <div class="stat-box__number">1000+</div>
       <div class="stat-box__description" {@attach scrambleWords}>
         {alternateNamesForParticipants[0].replaceAll(" ", "\u00A0")}
       </div>
@@ -98,7 +98,9 @@
 <section class="main-container">
   <div class="centered-section">
     <h1 class="header">We host Pittsburgh&apos;s largest annual hackathon,</h1>
-    <img class="tartanhacks-logo" src={tartanhacksLogo} alt="" />
+    <a class="tartanhacks-logo-link" href="https://tartanhacks.com" target="_blank" rel="noreferrer">
+      <img class="tartanhacks-logo" src={tartanhacksLogo} alt="TartanHacks" />
+    </a>
   </div>
   <div class="carousel-container carousel-container--first">
     <ImageCarousel
@@ -131,8 +133,13 @@
     text-align: center;
     margin: auto;
   }
-  .tartanhacks-logo {
+  .tartanhacks-logo-link {
+    display: block;
+    width: fit-content;
+    max-width: 100%;
     margin: 40px auto 0;
+  }
+  .tartanhacks-logo {
     display: block;
     height: 80px;
     max-width: 100%;
