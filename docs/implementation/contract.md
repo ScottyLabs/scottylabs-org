@@ -193,6 +193,7 @@ All bodies are JSON unless stated. Types are in `sites/web/src/lib/api/types.ts`
 | Method and path | Who | Notes |
 | -- | -- | -- |
 | GET `/api/announcements?tab=live\|waiting\|expired` | portal | `waiting` holds pending and sent back. Leads see their own plus live ones. `expired` keeps 90 days |
+| GET `/api/announcements/:id` | portal | `AnnouncementResponse`. A waiting one only for its author and those who manage its source; 404 otherwise |
 | POST `/api/announcements` | may post | Live at once for admins and directors. For leads, creates a `pending_approval` announcement and an approval |
 | PATCH `/api/announcements/:id` | may edit | Partial `AnnouncementInput`. A lead editing a sent back one resubmits it |
 | POST `/api/announcements/:id/extend` | may manage | Body `{ "days": 7 }`. Never beyond 30 days from now |
@@ -311,7 +312,24 @@ Each builder owns the files of their track. Edit shared files only where this ta
 
 Record changes to this contract here, newest first, with the reason.
 
+### 2026-11-24, ticker
+
+All additive.
+
+- **`GET /api/announcements/:id`** returns `AnnouncementResponse` (`{ announcement }`), for the edit page. Waiting announcements are visible only to their author and to those who manage the source (admins, its director); anyone else gets 404.
+
+- **Write responses**: `POST /api/announcements` and `POST /:id/repost` answer `201` with `AnnouncementResponse`; `PATCH /:id`, `POST /:id/extend` and `POST /:id/end` answer `200` with it; `PUT /api/announcements/order` answers `200` with the live tab's `AnnouncementListResponse`; `DELETE` answers `204`.
+
+- **`AnnouncementListResponse`** gains `counts` (`{ live, waiting, expired }` as this person sees them, for the tab badges) and `approvers` (for leads, the directors of each committee they post for with approval, so the composer can name who approves). `waiting` shows a person their own submissions plus those from sources they manage; admins see all.
+
+- **Rules settled while building**: a new or approved announcement joins the end of the loop (`position` after every live one). `expiresAt` must be in the future and at most 30 days from now when posting, editing or reposting; `extend` adds days but caps at 30 days from now and refuses (422) when that gains nothing. Only live, unexpired announcements can be extended or ended (409 otherwise); expired and ended ones cannot be edited (409, post again instead). Editing a pending or sent back announcement resubmits it: the row returns to `pending_approval` and a new approval with the new snapshot replaces the waiting one, still credited to the original author. Waiting announcements cannot move to the `club` source, since approvals belong to a committee. Managers may delete any announcement; authors may delete their own while it waits.
+
+- **Approval hooks**: `announcements::apply_approval` checks `permissions::can_approve_for`, requires `pending_approval`, refuses with `validation_failed` (field `expiresAt`) when the snapshot's expiry is less than 5 minutes away, takes the six-slot lock and refuses with `conflict` when the ticker is full, then publishes the snapshot (`starts_at` now, `approved_by`, `position` at the end). `apply_send_back` sets `sent_back`. Both write their own audit entry about the announcement ("Approved <message> for the ticker", "Sent <message> back for changes", with the message in curly quotes); `routes/approvals.rs` only needs to update the approval row (and may log the decision with `subject::APPROVAL`). They lock the announcement after the approval row, the same order the ticker's own writes use, so they cannot deadlock.
+
+- **Six slots under concurrency**: every write that can add to or reorder the live set takes `pg_advisory_xact_lock(724610)` before counting.
+
 - 2026-11-24, platform web. `sites/web/vite.config.ts` proxies to `SITE_SERVICE_URL` when it is set (default `http://127.0.0.1:8080`), so builds can run side by side on other ports. Prerendering warns instead of failing when `/projects/` or `/committees/` answer 404, because the header links to them before those routes exist; remove that handler once both routes are in.
+
 - 2026-11-24, platform web. How portal pages plug in: call the API with the helpers in `src/lib/api/client.ts`, whose paths are relative to `/api` (`get<MeResponse>("/me")`); read the signed-in person with `getPortalSession()` and show confirmations with `getToasts()` (both from `src/lib/portal/index.ts`); build pages from `src/lib/portal/ui/index.ts` and the `p-table` classes. Render the page's `<h1>` straight away (`PageHeader` does), since the shell moves focus to it after navigation. Unknown `/portal/` addresses get the portal error card from the root `+error.svelte`.
 
 ### 2026-11-24, platform backend review fixes
