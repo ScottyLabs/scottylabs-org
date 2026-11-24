@@ -251,14 +251,23 @@
     dropAt = null;
   }
 
-  // Dragging tiles to reorder them. Files dragged from the desktop are left to the list's drop zone.
-  function reorder(index: number): Attachment<HTMLElement> {
+  // Dragging a tile's picture starts a reorder. The listener sits on the picture, not the tile, so
+  // dragging selected text out of an alt text field stays a text drag.
+  function dragHandle(index: number): Attachment<HTMLElement> {
     const onDragStart = (event: DragEvent) => {
       if (disabled || event.dataTransfer === null) return;
       dragFrom = index;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", value[index]?.src ?? "");
     };
+    return (node) => {
+      node.addEventListener("dragstart", onDragStart);
+      return () => node.removeEventListener("dragstart", onDragStart);
+    };
+  }
+
+  // Where a dragged picture lands. Files dragged from the desktop are left to the list's drop zone.
+  function dropSpot(index: number): Attachment<HTMLElement> {
     return (node) => {
       const onDragOver = (event: DragEvent) => {
         if (dragFrom === null) return;
@@ -268,12 +277,10 @@
         const after = event.clientX > box.left + box.width / 2;
         dropAt = index + (after ? 1 : 0);
       };
-      node.addEventListener("dragstart", onDragStart);
       node.addEventListener("dragover", onDragOver);
       node.addEventListener("drop", onTileDrop);
       node.addEventListener("dragend", onTileDragEnd);
       return () => {
-        node.removeEventListener("dragstart", onDragStart);
         node.removeEventListener("dragover", onDragOver);
         node.removeEventListener("drop", onTileDrop);
         node.removeEventListener("dragend", onTileDragEnd);
@@ -310,10 +317,10 @@
           dropAt === index + 1 && dragFrom !== null && index === value.length - 1 && "tile--drop-after",
         ]}
         data-key={keys[index]}
-        {@attach reorder(index)}
+        {@attach dropSpot(index)}
       >
         <!-- Only the picture is draggable, so text in the alt field can still be selected. -->
-        <div class="tile__thumb" draggable={disabled ? "false" : "true"}>
+        <div class="tile__thumb" draggable={disabled ? "false" : "true"} {@attach dragHandle(index)}>
           <Img {image} alt="" sizes="200px" fallbackWidth={480} fit="cover" />
           <span class="tile__grip" aria-hidden="true"><GripVertical size={14} strokeWidth={2} /></span>
           <span class="tile__badges">
