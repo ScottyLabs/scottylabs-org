@@ -1,0 +1,65 @@
+/*
+ * Styles for restricted rich text (p, br, strong, em, a, ul, ol, li), shared by RichText (what
+ * visitors see) and RichTextEditor, so text looks the same while it is edited. Font, size, line
+ * height and color come from the surrounding element. app.css unsets ul and li and sizes every p,
+ * so this restores them inside .rich-text only.
+ */
+.rich-text {
+  overflow-wrap: break-word;
+}
+.rich-text p,
+.rich-text ul,
+.rich-text ol {
+  margin: 0 0 0.75em;
+  font: inherit;
+}
+.rich-text > :last-child,
+.rich-text li > :last-child {
+  margin-bottom: 0;
+}
+.rich-text ul,
+.rich-text ol {
+  display: block;
+  padding: 0 0 0 1.4em;
+}
+.rich-text ul {
+  list-style: disc outside;
+}
+.rich-text ol {
+  list-style: decimal outside;
+}
+.rich-text ul ul {
+  list-style-type: circle;
+}
+.rich-text li {
+  display: list-item;
+  margin: 0.25em 0 0;
+  padding: 0;
+}
+.rich-text li:first-child {
+  margin-top: 0;
+}
+.rich-text li > ul,
+.rich-text li > ol {
+  margin: 0.25em 0 0;
+}
+.rich-text strong {
+  font-weight: 700;
+}
+.rich-text em {
+  font-style: italic;
+}
+.rich-text a {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+.rich-text a:hover {
+  text-decoration-thickness: 2px;
+}
+.rich-text a:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid var(--p-focus);
+  outline-offset: 2px;
+}
