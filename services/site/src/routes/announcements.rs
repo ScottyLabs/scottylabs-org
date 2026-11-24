@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::approvals_core::{self, ApprovalRow, SubjectType};
+use crate::approvals_core::{self, ApprovalRow, ApprovalStatus, SubjectType};
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
 use crate::error::{AppError, AppResult};
@@ -103,7 +103,7 @@ async fn public_ticker(State(state): State<AppState>) -> AppResult<Response> {
 #[serde(rename_all = "camelCase")]
 struct ApprovalRef {
     id: Uuid,
-    status: approvals_core::ApprovalStatus,
+    status: ApprovalStatus,
     note: Option<String>,
     decided_by: Option<PersonRef>,
     decided_at: Option<DateTime<Utc>>,
@@ -765,14 +765,16 @@ async fn update(
             &serde_json::to_value(updated.input())?,
         )
         .await?;
-        log(
-            &mut tx,
-            &viewer,
-            "announcement.resubmit",
-            &updated,
-            format!("Sent {} for approval again", quote(&updated.message)),
-        )
-        .await?;
+        // An approver who fixes a lead's submission keeps it waiting; it stays the lead's.
+        let summary = if updated.created_by == Some(viewer.user_id) {
+            format!("Sent {} for approval again", quote(&updated.message))
+        } else {
+            format!(
+                "Edited {} while it waits for approval",
+                quote(&updated.message)
+            )
+        };
+        log(&mut tx, &viewer, "announcement.resubmit", &updated, summary).await?;
     } else {
         log(
             &mut tx,
@@ -1024,12 +1026,20 @@ async fn remove(
 // ---------------------------------------------------------------------------
 // Approval hooks, called by routes/approvals.rs inside its transaction
 
-/// Locks the announcement an approval is about. It must still be waiting for a decision.
+/// Locks the announcement an approval is about. It must still be waiting for a decision, and the approval must be its current one: a lead's edit withdraws the old approval and opens a new one, and deciding on the old one would publish an out-of-date version.
 async fn lock_submission(
     conn: &mut PgConnection,
     approval: &ApprovalRow,
     approver: &Viewer,
+    decision: ApprovalStatus,
 ) -> AppResult<Row> {
+    if approval.subject_type != SubjectType::Announcement {
+        return Err(AppError::Internal(anyhow::anyhow!(
+            "approval {} is about a {}, not an announcement",
+            approval.id,
+            approval.subject_type
+        )));
+    }
     if !permissions::can_approve_for(approver, approval.committee) {
         return Err(AppError::Forbidden(format!(
             "Only admins and the director of {} can decide on its announcements.",
@@ -1044,7 +1054,36 @@ async fn lock_submission(
             "This announcement is no longer waiting for approval.".into(),
         ));
     }
+    if !is_current_submission(conn, approval, decision).await? {
+        return Err(AppError::Conflict(
+            "The lead changed this announcement after sending it. Open the latest version to decide on it."
+                .into(),
+        ));
+    }
     Ok(row)
+}
+
+/// Whether the approval is the announcement's open submission. routes/approvals.rs may record its decision before or after calling the hook, so the decision being made counts as open too.
+async fn is_current_submission(
+    conn: &mut PgConnection,
+    approval: &ApprovalRow,
+    decision: ApprovalStatus,
+) -> AppResult<bool> {
+    let open = |status: ApprovalStatus| status == ApprovalStatus::Waiting || status == decision;
+    if !open(approval.status) {
+        return Ok(false);
+    }
+    let (stored, superseded): (Option<ApprovalStatus>, bool) = sqlx::query_as(
+        "SELECT (SELECT status FROM approvals WHERE id = $1),
+                EXISTS (SELECT 1 FROM approvals
+                        WHERE subject_type = $2 AND subject_id = $3 AND id <> $1 AND status = 'waiting')",
+    )
+    .bind(approval.id)
+    .bind(SubjectType::Announcement)
+    .bind(approval.subject_id)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(stored.is_some_and(open) && !superseded)
 }
 
 /// Called by routes/approvals.rs, inside its transaction, when an approver approves a submitted announcement. Publishes exactly the approval's snapshot.
@@ -1053,7 +1092,7 @@ pub async fn apply_approval(
     approval: &ApprovalRow,
     approver: &Viewer,
 ) -> AppResult<()> {
-    let row = lock_submission(conn, approval, approver).await?;
+    let row = lock_submission(conn, approval, approver, ApprovalStatus::Approved).await?;
     let now = Utc::now();
     let snapshot: AnnouncementInput = serde_json::from_value(approval.snapshot.clone())?;
     if approval_too_late(snapshot.expires_at, now) {
@@ -1101,7 +1140,7 @@ pub async fn apply_send_back(
     approval: &ApprovalRow,
     approver: &Viewer,
 ) -> AppResult<()> {
-    let row = lock_submission(conn, approval, approver).await?;
+    let row = lock_submission(conn, approval, approver, ApprovalStatus::SentBack).await?;
     let updated = sqlx::query_as::<_, Row>(&format!(
         "UPDATE announcements SET state = 'sent_back', updated_at = now() WHERE id = $1 RETURNING {}",
         Row::COLUMNS

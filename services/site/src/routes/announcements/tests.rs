@@ -1045,6 +1045,97 @@ async fn approving_needs_a_free_slot_and_a_future_expiry(db: PgPool) {
     assert_eq!(state_of(&db, full).await, "live");
 }
 
+/// Runs a hook with an approval exactly as given, then rolls back.
+async fn decide_with(
+    db: &PgPool,
+    approval: &ApprovalRow,
+    approver: &Viewer,
+    approve: bool,
+) -> Result<(), crate::error::AppError> {
+    let mut tx = db.begin().await.unwrap();
+    if approve {
+        apply_approval(&mut tx, approval, approver).await
+    } else {
+        apply_send_back(&mut tx, approval, approver).await
+    }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn an_approval_replaced_by_an_edit_cannot_be_decided(db: PgPool) {
+    let c = cast(&db).await;
+    let director = viewer(&c.events_director, Role::Director, Some(Committee::Events));
+    let id = posted(&c.app, &c.lead, "events", "First version").await;
+    let first = waiting_approval(&db, id).await;
+    let (status, body) = testing::patch(
+        &c.app,
+        &format!("/api/announcements/{id}"),
+        Some(&c.lead),
+        json!({ "message": "Second version" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(state_of(&db, id).await, "pending_approval");
+
+    // As routes/approvals.rs loaded it before the edit, and as it is stored now.
+    let mut withdrawn = first.clone();
+    withdrawn.status = approvals_core::ApprovalStatus::Withdrawn;
+    for stale in [&first, &withdrawn] {
+        for approve in [true, false] {
+            let err = decide_with(&db, stale, &director, approve)
+                .await
+                .unwrap_err();
+            assert_eq!(err.code(), "conflict", "{err}");
+        }
+    }
+    assert_eq!(state_of(&db, id).await, "pending_approval");
+
+    let mut project = waiting_approval(&db, id).await;
+    project.subject_type = SubjectType::Project;
+    let err = decide_with(&db, &project, &director, true)
+        .await
+        .unwrap_err();
+    assert_eq!(err.code(), "internal");
+
+    // The decision may be recorded before the hook runs.
+    let mut current = waiting_approval(&db, id).await;
+    sqlx::query("UPDATE approvals SET status = 'approved' WHERE id = $1")
+        .bind(current.id)
+        .execute(&db)
+        .await
+        .unwrap();
+    current.status = approvals_core::ApprovalStatus::Approved;
+    let mut tx = db.begin().await.unwrap();
+    apply_approval(&mut tx, &current, &director).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(public_messages(&c.app).await, ["Second version"]);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn approvers_edit_a_submission_without_taking_it_over(db: PgPool) {
+    let c = cast(&db).await;
+    let id = posted(&c.app, &c.lead, "events", "Volunter sign-ups").await;
+    let (status, body) = testing::patch(
+        &c.app,
+        &format!("/api/announcements/{id}"),
+        Some(&c.events_director),
+        json!({ "message": "Volunteer sign-ups" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["announcement"]["state"], "pending_approval");
+    assert_eq!(body["announcement"]["createdBy"]["name"], "Sara Chokshi");
+    let approval = waiting_approval(&db, id).await;
+    assert_eq!(approval.submitted_by, Some(c.lead.id));
+    assert_eq!(approval.snapshot["message"], "Volunteer sign-ups");
+    assert!(testing::audit_summaries(&db).await.contains(
+        &"Edited \u{201C}Volunteer sign-ups\u{201D} while it waits for approval".to_owned()
+    ));
+
+    let director = viewer(&c.events_director, Role::Director, Some(Committee::Events));
+    decide(&db, id, &director, true).await.unwrap();
+    assert_eq!(public_messages(&c.app).await, ["Volunteer sign-ups"]);
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn the_seeded_submission_can_be_approved(db: PgPool) {
     testing::seed_personas(&db).await;
