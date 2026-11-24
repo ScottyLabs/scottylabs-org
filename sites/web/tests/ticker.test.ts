@@ -21,6 +21,7 @@ import {
   zonedDay,
   zonedInstant,
 } from "../src/lib/ticker/format.ts";
+import { offersList, reservesSpace, tickerMode } from "../src/lib/ticker/mode.ts";
 
 // Tuesday, November 24, 2026, 12:00 PM in Pittsburgh.
 const NOW = new Date("2026-11-24T17:00:00Z");
@@ -104,4 +105,31 @@ Deno.test("names are joined into a sentence", () => {
   assert.equal(listNames(["Evan Foster", "Thomas Kanz"]), "Evan Foster and Thomas Kanz");
   assert.equal(listNames(["A", "B", "C"]), "A, B and C");
   assert.equal(listNames([]), "");
+});
+
+Deno.test("one announcement stands still only while it fits", () => {
+  const still = { reducedMotion: false, tooWide: false };
+  assert.equal(tickerMode({ ...still, count: null }), "loading");
+  assert.equal(tickerMode({ ...still, count: 0 }), "empty");
+  assert.equal(tickerMode({ ...still, count: 1 }), "static");
+  assert.equal(tickerMode({ ...still, count: 1, tooWide: true }), "marquee");
+  assert.equal(tickerMode({ ...still, count: 5 }), "marquee");
+  // Reduced motion never scrolls, even when the only announcement is cut short.
+  assert.equal(tickerMode({ count: 1, reducedMotion: true, tooWide: true }), "static");
+  assert.equal(tickerMode({ count: 5, reducedMotion: true, tooWide: false }), "stepper");
+});
+
+Deno.test("the full list is offered wherever text can be cut short", () => {
+  assert.equal(offersList("marquee", false), true);
+  assert.equal(offersList("stepper", false), true);
+  assert.equal(offersList("static", false), false);
+  assert.equal(offersList("static", true), true);
+  assert.equal(offersList("empty", false), false);
+  assert.equal(offersList("loading", true), false);
+});
+
+Deno.test("the strip holds its height unless the feed was empty last time", () => {
+  assert.equal(reservesSpace(null), true);
+  assert.equal(reservesSpace(3), true);
+  assert.equal(reservesSpace(0), false);
 });

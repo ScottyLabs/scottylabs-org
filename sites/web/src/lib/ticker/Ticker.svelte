@@ -2,7 +2,8 @@
   // The home page ticker (spec T-1 to T-12). Live announcements scroll right to left at 40 px a
   // second with the dog mark between them, pause on hover, keyboard focus or the pause button,
   // and open as a list from "All N". With reduced motion it shows one at a time with previous and
-  // next. One announcement is shown still; none, or an unreachable API, renders nothing.
+  // next, and the position opens the list. One announcement is shown still when it fits and
+  // scrolls when it does not; none, or an unreachable API, renders nothing.
   //
   // Screen readers get the real announcements as a plain list. The copies that make the loop
   // seamless are hidden from them and skipped by the keyboard.
@@ -18,7 +19,8 @@
   import DogMark from "../portal/ui/DogMark.svelte";
   import TickerItem from "./TickerItem.svelte";
   import TickerList from "./TickerList.svelte";
-  import { Marquee, readPaused, writePaused } from "./motion.ts";
+  import { offersList, reservesSpace, tickerMode } from "./mode.ts";
+  import { Marquee, readLastCount, readPaused, writeLastCount, writePaused } from "./motion.ts";
 
   type Item = Pick<PublicAnnouncement, "id" | "kind" | "committee" | "message" | "linkUrl">;
 
@@ -46,6 +48,8 @@
   let fetched = $state.raw<readonly Item[] | null>(null);
   let failed = $state(false);
   const items = $derived<readonly Item[] | null>(provided ?? (failed ? [] : fetched));
+  /** Hold the strip's height while loading, unless the feed was empty last time. */
+  let reserve = $state(true);
 
   let reducedMotion = $state(false);
   let userPaused = $state(false);
@@ -54,17 +58,18 @@
   let listOpen = $state(false);
   let step = $state(0);
   let stepNotice = $state("");
+  /** The only announcement does not fit standing still, so it scrolls. */
+  let tooWide = $state(false);
+  /** The announcement standing still is cut short. */
+  let cutShort = $state(false);
 
-  const mode = $derived.by(() => {
-    if (items === null) return "loading";
-    if (items.length === 0) return "empty";
-    if (items.length === 1) return "static";
-    return reducedMotion ? "stepper" : "marquee";
-  });
+  const mode = $derived(tickerMode({ count: items?.length ?? null, reducedMotion, tooWide }));
+  const listed = $derived(offersList(mode, cutShort));
   const current = $derived(items === null ? 0 : Math.min(step, Math.max(items.length - 1, 0)));
 
   onMount(() => {
     userPaused = readPaused();
+    if (provided === undefined) reserve = reservesSpace(readLastCount());
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
     reducedMotion = query.matches;
     const update = () => (reducedMotion = query.matches);
@@ -93,6 +98,7 @@
       });
       if (!sameItems(fetched, response.announcements)) fetched = response.announcements;
       failed = false;
+      writeLastCount(response.announcements.length);
     } catch (error) {
       if (isAbortError(error)) return;
       // Keep showing what loaded before; with nothing loaded the strip stays hidden.
@@ -115,6 +121,7 @@
   let capEl = $state<HTMLElement>();
   let allButton = $state<HTMLElement>();
   let controlsEl = $state<HTMLElement>();
+  let controlsWidth = $state(0);
   let marquee = $state.raw<Marquee | null>(null);
   let setWidth = $state(0);
   let windowWidth = $state(0);
@@ -154,6 +161,51 @@
     if (marquee === null) return;
     if (moving) marquee.play();
     else marquee.pause();
+  });
+
+  // A different announcement may fit standing still, so look again.
+  const itemsKey = $derived(items?.map((item) => `${item.id}\n${item.message}\n${item.committee}`).join("\n") ?? "");
+  $effect(() => {
+    void itemsKey;
+    tooWide = false;
+  });
+
+  /** The window's width when the only announcement was found too wide for it. */
+  let tooWideAt = 0;
+
+  /** Checks whether the announcement standing still is cut short; if it may scroll, it then does. */
+  function measureStill() {
+    const view = windowEl;
+    const message = view?.querySelector<HTMLElement>(".ticker__step--current .ticker-item__message");
+    if (view === undefined || message === null || message === undefined) return;
+    cutShort = message.scrollWidth > message.clientWidth + 1 || message.scrollHeight > message.clientHeight + 1;
+    if (cutShort && !reducedMotion) {
+      tooWideAt = view.clientWidth;
+      tooWide = true;
+    }
+  }
+
+  $effect(() => {
+    const view = windowEl;
+    if (mode !== "static" || view === undefined) return;
+    void itemsKey;
+    let active = true;
+    measureStill();
+    const observer = new ResizeObserver(() => measureStill());
+    observer.observe(view);
+    // Widths change once the web font arrives.
+    void document.fonts.ready.then(() => {
+      if (active) measureStill();
+    });
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  });
+
+  // Scrolling because it did not fit: once the strip is wider, try standing still again.
+  $effect(() => {
+    if (mode === "marquee" && tooWide && windowWidth > tooWideAt + 1) tooWide = false;
   });
 
   /** Brings a focused item into view just right of the left fade. */
@@ -202,12 +254,29 @@
   <DogMark variant="gradient" width={29} />
 {/snippet}
 
+{#snippet listButton(label: string, name: string)}
+  <button
+    type="button"
+    class="ticker__button ticker__button--all"
+    popovertarget={listId}
+    aria-expanded={listOpen ? "true" : "false"}
+    aria-controls={listId}
+    bind:this={allButton}
+  >
+    {label}<span class="p-sr-only">{name}</span>
+    {#if listOpen}<X size={14} strokeWidth={2} aria-hidden="true" />{:else}<ChevronDown size={14} strokeWidth={2} aria-hidden="true" />{/if}
+  </button>
+{/snippet}
+
 {#if mode === "loading"}
-  <!-- Holds the strip's height until the announcements arrive, so nothing below moves. -->
-  <div class={["ticker", `ticker--${variant}`, "ticker--loading", className]} aria-hidden="true"></div>
+  {#if reserve}
+    <!-- Holds the strip's height until the announcements arrive, so nothing below moves. -->
+    <div class={["ticker", `ticker--${variant}`, "ticker--loading", className]} aria-hidden="true"></div>
+  {/if}
 {:else if items !== null && items.length > 0}
   <section
-    class={["ticker", `ticker--${variant}`, `ticker--${mode}`, className]}
+    class={["ticker", `ticker--${variant}`, `ticker--${mode}`, reducedMotion && "ticker--reduced", className]}
+    style:--controls="{mode !== "marquee" && listed ? controlsWidth : 0}px"
     aria-label="Announcements"
     onpointerenter={() => (hovering = true)}
     onpointerleave={() => (hovering = false)}
@@ -249,18 +318,7 @@
       <span class="ticker__label" aria-hidden="true">[aria-live="polite"]</span>
       {#if mode === "marquee"}
         <div class="ticker__controls" bind:this={controlsEl}>
-          <button
-            type="button"
-            class="ticker__button ticker__button--all"
-            popovertarget={listId}
-            aria-expanded={listOpen ? "true" : "false"}
-            aria-controls={listId}
-            bind:this={allButton}
-          >
-            All {items.length}
-            {#if listOpen}<X size={14} strokeWidth={2} aria-hidden="true" />{:else}<ChevronDown size={14} strokeWidth={2} aria-hidden="true" />{/if}
-            <span class="p-sr-only">announcements</span>
-          </button>
+          {@render listButton(`All ${items.length}`, items.length === 1 ? " announcement" : " announcements")}
           <button
             type="button"
             class="ticker__button ticker__button--icon"
@@ -272,8 +330,8 @@
           </button>
         </div>
       {:else if mode === "stepper"}
-        <div class="ticker__controls">
-          <span class="ticker__position" aria-hidden="true">{current + 1} of {items.length}</span>
+        <div class="ticker__controls" bind:this={controlsEl} bind:offsetWidth={controlsWidth}>
+          {@render listButton(`${current + 1} of ${items.length}`, `, show all ${items.length} announcements`)}
           <button type="button" class="ticker__button ticker__button--icon" aria-label="Previous announcement" title="Previous" onclick={() => stepBy(-1)}>
             <ChevronLeft size={14} strokeWidth={2} aria-hidden="true" />
           </button>
@@ -282,10 +340,14 @@
           </button>
           <span class="p-sr-only" aria-live="polite">{stepNotice}</span>
         </div>
+      {:else if listed}
+        <div class="ticker__controls" bind:this={controlsEl} bind:offsetWidth={controlsWidth}>
+          {@render listButton(`All ${items.length}`, items.length === 1 ? " announcement" : " announcements")}
+        </div>
       {/if}
     </div>
 
-    {#if mode === "marquee"}
+    {#if listed}
       <TickerList id={listId} {items} anchor={controlsEl} invoker={allButton} {postHref} bind:open={listOpen} />
     {/if}
   </section>
@@ -297,6 +359,7 @@
     --edge: max(40px, calc((100% - 1200px) / 2));
     --left-cap: calc(var(--edge) + 214px);
     --right-cap: calc(var(--edge) + 176px);
+    --still-left: calc(var(--edge) + 240px);
     --fade-color: 255, 255, 255;
     --fade: 56px;
     position: relative;
@@ -324,9 +387,10 @@
     overflow: hidden;
     overflow: clip;
   }
+  /* Standing still, the announcement takes the room between the label and the controls. */
   .ticker--static .ticker__window,
   .ticker--stepper .ticker__window {
-    padding-inline: calc(var(--edge) + 240px) var(--right-cap);
+    padding-inline: var(--still-left) calc(var(--edge) + var(--controls, 0px));
   }
 
   .ticker__track {
@@ -372,6 +436,12 @@
   .ticker__step--current {
     display: flex;
     min-width: 0;
+
+    & :global(.ticker-item) {
+      flex: 0 1 auto;
+      min-width: 0;
+      max-width: 100%;
+    }
   }
 
   .ticker__cap {
@@ -417,14 +487,9 @@
     align-items: center;
     gap: 8px;
     margin-left: auto;
+    /* Keeps a gap between a still announcement and the controls. */
+    padding-left: 16px;
     pointer-events: auto;
-  }
-  .ticker__position {
-    color: var(--p-text-secondary);
-    font-size: 0.75rem;
-    line-height: 16px;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
   }
   .ticker__button {
     box-sizing: border-box;
@@ -455,6 +520,7 @@
   }
   .ticker__button--all {
     padding: 6px 8px 6px 12px;
+    font-variant-numeric: tabular-nums;
   }
   .ticker__button--icon {
     width: 30px;
@@ -466,24 +532,46 @@
       --edge: 20px;
     }
   }
-  /* Phones keep the pause button and drop the label and the list. */
+  /* Phones keep the pause button and drop the label. The scrolling text reads in full there, so
+     the list is offered only where an announcement stands still. */
   @media (max-width: 600px) {
     .ticker {
       --edge: 20px;
+      --still-left: var(--edge);
       --left-cap: 32px;
       --right-cap: 80px;
       --fade: 28px;
     }
     .ticker__label,
-    .ticker__button--all {
+    .ticker--marquee .ticker__button--all {
       display: none;
     }
-    .ticker--static .ticker__window,
-    .ticker--stepper .ticker__window {
-      padding-left: var(--edge);
-    }
-    .ticker--stepper {
-      --right-cap: 130px;
+    /* Standing still on a phone, the controls leave little room: the message takes two lines and
+       the committee is left to the list (screen readers still hear it). */
+    .ticker--reduced .ticker__step--current {
+      & :global(.ticker-item) {
+        height: auto;
+        min-height: 36px;
+        padding-block: 6px;
+      }
+      & :global(.ticker-item__message) {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+        line-clamp: 2;
+        font-size: 0.875rem;
+        line-height: 18px;
+        white-space: normal;
+        overflow-wrap: anywhere;
+      }
+      & :global(.p-chip) {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
     }
   }
 </style>

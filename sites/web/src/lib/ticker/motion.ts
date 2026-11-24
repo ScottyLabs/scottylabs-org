@@ -1,6 +1,7 @@
-// Browser pieces of the ticker's motion: the remembered pause button and the moving track.
+// Browser pieces of the ticker: what it remembers between visits and the moving track.
 
 const PAUSE_KEY = "sl-ticker-paused";
+const COUNT_KEY = "sl-ticker-count";
 
 /** Whether the visitor paused the ticker earlier in this visit. Storage can be blocked, so this never throws. */
 export function readPaused(): boolean {
@@ -17,6 +18,28 @@ export function writePaused(paused: boolean): void {
     else sessionStorage.removeItem(PAUSE_KEY);
   } catch {
     // Blocked storage only means the choice is not remembered.
+  }
+}
+
+/**
+ * How many announcements the feed had last time, or null if unknown. The home page holds the
+ * strip's height while loading only when it is likely to have something to show.
+ */
+export function readLastCount(): number | null {
+  try {
+    const stored = localStorage.getItem(COUNT_KEY);
+    const count = stored === null ? Number.NaN : Number(stored);
+    return Number.isInteger(count) && count >= 0 ? count : null;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLastCount(count: number): void {
+  try {
+    localStorage.setItem(COUNT_KEY, String(count));
+  } catch {
+    // Blocked storage only means the strip holds its height while loading.
   }
 }
 

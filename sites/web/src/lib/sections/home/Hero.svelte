@@ -200,4 +200,11 @@
       margin-top: 40px;
     }
   }
+  /* With nothing to announce, the strip's two hairlines become one. */
+  .ticker-slot:not(:has(:global(.ticker))) {
+    border-top: 1px solid var(--p-border);
+    @media (max-width: 1024px) {
+      margin-top: 20px;
+    }
+  }
 </style>

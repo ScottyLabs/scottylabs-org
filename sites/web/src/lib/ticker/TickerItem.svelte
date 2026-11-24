@@ -142,7 +142,9 @@
   .ticker-item--link:focus-visible {
     --selection: var(--p-focus);
   }
+  /* Cut short with an ellipsis when the strip makes the item narrower than its text. */
   .ticker-item__message {
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
   }
