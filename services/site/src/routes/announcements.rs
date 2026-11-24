@@ -22,3 +22,14 @@ pub async fn apply_approval(
         "approving announcements is not implemented yet"
     )))
 }
+
+/// Called by routes/approvals.rs, inside its transaction, when an approver sends a submitted announcement back with a note. Sets the announcement back to `sent_back` so the lead can edit and resubmit it.
+pub async fn apply_send_back(
+    _conn: &mut PgConnection,
+    _approval: &ApprovalRow,
+    _approver: &Viewer,
+) -> AppResult<()> {
+    Err(AppError::Internal(anyhow::anyhow!(
+        "sending announcements back is not implemented yet"
+    )))
+}

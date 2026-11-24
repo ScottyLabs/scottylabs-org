@@ -21,8 +21,12 @@ use tower_http::trace::TraceLayer;
 use crate::error::AppError;
 use crate::state::AppState;
 
-pub use announcements::apply_approval as apply_announcement_approval;
-pub use projects::apply_approval as apply_project_approval;
+pub use announcements::{
+    apply_approval as apply_announcement_approval, apply_send_back as apply_announcement_send_back,
+};
+pub use projects::{
+    apply_approval as apply_project_approval, apply_send_back as apply_project_send_back,
+};
 
 /// JSON bodies larger than this are rejected. Uploads have their own, larger limit.
 pub const JSON_BODY_LIMIT: usize = 256 * 1024;

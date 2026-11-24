@@ -22,3 +22,14 @@ pub async fn apply_approval(
         "approving projects is not implemented yet"
     )))
 }
+
+/// Called by routes/approvals.rs, inside its transaction, when an approver sends a submitted project back with a note. Leaves the project's draft as it is; the lead can edit and resubmit.
+pub async fn apply_send_back(
+    _conn: &mut PgConnection,
+    _approval: &ApprovalRow,
+    _approver: &Viewer,
+) -> AppResult<()> {
+    Err(AppError::Internal(anyhow::anyhow!(
+        "sending projects back is not implemented yet"
+    )))
+}
