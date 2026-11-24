@@ -2,7 +2,7 @@
 //! See "Seed data" in docs/implementation/contract.md.
 
 mod committees;
-mod people;
+pub mod people;
 mod projects;
 mod ticker;
 

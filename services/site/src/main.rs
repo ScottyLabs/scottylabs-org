@@ -7,6 +7,7 @@ mod blocks;
 mod config;
 mod db;
 mod error;
+mod json;
 mod media;
 mod models;
 mod permissions;
@@ -16,6 +17,8 @@ mod routes;
 mod seed;
 mod state;
 mod static_files;
+#[cfg(test)]
+mod testing;
 
 use std::sync::Arc;
 
