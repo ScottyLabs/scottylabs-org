@@ -4,6 +4,7 @@
   import Menu from "@lucide/svelte/icons/menu";
   import SquareKanban from "@lucide/svelte/icons/square-kanban";
   import X from "@lucide/svelte/icons/x";
+  import { afterNavigate } from "$app/navigation";
   import { page } from "$app/state";
   import scottylabsLogo from "#lib/assets/scottylabs-logo.svg";
   import teamIcon from "#lib/assets/icons/team.svg";
@@ -18,34 +19,15 @@
     { icon: { component: LayoutGrid }, url: "/committees/", text: "Committees" },
   ];
 
-  let menuOpen = $state(false);
-  let headerElement: HTMLElement | undefined = $state();
-  let menuButton: HTMLButtonElement | undefined = $state();
+  // The phone menu is a popover, so the button opens it before the page hydrates and without
+  // JavaScript at all. The browser closes it on Escape or a click outside and returns focus to
+  // the button; only closing it after a client-side navigation needs a script.
+  let menu: HTMLElement | undefined = $state();
 
   const isActive = (url: string) => page.url.pathname.startsWith(url);
 
-  // Close the phone menu after navigating.
-  $effect(() => {
-    void page.url.pathname;
-    menuOpen = false;
-  });
-
-  $effect(() => {
-    if (!menuOpen) return;
-    const onKeydown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape") return;
-      menuOpen = false;
-      menuButton?.focus();
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      if (!headerElement?.contains(event.target as Node)) menuOpen = false;
-    };
-    document.addEventListener("keydown", onKeydown);
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      document.removeEventListener("keydown", onKeydown);
-      document.removeEventListener("pointerdown", onPointerDown);
-    };
+  afterNavigate((navigation) => {
+    if (navigation.type !== "enter" && menu?.matches(":popover-open")) menu.hidePopover();
   });
 </script>
 
@@ -66,7 +48,7 @@
   {/each}
 {/snippet}
 
-<header class="main-header-container" bind:this={headerElement}>
+<header class="main-header-container">
   <div class="main-header-layout">
     <a class="logo" href="/">
       <img class="logo__img" src={scottylabsLogo} alt="" />
@@ -76,29 +58,20 @@
     <nav class="main-nav" aria-label="Main">
       {@render navItems("bar")}
     </nav>
-    <button
-      bind:this={menuButton}
-      class="menu-toggle"
-      type="button"
-      aria-expanded={menuOpen ? "true" : "false"}
-      aria-controls="site-menu"
-      aria-label={menuOpen ? "Close menu" : "Open menu"}
-      onclick={() => (menuOpen = !menuOpen)}
-    >
-      {#if menuOpen}
-        <X size={22} strokeWidth={2} aria-hidden="true" />
-      {:else}
-        <Menu size={22} strokeWidth={2} aria-hidden="true" />
-      {/if}
+    <!-- The browser reports whether the menu is open (aria-expanded) for popover buttons. -->
+    <button class="menu-toggle" type="button" popovertarget="site-menu" aria-label="Menu">
+      <Menu class="menu-toggle__icon menu-toggle__icon--open" size={22} strokeWidth={2} aria-hidden="true" />
+      <X class="menu-toggle__icon menu-toggle__icon--close" size={22} strokeWidth={2} aria-hidden="true" />
     </button>
   </div>
-  <nav id="site-menu" class="menu-panel" aria-label="Main" hidden={!menuOpen}>
+  <nav id="site-menu" class="menu-panel" aria-label="Main" popover="auto" bind:this={menu}>
     {@render navItems("menu")}
   </nav>
 </header>
 
 <style>
   .main-header-container {
+    anchor-name: --site-header;
     position: sticky;
     top: 0;
     backdrop-filter: blur(40px);
@@ -180,6 +153,17 @@
     &:hover {
       background-color: var(--black-50);
     }
+    &:focus-visible {
+      outline: 2px solid var(--blue-600);
+      outline-offset: 2px;
+    }
+  }
+  .menu-toggle :global(.menu-toggle__icon--close),
+  .main-header-container:has(.menu-panel:popover-open) .menu-toggle :global(.menu-toggle__icon--open) {
+    display: none;
+  }
+  .main-header-container:has(.menu-panel:popover-open) .menu-toggle :global(.menu-toggle__icon--close) {
+    display: block;
   }
   .menu-panel {
     display: none;
@@ -192,17 +176,25 @@
     .menu-toggle {
       display: grid;
     }
-    .menu-panel:not([hidden]) {
-      position: absolute;
-      top: 100%;
-      left: 0;
-      right: 0;
+    /* Popovers sit in the top layer, fixed to the viewport. The header is sticky at the top, so
+       the panel goes right under it: at its anchored bottom edge, or its phone height where
+       anchor positioning is not supported. */
+    .menu-panel:popover-open {
+      position: fixed;
+      inset: 68px 0 auto;
+      top: anchor(--site-header bottom);
+      box-sizing: border-box;
+      width: auto;
+      max-height: calc(100dvh - 68px);
+      margin: 0;
       display: flex;
       flex-direction: column;
       gap: 4px;
       padding: 4px 20px 16px;
+      border: 0;
       border-bottom: 1px solid var(--black-200);
       background: white;
+      color: var(--black-900);
       box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
     }
     .nav-button--menu {
