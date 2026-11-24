@@ -11,7 +11,20 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       // Pages that are not prerendered (project pages and the portal) load from 200.html, which the site service returns for those paths.
-      sveltekit({ adapter: adapter({ fallback: "200.html" }) }),
+      sveltekit({
+        adapter: adapter({ fallback: "200.html" }),
+        prerender: {
+          // The header links to /projects/ and /committees/, whose routes are built separately. Until a route exists, its link warns instead of failing the build; every other broken link still fails it.
+          handleHttpError: ({ path, status, message }) => {
+            const pendingSection = path === "/projects/" || path === "/committees/";
+            if (status === 404 && pendingSection) {
+              console.warn(`Prerender: ${path} has no page yet.`);
+              return;
+            }
+            throw new Error(message);
+          },
+        },
+      }),
       ViteImageOptimizer({
         jpg: {
           quality: 90,
