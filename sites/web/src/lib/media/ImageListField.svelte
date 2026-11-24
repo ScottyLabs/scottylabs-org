@@ -18,6 +18,7 @@
   import Img from "./Img.svelte";
   import UploadProgress from "./UploadProgress.svelte";
   import { fileDrop } from "./drop.ts";
+  import { focusIsLost, holdsFocus, tileAfter } from "./focus.ts";
   import { UploadTask } from "./upload-task.svelte.ts";
   import { checkImageFile } from "./upload.ts";
 
@@ -48,6 +49,9 @@
     coverLabel?: string;
     disabled?: boolean;
   } = $props();
+
+  /** The first control in a tile: a photo's move or remove buttons, Cancel upload, or Choose photos. */
+  const FIRST_CONTROL = "button:not(:disabled), textarea:not(:disabled)";
 
   const session = getPortalSession();
   const uid = $props.id();
@@ -115,8 +119,12 @@
     }
     problems = found;
     if (taken.length === 0) return;
-    queue = [...queue, ...taken.map((file) => new UploadTask(file))];
+    const added = taken.map((file) => new UploadTask(file));
+    // The add tile goes away when the list is full; focus then moves to the first upload's Cancel.
+    const hadFocus = holdsFocus(list);
+    queue = [...queue, ...added];
     announcement = `Uploading ${taken.length.toString()} ${taken.length === 1 ? "photo" : "photos"}.`;
+    if (hadFocus) void refocus(() => focusIn(pendingTile(added[0]), "button"));
     void uploadQueued();
   }
 
@@ -130,6 +138,10 @@
         // One at a time on purpose: photos arrive in the order they were chosen.
         // oxlint-disable-next-line no-await-in-loop
         const image = await task.run(session.csrfToken);
+        // The finished upload's tile is replaced by its photo, or removed when it failed or was
+        // cancelled, so focus on its Cancel upload button moves to what took its place.
+        const hadFocus = holdsFocus(list);
+        const position = value.length;
         if (image === null && task.status === "failed") {
           problems = [...problems, task.error ?? `${task.file.name} did not upload.`];
           if (task.failedStatus === 401) session.markSignedOut("expired");
@@ -139,6 +151,10 @@
         const finished = task;
         queue = queue.filter((queued) => queued !== finished);
         finished.dispose();
+        if (hadFocus) {
+          // A new photo needs alt text next; otherwise go to the tile that moved up.
+          void refocus(() => focusIn(tileAt(position), image === null ? FIRST_CONTROL : "textarea"));
+        }
         task = queue[0];
       }
       announcement = "Uploads finished.";
@@ -149,11 +165,38 @@
 
   function cancel(task: UploadTask): void {
     task.cancel();
+    // The running upload leaves the queue when run() settles, in uploadQueued().
     if (queue[0] !== task) {
+      const hadFocus = holdsFocus(list);
+      const position = value.length + queue.indexOf(task);
       queue = queue.filter((queued) => queued !== task);
       task.dispose();
+      if (hadFocus) void refocus(() => focusIn(tileAt(position), FIRST_CONTROL));
     }
     announcement = `Upload of ${task.file.name} cancelled.`;
+  }
+
+  /** The tile at `position`, or the last one when the list got shorter. */
+  function tileAt(position: number): Element | undefined {
+    const tiles = list?.children;
+    if (tiles === undefined) return undefined;
+    const index = tileAfter(position, tiles.length);
+    return index === null ? undefined : tiles[index];
+  }
+
+  function pendingTile(task: UploadTask | undefined): Element | undefined {
+    if (task === undefined) return undefined;
+    return list?.querySelector(`[data-task="${CSS.escape(task.key)}"]`) ?? undefined;
+  }
+
+  function focusIn(tile: Element | undefined, selector: string): void {
+    tile?.querySelector<HTMLElement>(selector)?.focus();
+  }
+
+  /** Once the page has updated, calls `moveFocus` if the element that had focus went away. */
+  async function refocus(moveFocus: () => void): Promise<void> {
+    await tick();
+    if (focusIsLost()) moveFocus();
   }
 
   function moved(from: number, to: number): ImageRef[] {
@@ -183,7 +226,7 @@
     announcement = `Photo ${(index + 1).toString()} removed.`;
     await tick();
     const tiles = list?.querySelectorAll<HTMLElement>("[data-key]");
-    const next = tiles?.[Math.min(index, tiles.length - 1)];
+    const next = tiles?.[tileAfter(index, tiles.length) ?? -1];
     const button = next?.querySelector<HTMLButtonElement>('[data-action="remove"]');
     if (button) button.focus();
     else addZone?.focus();
@@ -320,7 +363,7 @@
       </li>
     {/each}
     {#each queue as task (task.key)}
-      <li class="tile tile--pending">
+      <li class="tile tile--pending" data-task={task.key}>
         <UploadProgress {task} compact oncancel={() => cancel(task)} />
       </li>
     {/each}

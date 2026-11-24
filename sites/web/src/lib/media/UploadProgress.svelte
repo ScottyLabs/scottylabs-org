@@ -19,9 +19,16 @@
   const statusText = $derived(
     task.status === "processing" ? "Preparing sizes" : `Uploading, ${task.percent.toString()}%`,
   );
+
+  let root: HTMLDivElement | undefined = $state();
+
+  /** Focuses the Cancel upload button, for when the button that started the upload went away. */
+  export function focus(): void {
+    root?.querySelector("button")?.focus();
+  }
 </script>
 
-<div class={["upload", compact && "upload--compact"]}>
+<div bind:this={root} class={["upload", compact && "upload--compact"]}>
   <img class="upload__preview" src={task.preview} alt="" />
   <div class="upload__details">
     <span id={labelId} class="upload__name" title={task.file.name}>{task.file.name}</span>

@@ -11,6 +11,7 @@
   import Img from "./Img.svelte";
   import AltTextInput from "./AltTextInput.svelte";
   import UploadProgress from "./UploadProgress.svelte";
+  import { type UploadEnd, focusAfterUpload, focusIsLost, holdsFocus } from "./focus.ts";
   import { aspectRatio } from "./images.ts";
   import { UploadTask } from "./upload-task.svelte.ts";
   import { checkImageFile } from "./upload.ts";
@@ -51,7 +52,9 @@
   let task = $state<UploadTask | null>(null);
   let problem = $state<string | null>(null);
   let announcement = $state("");
+  let root: HTMLDivElement | undefined = $state();
   let dropzone: Dropzone | undefined = $state();
+  let progress: UploadProgress | undefined = $state();
 
   const shownError = $derived(problem ?? error ?? null);
   const describedBy = $derived(
@@ -74,26 +77,52 @@
       problem = invalid;
       return;
     }
-    if (files.length > 1) announcement = "Only the first photo is used here.";
     problem = null;
     task?.dispose();
     const current = new UploadTask(file);
+    // Replace photo and Choose a photo go away while the upload runs; Cancel upload takes over.
+    const hadFocus = holdsFocus(root);
     task = current;
-    announcement = `Uploading ${file.name}.`;
+    announcement =
+      files.length > 1
+        ? `Uploading ${file.name}. Only the first photo is used here.`
+        : `Uploading ${file.name}.`;
+    if (hadFocus) void refocus(() => progress?.focus());
+
     const image = await current.run(session.csrfToken);
     if (task !== current) return;
+    let end: UploadEnd = "cancelled";
     if (image !== null) {
+      end = "done";
       // A new photo needs its own description.
       emit({ ...image, alt: "" });
       announcement = "Photo uploaded. Describe it in the alt text field.";
     } else if (current.status === "failed") {
+      end = "failed";
       problem = current.error;
       if (current.failedStatus === 401) session.markSignedOut("expired");
     } else {
       announcement = "Upload cancelled.";
     }
+    const focusWasHere = holdsFocus(root);
     task = null;
     current.dispose();
+    if (focusWasHere) void refocus(() => focusTarget(focusAfterUpload(end, value !== null)));
+  }
+
+  /** Once the page has updated, calls `moveFocus` if the element that had focus went away. */
+  async function refocus(moveFocus: () => void): Promise<void> {
+    await tick();
+    if (focusIsLost()) moveFocus();
+  }
+
+  function focusTarget(target: "alt" | "replace" | "choose"): void {
+    if (target === "choose") {
+      dropzone?.focus();
+      return;
+    }
+    const selector = target === "alt" ? "textarea" : '[data-action="replace"]';
+    root?.querySelector<HTMLElement>(selector)?.focus();
   }
 
   function cancel(): void {
@@ -114,14 +143,14 @@
   }
 </script>
 
-<div class="image-field" role="group" aria-labelledby={labelId}>
+<div bind:this={root} class="image-field" role="group" aria-labelledby={labelId}>
   <div class="image-field__top">
     <span id={labelId} class="image-field__label">{label}</span>
   </div>
   {#if help}<p id={helpId} class="image-field__help">{help}</p>{/if}
 
   {#if task !== null}
-    <UploadProgress {task} oncancel={cancel} />
+    <UploadProgress bind:this={progress} {task} oncancel={cancel} />
   {:else if value !== null}
     <div class="image-field__preview" style:aspect-ratio={ratio ?? aspectRatio(value)}>
       <Img image={value} alt="" sizes="320px" fallbackWidth={480} fit="cover" loading="eager" />
@@ -132,6 +161,7 @@
         size="sm"
         {disabled}
         aria-describedby={describedBy}
+        data-action="replace"
         onclick={() => dropzone?.choose()}
       >
         Replace photo

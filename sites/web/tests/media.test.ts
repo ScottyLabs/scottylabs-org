@@ -6,6 +6,7 @@
 
 import assert from "node:assert/strict";
 import type { ImageRef } from "../src/lib/api/types.ts";
+import { focusAfterUpload, tileAfter } from "../src/lib/media/focus.ts";
 import { aspectRatio, isUploaded, src, srcset, storedWidths } from "../src/lib/media/images.ts";
 import { checkImageFile, formatBytes } from "../src/lib/media/upload.ts";
 
@@ -81,4 +82,20 @@ Deno.test("files are checked before uploading", () => {
   );
   assert.equal(formatBytes(820 * 1024), "820 KB");
   assert.equal(formatBytes(12 * MB), "12 MB");
+});
+
+Deno.test("after an upload, focus goes to the alt text or back to the button that picks a photo", () => {
+  assert.equal(focusAfterUpload("done", true), "alt");
+  assert.equal(focusAfterUpload("failed", true), "replace");
+  assert.equal(focusAfterUpload("cancelled", true), "replace");
+  assert.equal(focusAfterUpload("failed", false), "choose");
+  assert.equal(focusAfterUpload("cancelled", false), "choose");
+});
+
+Deno.test("when a tile goes, focus moves to the tile that took its place or the last one", () => {
+  assert.equal(tileAfter(1, 4), 1);
+  assert.equal(tileAfter(3, 3), 2);
+  assert.equal(tileAfter(0, 1), 0);
+  assert.equal(tileAfter(-1, 2), 0);
+  assert.equal(tileAfter(0, 0), null);
 });
