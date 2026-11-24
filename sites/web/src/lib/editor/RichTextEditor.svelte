@@ -10,6 +10,7 @@
   // normalizeRichText(), so `value` only ever holds markup the server keeps.
   import "./rich-text.css";
   import { onMount, untrack } from "svelte";
+  import CircleAlert from "@lucide/svelte/icons/circle-alert";
   import Lock from "@lucide/svelte/icons/lock";
   import { getFieldContext } from "../portal/ui/field-context.ts";
   import FormatToolbar from "./FormatToolbar.svelte";
@@ -37,6 +38,7 @@
     selectionIn,
     useParagraphs,
   } from "./commands.ts";
+  import { editorInvalid, isOverLimit, limitMessage } from "./limit.ts";
   import { linkText } from "./links.ts";
   import { type Box, floatingPosition } from "./position.ts";
   import {
@@ -66,13 +68,14 @@
     /** Called with normalized HTML after every change. */
     onchange?: (html: string) => void;
     placeholder?: string;
-    /** Shows a count of visible characters and marks the text invalid past it. */
+    /** Shows a count of visible characters; past it the text is marked invalid with a message. */
     maxChars?: number;
     disabled?: boolean;
     /** "field" sits in a portal Field; "inline" edits text in place. */
     variant?: "field" | "inline";
     /** The accessible name when the editor is not inside a Field. */
     label?: string;
+    /** Marks the text invalid. Text over `maxChars` is marked either way. */
     invalid?: boolean;
     id?: string;
     "aria-describedby"?: string;
@@ -84,6 +87,7 @@
   const editorId = $derived(idProp ?? field?.id ?? `rte-${uid}`);
   const counterId = `rte-${uid}-counter`;
   const hintId = `rte-${uid}-hint`;
+  const limitId = `rte-${uid}-limit`;
   const linkPopoverId = `rte-${uid}-link`;
 
   let wrapper: HTMLDivElement | undefined = $state();
@@ -111,12 +115,14 @@
   let savedRange: Range | null = null;
   let draggingInside = false;
 
-  const over = $derived(maxChars !== undefined && length > maxChars);
-  const isInvalid = $derived(invalid ?? (over || (field?.invalid ?? false)));
+  const over = $derived(isOverLimit(length, maxChars));
+  const overMessage = $derived(over && maxChars !== undefined ? limitMessage(maxChars) : "");
+  const isInvalid = $derived(editorInvalid({ invalid, over, fieldInvalid: field?.invalid }));
   const describedBy = $derived(
     [
       describedByProp ?? field?.describedBy,
       maxChars === undefined ? undefined : counterId,
+      over ? limitId : undefined,
       variant === "inline" ? hintId : undefined,
     ]
       .filter((part) => part !== undefined && part !== "")
@@ -483,7 +489,18 @@
     {#if maxChars !== undefined}
       <span id={counterId} class="p-sr-only">{length} of {maxChars} characters</span>
     {/if}
+    {#if over && maxChars !== undefined}
+      <!-- Sits under the text without moving the canvas around it. -->
+      <p id={limitId} class="rte__limit rte__limit--inline">
+        <span class="rte__limit-count" aria-hidden="true">
+          {length.toLocaleString("en-US")} / {maxChars.toLocaleString("en-US")}
+        </span>
+        <span>{overMessage}</span>
+      </p>
+    {/if}
   {/if}
+  <!-- Always present, so the message is announced when the text goes over the limit. -->
+  <span class="p-sr-only" aria-live="polite">{overMessage}</span>
 
   {#if showFloating}
     <div
@@ -535,6 +552,12 @@
     {/if}
   {/if}
 </div>
+{#if variant === "field" && over}
+  <p id={limitId} class="rte__limit">
+    <CircleAlert size={14} strokeWidth={2} aria-hidden="true" />
+    <span>{overMessage}</span>
+  </p>
+{/if}
 
 <style>
   .rte {
@@ -640,6 +663,47 @@
   .rte--inline.rte--invalid .rte__text {
     outline: 2px solid var(--p-danger);
     outline-offset: 4px;
+  }
+
+  .rte__limit {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin: 0;
+    color: var(--p-danger-text);
+    font-family: var(--p-font);
+    font-size: 0.8125rem;
+    font-weight: 400;
+    line-height: 18px;
+    letter-spacing: 0;
+
+    & :global(svg) {
+      flex: none;
+      margin-top: 2px;
+    }
+  }
+  .rte__limit--inline {
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    z-index: 2;
+    align-items: baseline;
+    gap: 8px;
+    max-width: min(100%, 420px);
+    padding: 4px 8px;
+    border-radius: var(--p-radius-sm);
+    background: var(--p-danger-surface);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    font-size: 0.75rem;
+    line-height: 16px;
+    text-align: left;
+    text-transform: none;
+  }
+  .rte__limit-count {
+    flex: none;
+    font-family: var(--p-mono);
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
   }
 
   .rte__float-popover {

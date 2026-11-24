@@ -7,6 +7,7 @@
 
 import assert from "node:assert/strict";
 import { decodeEntities, parseHtmlFragment } from "../src/lib/editor/html-parse.ts";
+import { editorInvalid, isOverLimit, limitMessage } from "../src/lib/editor/limit.ts";
 import { linkFromInput, linkText } from "../src/lib/editor/links.ts";
 import { floatingPosition } from "../src/lib/editor/position.ts";
 import {
@@ -260,4 +261,21 @@ Deno.test("the floating bar stays above the selection and inside the viewport", 
     floatingPosition({ top: 300, left: 980, width: 10, height: 20 }, bar, viewport).left,
     792,
   );
+});
+
+Deno.test("text over the limit is invalid and says what to do", () => {
+  assert.ok(!isOverLimit(40, 40));
+  assert.ok(isOverLimit(52, 40));
+  assert.ok(!isOverLimit(52));
+  assert.equal(limitMessage(4000), "Shorten this to 4,000 characters or fewer.");
+  assert.equal(limitMessage(1), "Shorten this to 1 character or fewer.");
+});
+
+Deno.test("a parent cannot hide text over the limit by passing invalid={false}", () => {
+  assert.ok(editorInvalid({ invalid: false, over: true, fieldInvalid: false }));
+  assert.ok(editorInvalid({ over: true }));
+  assert.ok(editorInvalid({ invalid: true, over: false }));
+  assert.ok(editorInvalid({ over: false, fieldInvalid: true }));
+  assert.ok(!editorInvalid({ invalid: false, over: false, fieldInvalid: false }));
+  assert.ok(!editorInvalid({ over: false }));
 });
