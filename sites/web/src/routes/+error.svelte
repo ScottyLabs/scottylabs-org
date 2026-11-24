@@ -1,10 +1,14 @@
 <script lang="ts">
-  // Errors from public pages, and addresses that match no page. It renders outside the (site)
-  // group, so it adds the header and footer itself.
+  // Errors from public pages, and addresses that match no page anywhere. The portal has its own
+  // error page for errors inside it; unknown portal addresses land here and get the portal style.
   import { page } from "$app/state";
   import errorRyo from "#lib/assets/ryo.webp";
   import SiteFrame from "#lib/sections/home/SiteFrame.svelte";
+  import PortalError from "#lib/portal/PortalError.svelte";
 
+  const inPortal = $derived(
+    page.url.pathname === "/portal" || page.url.pathname.startsWith("/portal/"),
+  );
   const message = $derived(page.status === 404 ? "404" : "Error");
   const details = $derived(
     page.status === 404
@@ -13,7 +17,10 @@
   );
 </script>
 
-<SiteFrame>
+{#if inPortal}
+  <PortalError status={page.status} message={page.error?.message} standalone />
+{:else}
+  <SiteFrame>
     <div class="error-container">
       <h1 class="error-message">{message}</h1>
       <p class="error-details">{details}</p>
@@ -23,7 +30,8 @@
         <button>Go home</button>
       </a>
     </div>
-</SiteFrame>
+  </SiteFrame>
+{/if}
 
 <style>
   .error-container {
