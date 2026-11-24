@@ -310,3 +310,5 @@ Each builder owns the files of their track. Edit shared files only where this ta
 ## Changes
 
 Record changes to this contract here, newest first, with the reason.
+
+- 2026-11-24: `ProjectKind` gains `program` and `fundraiser`, which the approved designs use for the Speaker series and Giving Day.

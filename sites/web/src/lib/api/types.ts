@@ -273,7 +273,7 @@ export interface PageChangesResponse {
 // Projects
 
 export type ProjectStatus = "live" | "in_development" | "annual" | "ongoing";
-export type ProjectKind = "app" | "event" | "tool" | "brand" | "other";
+export type ProjectKind = "app" | "event" | "tool" | "brand" | "program" | "fundraiser" | "other";
 
 export interface ProjectCard {
   id: string;
