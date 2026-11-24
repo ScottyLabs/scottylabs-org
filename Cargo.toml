@@ -10,3 +10,7 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
+
+# The JPEG decoder behind image uploads uses NEON intrinsics that the Cranelift dev backend cannot compile yet, which aborts the process the first time a JPEG is decoded. Build it with LLVM.
+[profile.dev.package.zune-jpeg]
+codegen-backend = "llvm"
