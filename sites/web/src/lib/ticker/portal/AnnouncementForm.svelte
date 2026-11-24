@@ -1,7 +1,8 @@
 <script lang="ts">
   // The composer (spec TK-4 to TK-8): type, committee, message, link and expiry, with the
   // announcement at real size between two dog marks and when it will be on the ticker.
-  // Admins and directors publish; leads send it to their director for approval.
+  // Admins and directors publish; leads send it to their director for approval. On phones the
+  // main button stays in view at the bottom.
   import Link from "@lucide/svelte/icons/link";
   import { tick } from "svelte";
   import { isApiError } from "../../api/client.ts";
@@ -232,7 +233,7 @@
     {/if}
 
     <div class="composer__actions">
-      <Button variant="subtle" size="lg" href="/portal/ticker/">Cancel</Button>
+      <Button variant="subtle" size="lg" href="/portal/ticker/" class="composer__cancel">Cancel</Button>
       <Button type="submit" size="lg" loading={saving}>{submitLabel(role)}</Button>
     </div>
     {#if note !== null}<p class="composer__note">{note}</p>{/if}
@@ -399,16 +400,42 @@
       grid-template-rows: auto;
     }
   }
+  /* Phones, as in the mobile design: the fields straight on the page, edge to edge past the
+     shell's 16 px padding, and the main button in a bar that stays above the tab bar. The app bar
+     has Cancel, and the expiry sentence says when it leaves, so the schedule card is left out. */
   @media (max-width: 600px) {
+    .composer {
+      gap: 0;
+    }
     .composer__card {
-      padding: 20px 16px;
+      gap: 20px;
+      margin-inline: -16px;
+      padding: 20px 20px 0;
+      border: 0;
+      border-radius: 0;
     }
     .composer__actions {
-      flex-direction: column-reverse;
-      align-items: stretch;
+      position: sticky;
+      /* Tucked a pixel under the tab bar, so nothing scrolls through a gap between them. */
+      bottom: calc(var(--p-tabbar-height) + env(safe-area-inset-bottom) - 2px);
+      z-index: 5;
+      order: 1;
+      margin-inline: -20px;
+      padding: 14px 20px 18px;
+      border-top: 1px solid var(--p-border);
+      background: var(--p-surface);
     }
     .composer__actions :global(.p-button) {
       width: 100%;
+    }
+    .composer__actions :global(.composer__cancel) {
+      display: none;
+    }
+    .composer__note {
+      margin: 0;
+    }
+    .composer__schedule {
+      display: none;
     }
   }
 </style>

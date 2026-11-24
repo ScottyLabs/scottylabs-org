@@ -74,4 +74,21 @@
     font-size: 0.75rem;
     line-height: 16px;
   }
+  /* Phones: the strip alone, edge to edge under the app bar, as the home page shows it. */
+  @media (max-width: 600px) {
+    .preview {
+      margin-inline: -16px;
+      border-width: 0 0 1px;
+      border-radius: 0;
+    }
+    .preview__head,
+    .preview__note {
+      display: none;
+    }
+    .preview__strip {
+      gap: 24px;
+      height: 68px;
+      border-bottom: 0;
+    }
+  }
 </style>

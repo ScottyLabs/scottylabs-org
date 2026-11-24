@@ -87,7 +87,7 @@
       {#snippet actions()}<Button variant="outline" size="sm" href="/portal/ticker/">Back to announcements</Button>{/snippet}
     </Callout>
   {:else if announcement === null}
-    <div aria-busy="true" aria-label="Loading">
+    <div class="composer-page__loading" aria-busy="true" aria-label="Loading">
       <Skeleton height="520px" radius="16px" />
     </div>
   {:else if !announcement.canEdit}
@@ -131,5 +131,15 @@
   }
   .composer-page__note {
     margin: 0 0 4px;
+  }
+  /* Phones: the preview strip sits right under the app bar; notes and loading keep their space. */
+  @media (max-width: 600px) {
+    .composer-page {
+      gap: 0;
+    }
+    .composer-page > :global(.p-callout),
+    .composer-page__loading {
+      margin: 20px 0;
+    }
   }
 </style>

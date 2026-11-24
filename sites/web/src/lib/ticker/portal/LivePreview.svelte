@@ -71,4 +71,16 @@
     font-size: 0.875rem;
     line-height: 20px;
   }
+  /* Phones: the strip alone, edge to edge under the top bar, past the shell's 20 px and 16 px padding.
+     The page heading carries the slots. */
+  @media (max-width: 600px) {
+    .live-preview {
+      margin: -20px -16px 0;
+      border-width: 0 0 1px;
+      border-radius: 0;
+    }
+    .live-preview__head {
+      display: none;
+    }
+  }
 </style>

@@ -107,4 +107,14 @@
       grid-template-columns: minmax(0, 1fr);
     }
   }
+  /* Phones: the preview strip sits right under the app bar; notes and loading keep their space. */
+  @media (max-width: 600px) {
+    .composer-page {
+      gap: 0;
+    }
+    .composer-page > :global(.p-callout),
+    .composer-page__loading {
+      margin: 20px 0;
+    }
+  }
 </style>

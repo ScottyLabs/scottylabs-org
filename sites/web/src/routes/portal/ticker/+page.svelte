@@ -5,6 +5,7 @@
   import Hourglass from "@lucide/svelte/icons/hourglass";
   import Megaphone from "@lucide/svelte/icons/megaphone";
   import Plus from "@lucide/svelte/icons/plus";
+  import { MediaQuery } from "svelte/reactivity";
   import { page } from "$app/state";
   import { isAbortError, isApiError } from "#lib/api/client.ts";
   import type { Announcement, AnnouncementListResponse, AnnouncementTab } from "#lib/api/types.ts";
@@ -26,6 +27,8 @@
   const session = getPortalSession();
   const toasts = getToasts();
   const permissions = $derived(session.permissions);
+  // Phones get the compact layout of the mobile design: the live strip under the top bar, then a short heading.
+  const phone = new MediaQuery("(max-width: 600px)");
 
   const BASE = "/portal/ticker/";
 
@@ -182,25 +185,37 @@
     },
   };
   const emptyIcons = { live: Megaphone, waiting: Hourglass, expired: Archive } as const;
+
+  const slotsLine = $derived(live === null ? undefined : `${live.slots.used} of ${live.slots.total} slots live`);
 </script>
+
+{#snippet livePreview()}
+  <LivePreview announcements={live?.announcements ?? null} used={live?.slots.used ?? null} total={live?.slots.total ?? MAX_LIVE} />
+{/snippet}
 
 <svelte:head>
   <title>Ticker - ScottyLabs Portal</title>
 </svelte:head>
 
 <div class="ticker-page">
-  <PageHeader title="Announcements" description="What scrolls across the front page of scottylabs.org.">
+  {#if phone.current}{@render livePreview()}{/if}
+
+  <PageHeader
+    title="Announcements"
+    description={phone.current ? slotsLine : "What scrolls across the front page of scottylabs.org."}
+    class="ticker-page__header"
+  >
     {#snippet actions()}
       {#if canPost}
         <div class="ticker-page__new">
           <Button
-            size="lg"
+            size={phone.current ? "md" : "lg"}
             icon={Plus}
             href="/portal/ticker/new/"
             disabled={blocked}
             aria-describedby={blocked ? "ticker-slots-full" : undefined}
           >
-            New announcement
+            {#if phone.current}New<span class="p-sr-only"> announcement</span>{:else}New announcement{/if}
           </Button>
           {#if blocked}
             <p id="ticker-slots-full" class="ticker-page__reason">
@@ -212,7 +227,7 @@
     {/snippet}
   </PageHeader>
 
-  <LivePreview announcements={live?.announcements ?? null} used={live?.slots.used ?? null} total={live?.slots.total ?? MAX_LIVE} />
+  {#if !phone.current}{@render livePreview()}{/if}
 
   <Tabs {tabs} value={tab} label="Announcements" />
 
@@ -298,11 +313,31 @@
     margin-top: -12px;
   }
   @media (max-width: 600px) {
-    .ticker-page__new {
-      align-items: flex-start;
+    .ticker-page {
+      gap: 16px;
+    }
+    .ticker-page :global(.ticker-page__header) {
+      flex-wrap: nowrap;
+      align-items: center;
+      gap: 12px;
+    }
+    .ticker-page :global(.ticker-page__header .p-page-header__text) {
+      gap: 2px;
+    }
+    .ticker-page :global(.ticker-page__header .p-page-header__title) {
+      font-size: 1.25rem;
+      font-weight: 500;
+      line-height: 28px;
+      letter-spacing: 0;
+    }
+    .ticker-page :global(.ticker-page__header .p-page-header__description) {
+      color: var(--p-text-tertiary);
+      font-family: var(--p-mono);
+      font-size: 0.75rem;
+      line-height: 16px;
     }
     .ticker-page__reason {
-      text-align: left;
+      max-width: 168px;
     }
   }
 </style>
