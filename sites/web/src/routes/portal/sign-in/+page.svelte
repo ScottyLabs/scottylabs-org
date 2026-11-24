@@ -1,6 +1,7 @@
 <script lang="ts">
   // Sign in through ScottyLabs single sign-on (Keycloak), or as a sample person where the service
-  // allows development sign-in. People who are already signed in go straight to returnTo.
+  // allows development sign-in. People who are already signed in go straight on: to returnTo, or
+  // to the no-access page when they have no role.
   import { onMount } from "svelte";
   import LogIn from "@lucide/svelte/icons/log-in";
   import Megaphone from "@lucide/svelte/icons/megaphone";
@@ -11,7 +12,9 @@
   import heroArt from "#lib/assets/hero-bg.svg";
   import { apiUrl, get, isApiError } from "#lib/api/client.ts";
   import type { AuthConfigResponse } from "#lib/api/types.ts";
-  import { safeReturnTo } from "#lib/portal/paths.ts";
+  import { destinationAfterSignIn } from "#lib/portal/access.ts";
+  import { replaceLocation } from "#lib/portal/navigation.ts";
+  import { isBarePortalPath, safeReturnTo } from "#lib/portal/paths.ts";
   import { getPortalSession } from "#lib/portal/session.svelte.ts";
   import DevSignIn from "#lib/portal/sign-in/DevSignIn.svelte";
   import { signInNotice } from "#lib/portal/sign-in-messages.ts";
@@ -45,23 +48,35 @@
     }
   }
 
+  /**
+   * Takes someone who is signed in onward and resolves true, or resolves false when there is no
+   * session. Going onward never fails: a path with no route is loaded in full instead.
+   */
   async function continueIfSignedIn(): Promise<boolean> {
     const me = await session.load();
     if (me === null) return false;
-    await goto(returnTo, { replace: true });
+    await replaceLocation(
+      destinationAfterSignIn(me.permissions.canUsePortal, returnTo),
+      () => isBarePortalPath(location.pathname),
+      (href) => goto(href, { replace: true }),
+    );
     return true;
   }
 
-  onMount(async () => {
-    const [signedIn] = await Promise.all([continueIfSignedIn(), loadConfig()]);
-    if (!signedIn) checking = false;
-  });
-
-  async function afterDevSignIn() {
-    if (!(await continueIfSignedIn())) {
-      throw new Error("Signed in, but the session did not stick. Check that cookies are allowed.");
+  async function showOptionsUnlessSignedIn(configLoaded: Promise<void>) {
+    try {
+      if (await continueIfSignedIn()) return;
+    } catch {
+      // Unexpected, but the sign-in options are better than waiting here forever.
     }
+    // Wait for the options so the page appears once, without the panels moving in later.
+    await configLoaded;
+    checking = false;
   }
+
+  onMount(() => {
+    void showOptionsUnlessSignedIn(loadConfig());
+  });
 </script>
 
 <svelte:head>
@@ -129,7 +144,7 @@
           <DevSignIn
             personas={config.devPersonas}
             needsKey={config.devLoginNeedsKey}
-            onsignedin={afterDevSignIn}
+            onsignedin={continueIfSignedIn}
           />
         {/if}
       </div>

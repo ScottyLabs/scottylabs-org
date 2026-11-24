@@ -17,8 +17,11 @@
   }: {
     personas: AuthConfigResponse["devPersonas"];
     needsKey: boolean;
-    /** Called after the session cookie is set. */
-    onsignedin: () => Promise<void>;
+    /**
+     * Called after the service accepted the sign-in. Takes the person onward and resolves true, or
+     * resolves false when no session came of it.
+     */
+    onsignedin: () => Promise<boolean>;
   } = $props();
 
   let key = $state("");
@@ -43,13 +46,24 @@
     try {
       const body: DevLoginInput = { andrewId, key: needsKey ? key.trim() : null };
       await post("/auth/dev-login", body, { redirectOnUnauthenticated: false });
-      await onsignedin();
     } catch (caught) {
       error = isApiError(caught)
         ? caught.message
         : "We could not sign you in. Try again in a moment.";
-    } finally {
       pending = null;
+      return;
+    }
+    // Signed in. Keep the spinner while the page moves on; only report what went wrong after.
+    error = await continueAfterSignIn();
+    if (error !== null) pending = null;
+  }
+
+  async function continueAfterSignIn(): Promise<string | null> {
+    try {
+      if (await onsignedin()) return null;
+      return "You signed in, but this browser did not keep the session. Allow cookies for this site and try again.";
+    } catch {
+      return "You signed in, but we could not open the portal. Reload the page to continue.";
     }
   }
 </script>

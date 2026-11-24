@@ -5,17 +5,13 @@ import { createContext } from "svelte";
 import { goto } from "$app/navigation";
 import { ApiError, get, isApiError, post, setCsrfToken } from "../api/client.ts";
 import type { MeResponse, Permissions, RoleAssignment } from "../api/types.ts";
-import { SIGN_IN_PATH } from "./paths.ts";
+import type { AccessState, SessionStatus, SignedOutReason } from "./access.ts";
+import { replaceLocation } from "./navigation.ts";
+import { SIGN_IN_PATH, isBarePortalPath } from "./paths.ts";
 
-export type SessionStatus = "idle" | "loading" | "ready" | "signed_out" | "error";
+export type { SessionStatus, SignedOutReason } from "./access.ts";
 
-/**
- * Why the session is signed out: the person chose to sign out, the session expired while they
- * were using the portal, or they were never signed in.
- */
-export type SignedOutReason = "signed_out" | "expired" | "not_signed_in";
-
-export class PortalSession {
+export class PortalSession implements AccessState {
   /** "ready" once /api/me answered; "signed_out" on 401; "error" when it could not be reached. */
   status = $state<SessionStatus>("idle");
   me = $state.raw<MeResponse | null>(null);
@@ -73,7 +69,11 @@ export class PortalSession {
       if (!isApiError(error) || error.status !== 401) throw error;
     }
     this.markSignedOut("signed_out");
-    await goto(`${SIGN_IN_PATH}?signedOut=1`, { replace: true });
+    await replaceLocation(
+      `${SIGN_IN_PATH}?signedOut=1`,
+      () => !isBarePortalPath(location.pathname),
+      (href) => goto(href, { replace: true }),
+    );
   }
 
   /** Forgets the session locally, for example after a 401. */

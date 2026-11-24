@@ -4,12 +4,9 @@
   import { afterNavigate, goto } from "$app/navigation";
   import { page } from "$app/state";
   import { onUnauthenticated } from "#lib/api/client.ts";
-  import {
-    NO_ACCESS_PATH,
-    PORTAL_HOME,
-    isBarePortalPath,
-    signInHref,
-  } from "#lib/portal/paths.ts";
+  import { portalRedirect } from "#lib/portal/access.ts";
+  import { replaceLocation } from "#lib/portal/navigation.ts";
+  import { isBarePortalPath } from "#lib/portal/paths.ts";
   import { PortalSession, setPortalSession } from "#lib/portal/session.svelte.ts";
   import { ToastStore, setToasts } from "#lib/portal/toasts.svelte.ts";
   import CheckingScreen from "#lib/portal/shell/CheckingScreen.svelte";
@@ -24,27 +21,27 @@
   const session = setPortalSession(new PortalSession());
   const toasts = setToasts(new ToastStore());
 
-  const pathname = $derived(page.url.pathname);
-  const bare = $derived(isBarePortalPath(pathname));
-  const onNoAccessPage = $derived(pathname === NO_ACCESS_PATH || `${pathname}/` === NO_ACCESS_PATH);
+  const bare = $derived(isBarePortalPath(page.url.pathname));
   const hasRole = $derived(session.canUsePortal);
   const sections = $derived(hasRole ? sectionsFor(session.permissions) : LOCKED_PREVIEW_SECTIONS);
+  const redirectTarget = $derived(portalRedirect(page.url, session));
   // Render the page only when the person may see it, so pages never flash before a redirect.
-  const showShell = $derived(session.status === "ready" && hasRole !== onNoAccessPage);
+  const showShell = $derived(session.status === "ready" && redirectTarget === null);
 
   $effect(() => {
     if (!bare && session.status === "idle") void session.load();
   });
 
+  // Normally the sign-in page already chose the right place. This catches everything else, and
+  // falls back to a full page load when the router does not get there.
   $effect(() => {
-    if (bare) return;
-    if (session.status === "signed_out" && session.signedOutReason !== "signed_out") {
-      const returnTo = `${page.url.pathname}${page.url.search}`;
-      const extra = session.signedOutReason === "expired" ? { reason: "session_ended" } : undefined;
-      void goto(signInHref(returnTo, extra), { replace: true });
-    } else if (session.status === "ready" && hasRole === onNoAccessPage) {
-      void goto(hasRole ? PORTAL_HOME : NO_ACCESS_PATH, { replace: true });
-    }
+    const target = redirectTarget;
+    if (target === null) return;
+    void replaceLocation(
+      target,
+      () => redirectTarget === target,
+      (href) => goto(href, { replace: true }),
+    );
   });
 
   // A 401 from any call means the session ended while the person was working.

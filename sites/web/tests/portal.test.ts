@@ -27,6 +27,13 @@ import {
   partOfDay,
   toZonedInputValue,
 } from "../src/lib/portal/dates.ts";
+import {
+  type AccessState,
+  destinationAfterSignIn,
+  isNoAccessPath,
+  portalRedirect,
+} from "../src/lib/portal/access.ts";
+import { replaceLocation } from "../src/lib/portal/navigation.ts";
 import { safeReturnTo, signInHref } from "../src/lib/portal/paths.ts";
 import { describeRoles, firstName, primaryRoleLabel } from "../src/lib/portal/roles.ts";
 import { signInNotice } from "../src/lib/portal/sign-in-messages.ts";
@@ -108,6 +115,104 @@ Deno.test("returnTo stays on portal paths", () => {
     signInHref("/portal/projects/", { reason: "session_ended" }),
     "/portal/sign-in/?returnTo=%2Fportal%2Fprojects%2F&reason=session_ended",
   );
+});
+
+Deno.test("people without a role go straight to the no-access page after signing in", () => {
+  assert.equal(
+    destinationAfterSignIn(true, "/portal/projects/?tab=mine"),
+    "/portal/projects/?tab=mine",
+  );
+  assert.equal(destinationAfterSignIn(true, "https://evil.example/"), "/portal/");
+  assert.equal(destinationAfterSignIn(false, "/portal/projects/"), "/portal/no-access/");
+  assert.equal(destinationAfterSignIn(false, "/portal/"), "/portal/no-access/");
+});
+
+const at = (path: string) => new URL(path, "https://scottylabs.org");
+
+const ready = (canUsePortal: boolean): AccessState => ({
+  status: "ready",
+  signedOutReason: null,
+  canUsePortal,
+});
+
+const signedOut = (reason: AccessState["signedOutReason"]): AccessState => ({
+  status: "signed_out",
+  signedOutReason: reason,
+  canUsePortal: false,
+});
+
+Deno.test("the portal shell sends people where their session allows", () => {
+  assert.equal(portalRedirect(at("/portal/ticker/"), ready(true)), null);
+  assert.equal(portalRedirect(at("/portal/no-access/"), ready(true)), "/portal/");
+  assert.equal(portalRedirect(at("/portal/no-access"), ready(true)), "/portal/");
+  assert.equal(portalRedirect(at("/portal/?x=1"), ready(false)), "/portal/no-access/");
+  assert.equal(portalRedirect(at("/portal/no-access/"), ready(false)), null);
+  assert.equal(
+    portalRedirect(at("/portal/projects/?tab=mine"), signedOut("not_signed_in")),
+    "/portal/sign-in/?returnTo=%2Fportal%2Fprojects%2F%3Ftab%3Dmine",
+  );
+  assert.equal(
+    portalRedirect(at("/portal/ticker/"), signedOut("expired")),
+    "/portal/sign-in/?returnTo=%2Fportal%2Fticker%2F&reason=session_ended",
+  );
+  // Signing out navigates on its own, and the sign-in page needs no session.
+  assert.equal(portalRedirect(at("/portal/"), signedOut("signed_out")), null);
+  assert.equal(portalRedirect(at("/portal/sign-in/"), signedOut("not_signed_in")), null);
+  assert.equal(portalRedirect(at("/portal/sign-in/"), ready(false)), null);
+  // Nothing moves while the session is still loading or could not be checked.
+  for (const status of ["idle", "loading", "error"] as const) {
+    const state: AccessState = { status, signedOutReason: null, canUsePortal: false };
+    assert.equal(portalRedirect(at("/portal/ticker/"), state), null, status);
+  }
+  assert.ok(isNoAccessPath("/portal/no-access"));
+  assert.ok(!isNoAccessPath("/portal/no-access/x"));
+});
+
+Deno.test("leaving a page always gets the person there", async () => {
+  const loads: string[] = [];
+  const load = (href: string) => {
+    loads.push(href);
+  };
+
+  // The router got there.
+  let here = "/portal/sign-in/";
+  await replaceLocation(
+    "/portal/",
+    () => here === "/portal/sign-in/",
+    (href) => {
+      here = href;
+      return Promise.resolve();
+    },
+    load,
+  );
+  assert.deepEqual(loads, []);
+
+  // The router has no route for the path, so the browser loads it in full.
+  await replaceLocation(
+    "/portal/old-bookmark/",
+    () => true,
+    () => Promise.reject(new Error("navigation_route_missing")),
+    load,
+  );
+  assert.deepEqual(loads, ["/portal/old-bookmark/"]);
+
+  // A newer navigation cut this one short without an error, and the person still has to go.
+  await replaceLocation(
+    "/portal/no-access/",
+    () => true,
+    () => Promise.resolve(),
+    load,
+  );
+  assert.deepEqual(loads, ["/portal/old-bookmark/", "/portal/no-access/"]);
+
+  // A newer navigation made this one unnecessary.
+  await replaceLocation(
+    "/portal/",
+    () => false,
+    () => Promise.reject(new Error("x")),
+    load,
+  );
+  assert.equal(loads.length, 2);
 });
 
 Deno.test("sign-in notices match the redirect", () => {
