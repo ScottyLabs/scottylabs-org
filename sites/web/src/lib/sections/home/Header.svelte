@@ -193,11 +193,17 @@
       display: grid;
     }
     .menu-panel:not([hidden]) {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      right: 0;
       display: flex;
       flex-direction: column;
       gap: 4px;
       padding: 4px 20px 16px;
       border-bottom: 1px solid var(--black-200);
+      background: white;
+      box-shadow: 0 12px 24px rgba(0, 0, 0, 0.08);
     }
     .nav-button--menu {
       padding: 12px 13px;
