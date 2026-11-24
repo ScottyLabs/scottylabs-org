@@ -32,12 +32,14 @@
   let panel = $state<HTMLElement>();
   let heading = $state<HTMLElement>();
 
+  /** Under the strip, lined up with the anchor's right edge. Fixed positions ignore the scrollbar, so measure without it. */
   function place() {
     if (panel === undefined || anchor === undefined) return;
     const rect = anchor.getBoundingClientRect();
-    const top = Math.round(rect.bottom + 8);
-    panel.style.setProperty("--list-top", `${top}px`);
-    panel.style.setProperty("--list-right", `${Math.max(16, Math.round(window.innerWidth - rect.right))}px`);
+    const strip = anchor.closest("section")?.getBoundingClientRect() ?? rect;
+    const right = document.documentElement.clientWidth - rect.right;
+    panel.style.setProperty("--list-top", `${Math.round(strip.bottom + 8)}px`);
+    panel.style.setProperty("--list-right", `${Math.max(8, Math.round(right))}px`);
   }
 
   function ontoggle(event: Event) {
