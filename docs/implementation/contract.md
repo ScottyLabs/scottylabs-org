@@ -311,8 +311,18 @@ Each builder owns the files of their track. Edit shared files only where this ta
 
 Record changes to this contract here, newest first, with the reason.
 
+- 2026-11-24, projects. Additive only.
+
+  - `ProjectEditorResponse.project.approvers` lists the directors of the owning committee, so a lead's "Send for approval" can say who decides. `pendingApproval` is the waiting submission, or the sent back one (with its note) until the project is published again; approved and withdrawn ones are not shown.
+  - `GET /api/public/projects` also takes `?committee=<slug>`, as the spec lists. Other route modules can build the same cards with `super::projects::public::published_cards(db, Some(committee))`, for example the committee page's projects block.
+  - Rules the routes follow: a lead's edit to the draft (or discarding it) withdraws their waiting approval, since it no longer matches what was sent; a director's edit does not. Publishing directly and archiving withdraw a waiting approval. Approving publishes the snapshot and keeps later edits in the draft. Archived projects cannot be published or approved until they are unarchived. Featuring a project stops featuring the others, so one is featured at a time. A new project never takes an address that redirects to another project, and an admin cannot rename a project to one either. `builtWith` drops the owner and is kept in committee order. Uploaded photos take their width and height from the `media` table.
+  - Saving drafts autosaves often, so a run of edits by one person within 15 minutes is one audit entry ("Edited Nova") whose time moves forward, instead of one entry per save.
+  - The seed publishes the 15 projects of the approved Projects page. Terrier has no picture yet and shows its monogram, as in the design; republishing it needs a cover like any other project. The TartanHacks repository and the terrier.build site do not exist, so they are left out.
+
 - 2026-11-24, shared web components. Additive only. `Field` gives its label an id and `FieldContext` gains `labelId`, so controls that a `<label for>` cannot name (the contenteditable in `RichTextEditor`) use `aria-labelledby`. New shared pieces for the projects, committees and people tracks: `src/lib/editor/` (`RichTextEditor`, `RichText`, `sanitize`, `normalizeRichText`, `plainText`, `plainTextLength`; the client mirror of `richtext.rs`), `src/lib/media/` (`Img`, `ImageField`, `ImageListField`, `src`, `srcset`, `aspectRatio`, `uploadImage`), `PersonPicker` in the portal UI kit, `src/lib/projects/ProjectCard.svelte` (also exports `PROJECT_STATUS_LABELS`, `PROJECT_KIND_LABELS` and `projectPath`) and `src/lib/site/SelectionBox.svelte`. The projects track owns `src/lib/projects/` and may change the card; keep its props.
+
 - 2026-11-24, platform web. `sites/web/vite.config.ts` proxies to `SITE_SERVICE_URL` when it is set (default `http://127.0.0.1:8080`), so builds can run side by side on other ports. Prerendering warns instead of failing when `/projects/` or `/committees/` answer 404, because the header links to them before those routes exist; remove that handler once both routes are in.
+
 - 2026-11-24, platform web. How portal pages plug in: call the API with the helpers in `src/lib/api/client.ts`, whose paths are relative to `/api` (`get<MeResponse>("/me")`); read the signed-in person with `getPortalSession()` and show confirmations with `getToasts()` (both from `src/lib/portal/index.ts`); build pages from `src/lib/portal/ui/index.ts` and the `p-table` classes. Render the page's `<h1>` straight away (`PageHeader` does), since the shell moves focus to it after navigation. Unknown `/portal/` addresses get the portal error card from the root `+error.svelte`.
 
 ### 2026-11-24, platform backend review fixes
