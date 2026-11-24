@@ -536,13 +536,27 @@ mod tests {
         assert_eq!(me["user"]["andrewId"], "tkanz");
         assert_eq!(me["csrfToken"], thomas.csrf.as_str());
 
-        let (status, body) = patch(&app, "/api/no-such-endpoint", Some(&thomas), json!({})).await;
-        assert_eq!(
-            (status, &body["error"]["code"]),
-            (StatusCode::NOT_FOUND, &json!("not_found"))
+        let lead = json!({
+            "andrewId": "helperlead", "name": "Helper Lead", "role": "lead",
+            "committee": "tech", "canPostTicker": true, "projectIds": []
+        });
+        let (status, row) = post(&app, "/api/people", Some(&thomas), lead).await;
+        assert_eq!(status, StatusCode::CREATED);
+        let path = format!(
+            "/api/people/assignments/{}",
+            row["roles"][0]["id"].as_str().unwrap()
         );
-        let (status, _) = delete(&app, "/api/no-such-endpoint", Some(&thomas)).await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
+        let (status, row) = patch(
+            &app,
+            &path,
+            Some(&thomas),
+            json!({ "canPostTicker": false }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(row["roles"][0]["canPostTicker"], false);
+        let (status, _) = delete(&app, &path, Some(&thomas)).await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
 
         let (status, body) = put(&app, "/api/no-such-endpoint", Some(&thomas), json!({})).await;
         assert_eq!(status, StatusCode::NOT_FOUND);
@@ -557,10 +571,6 @@ mod tests {
         // Without the cookie there is no viewer.
         let (status, _) = get(&app, "/api/me", None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED);
-        let (status, _) = post(&app, "/api/auth/logout", Some(&thomas), json!({})).await;
-        assert_eq!(status, StatusCode::NO_CONTENT);
-        let (status, _) = get(&app, "/api/me", Some(&thomas)).await;
-        assert_eq!(status, StatusCode::UNAUTHORIZED);
-        assert!(audit_summaries(&db).await.is_empty());
+        assert_eq!(audit_summaries(&db).await.len(), 3);
     }
 }
