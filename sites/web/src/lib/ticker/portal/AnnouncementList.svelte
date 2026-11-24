@@ -53,6 +53,25 @@
   const rows = $derived(order.map((id) => byId.get(id)).filter((row) => row !== undefined));
   const canDrag = $derived(reorderable && tab === "live" && rows.length > 1);
 
+  // Bring the row just published into view once; on phones it often lands below the fold.
+  let shownHighlight: string | null = null;
+  $effect(() => {
+    const id = highlight;
+    if (id === null || id === shownHighlight || !byId.has(id)) return;
+    shownHighlight = id;
+    void tick().then(() => {
+      const target = [...document.querySelectorAll<HTMLElement>("[data-highlighted]")].find(
+        (element) => element.offsetParent !== null,
+      );
+      if (target === undefined) return;
+      const box = target.getBoundingClientRect();
+      // Leave room for the phone tab bar and the toast above it.
+      if (box.top >= 0 && box.bottom <= window.innerHeight - 140) return;
+      const smooth = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      target.scrollIntoView({ block: "center", behavior: smooth ? "smooth" : "auto" });
+    });
+  });
+
   let dragging = $state<string | null>(null);
   let dragStart: string[] = [];
   let body = $state<HTMLElement>();
@@ -236,6 +255,7 @@
           {@const Icon = kindIcon(announcement.kind)}
           <tr
             data-row
+            data-highlighted={announcement.id === highlight ? "" : undefined}
             class={[announcement.id === highlight && "p-table__row--highlight", dragging === announcement.id && "list__row--dragging"]}
           >
             {#if canDrag}
@@ -286,7 +306,10 @@
   <ul class="list__cards">
     {#each rows as announcement, index (announcement.id)}
       {@const soon = tab === "live" && timeLeft(announcement, now).soon}
-      <li class={["list__card", announcement.id === highlight && "list__card--highlight"]}>
+      <li
+        class={["list__card", announcement.id === highlight && "list__card--highlight"]}
+        data-highlighted={announcement.id === highlight ? "" : undefined}
+      >
         <div class="list__card-top">
           <p class="list__card-message">
             {announcement.message}
