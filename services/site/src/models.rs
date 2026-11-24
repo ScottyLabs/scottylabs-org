@@ -267,9 +267,12 @@ pub fn check_https_url(raw: &str) -> Result<String, String> {
     Ok(url.to_string())
 }
 
-/// Like [`check_https_url`] but also allows `mailto:` addresses, for buttons.
+/// Like [`check_https_url`] but also allows `mailto:` addresses and paths on this site such as `/sponsors/`, for buttons.
 pub fn check_button_url(raw: &str) -> Result<String, String> {
     let trimmed = raw.trim();
+    if trimmed.starts_with('/') {
+        return check_site_path(trimmed);
+    }
     if let Some(address) = trimmed.strip_prefix("mailto:") {
         let valid = address.len() <= 254
             && address.split_once('@').is_some_and(|(user, domain)| {
@@ -282,6 +285,23 @@ pub fn check_button_url(raw: &str) -> Result<String, String> {
         };
     }
     check_https_url(trimmed)
+}
+
+/// A path on this site, such as `/sponsors/`. `//host` and backslashes are refused because browsers read them as links to other sites.
+fn check_site_path(path: &str) -> Result<String, String> {
+    const ERROR: &str = "Enter a path on this site starting with one /, such as /sponsors/";
+    let suspicious = path.starts_with("//")
+        || path.contains('\\')
+        || path.chars().any(|c| c.is_whitespace() || c.is_control());
+    if suspicious || path.len() > MAX_URL_LEN {
+        return Err(ERROR.into());
+    }
+    let base = Url::parse("https://scottylabs.invalid/").map_err(|_| ERROR.to_owned())?;
+    let joined = base.join(path).map_err(|_| ERROR.to_owned())?;
+    if joined.origin() != base.origin() {
+        return Err(ERROR.into());
+    }
+    Ok(path.to_owned())
 }
 
 /// A YouTube or Vimeo link, normalized. Returns an error message otherwise.
@@ -388,6 +408,10 @@ mod tests {
         assert!(check_https_url("https://user:pw@example.com").is_err());
         assert!(check_button_url("mailto:hello@scottylabs.org").is_ok());
         assert!(check_button_url("mailto:nope").is_err());
+        assert_eq!(check_button_url(" /sponsors/ ").unwrap(), "/sponsors/");
+        for bad in ["//evil.example", "/\\evil.example", "/a b", "/x\u{0}"] {
+            assert!(check_button_url(bad).is_err(), "{bad:?} should be rejected");
+        }
         assert!(check_video_url("https://www.youtube.com/watch?v=abc").is_ok());
         assert!(check_video_url("https://youtu.be/abc").is_ok());
         assert!(check_video_url("https://vimeo.com/123").is_ok());
