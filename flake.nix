@@ -26,13 +26,51 @@
 
       perSystem =
         { helpers, ... }:
+        let
+          # The public site and the portal are one SvelteKit build. The site service serves it, so pages, the portal and the API share an origin.
+          web = helpers.buildDenoTask {
+            src = ./sites/web;
+            pname = "scottylabs-org-web";
+            output = "build";
+          };
+        in
         {
           scottylabs = {
             project.name = "scottylabs-org";
+
+            rust.enable = true;
+            postgres.enable = true;
+            garage.enable = true;
+
             deno = {
               enable = true;
               svelte.enable = true;
               dirs = [ "sites/web" ];
+            };
+
+            # Keycloak redirects back through the local relay in development.
+            # APP_URL is the Vite dev server, which proxies /api and /media to the site service.
+            ricochet = {
+              enable = true;
+              appUrl = "http://localhost:5173";
+            };
+
+            processes = {
+              site = {
+                run = "exec cargo run -p site";
+                depends = [
+                  "postgres-setup"
+                  "garage-setup"
+                ];
+              };
+              web.run = "cd sites/web && exec deno task dev --port 5173 --strictPort";
+            };
+
+            shell.env = {
+              SITE_BIND_ADDR = "127.0.0.1:8080";
+              # Lets you sign in as a seeded person without Keycloak. The service refuses it unless APP_URL is a localhost address.
+              PORTAL_DEV_LOGIN = "1";
+              SEED_DEMO_CONTENT = "1";
             };
           };
 
@@ -41,13 +79,18 @@
             "max-lines-per-function"
           ];
 
-          sites.web = {
-            package = helpers.buildDenoTask {
-              src = ./sites/web;
-              pname = "scottylabs-org-web";
-              output = "build";
+          services.site = {
+            package = helpers.buildRustService {
+              src = ./.;
+              pname = "site";
+              extraSources = [
+                "services/site/migrations"
+                "services/site/seed"
+              ];
+              buildArgs.cargoExtraArgs = "--locked -p site";
             };
             customDomain = "scottylabs.org";
+            env.STATIC_DIR = "${web}";
           };
         };
     };
