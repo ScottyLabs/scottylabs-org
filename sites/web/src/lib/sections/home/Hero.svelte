@@ -1,14 +1,8 @@
 <script lang="ts">
   import Button from "#lib/components/Button.svelte";
+  import Ticker from "#lib/ticker/Ticker.svelte";
   // inlined so the background never flashes blank
   import heroBg from "#lib/assets/hero-bg.svg?inline";
-
-  const events = [
-    {
-      text: "Check out CollegeCart from the Labrador committee!",
-      url: "https://collegecart.org/",
-    },
-  ];
 </script>
 
 <section class="hero-container">
@@ -53,22 +47,17 @@
       <img src={heroBg} alt="" fetchpriority="high" />
     </div>
   </div>
-  <div class="events-container">
-    <div class="centered-section">
-      <div class="events">
-        {#each events as { text, url } (url)}
-          <a href={url} target="_blank">
-            <button class="events__button">{text}</button>
-          </a>
-        {/each}
-      </div>
-    </div>
+  <!-- Announcements from the portal, between the strip's two hairlines. -->
+  <div class="ticker-slot">
+    <Ticker />
   </div>
 </section>
 
 <style>
   .hero-container {
     overflow: hidden;
+    /* Clip without scrolling, so focusing an announcement in the ticker cannot shift the hero. */
+    overflow: clip;
     position: relative;
     margin-bottom: -60px;
   }
@@ -92,18 +81,26 @@
     }
   }
   @media (max-width: 1024px) {
+    /* The ticker sits between the text and the art, so the art's wrapper steps aside. */
     .hero-container {
+      display: flex;
+      flex-direction: column;
       margin-bottom: 0;
     }
+    .centered-section--relative {
+      display: contents;
+    }
     .hero-section {
+      order: 1;
       height: auto;
       padding-top: 60px;
+      padding-inline: var(--padding);
     }
     .hero-background {
+      order: 3;
       position: static;
       height: clamp(240px, 45vw, 420px);
       margin-top: 20px;
-      margin-inline: calc(-1 * var(--padding));
       overflow: hidden;
     }
   }
@@ -191,37 +188,23 @@
     }
   }
 
-  .events-container {
+  .ticker-slot {
     position: absolute;
     bottom: 110px;
     left: 0;
     right: 0;
-    padding: 15px 0;
-    background-color: rgba(255, 255, 255, 0.8);
     backdrop-filter: blur(2px);
-    border: 1px solid var(--black-300);
-    border-left: none;
-    border-right: none;
     @media (max-width: 1024px) {
+      order: 2;
       position: static;
+      margin-top: 40px;
     }
   }
-  .events {
-    display: flex;
-    gap: 25px;
-  }
-  .events__button {
-    padding: 10px 25px;
-    color: var(--black-900);
-    font-size: var(--text-base);
-    border: 1px solid var(--black-300, #b3b3b3);
-    border-radius: var(--border-radius-base);
-    transition: 0.15s background-color;
-    &:hover {
-      background-color: var(--black-50);
-      &:active {
-        background-color: var(--black-100);
-      }
+  /* With nothing to announce, the strip's two hairlines become one. */
+  .ticker-slot:not(:has(:global(.ticker))) {
+    border-top: 1px solid var(--p-border);
+    @media (max-width: 1024px) {
+      margin-top: 20px;
     }
   }
 </style>

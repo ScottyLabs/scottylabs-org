@@ -98,10 +98,22 @@ export interface Announcement {
 
 export type AnnouncementTab = "live" | "waiting" | "expired";
 
-/** GET /api/announcements?tab=live|waiting|expired */
+/** GET /api/announcements?tab=live|waiting|expired, and PUT /api/announcements/order (the live tab). */
 export interface AnnouncementListResponse {
   announcements: Announcement[];
   slots: { used: number; total: number };
+  /** How many announcements each tab holds for this person. */
+  counts: Record<AnnouncementTab, number>;
+  /** For leads: the directors who approve their announcements, per committee they post for. */
+  approvers: { committee: CommitteeSlug; people: PersonRef[] }[];
+}
+
+/**
+ * GET /api/announcements/:id; POST /api/announcements and /:id/repost (201); PATCH /:id,
+ * POST /:id/extend and /:id/end (200).
+ */
+export interface AnnouncementResponse {
+  announcement: Announcement;
 }
 
 /** POST /api/announcements, and PATCH with every field optional. */
