@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::auth::Viewer;
 use crate::error::AppResult;
 use crate::models::{Committee, PersonRef};
-use crate::permissions;
+use crate::permissions::{self, PeopleScope};
 
 /// `subject_type` values, so activity links know where to point.
 pub mod subject {
@@ -75,6 +75,7 @@ struct ActivityRow {
 }
 
 /// The newest entries the viewer may see: everything for admins; otherwise entries about their committees and their own actions. `limit` is clamped to 1 through 50.
+/// Entries link only to pages the viewer can open.
 pub async fn recent<'e>(
     db: impl PgExecutor<'e>,
     viewer: &Viewer,
@@ -101,11 +102,11 @@ pub async fn recent<'e>(
     .bind(limit.clamp(1, MAX_ACTIVITY))
     .fetch_all(db)
     .await?;
-    Ok(rows.into_iter().map(ActivityRow::into_entry).collect())
+    Ok(rows.into_iter().map(|row| row.into_entry(viewer)).collect())
 }
 
 impl ActivityRow {
-    fn into_entry(self) -> ActivityEntry {
+    fn into_entry(self, viewer: &Viewer) -> ActivityEntry {
         let actor = match (self.actor_id, self.actor_andrew_id) {
             (Some(id), Some(andrew_id)) => Some(PersonRef::new(
                 id,
@@ -115,7 +116,8 @@ impl ActivityRow {
             _ => None,
         };
         ActivityEntry {
-            href: href(
+            href: href_for(
+                viewer,
                 &self.subject_type,
                 self.subject_id.as_deref(),
                 self.committee,
@@ -128,7 +130,27 @@ impl ActivityRow {
     }
 }
 
-/// The portal page that shows an entry's subject, where there is one.
+/// [`href`], when the viewer may open that page. Everyone in the portal can open the ticker, committee pages (read only) and the overview; people and projects are narrower.
+fn href_for(
+    viewer: &Viewer,
+    subject_type: &str,
+    subject_id: Option<&str>,
+    committee: Option<Committee>,
+) -> Option<String> {
+    let can_open = match subject_type {
+        subject::PERSON => permissions::people_scope(viewer) != PeopleScope::None,
+        subject::PROJECT => subject_id
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .is_some_and(|id| permissions::can_view_project(viewer, id)),
+        _ => true,
+    };
+    can_open
+        .then(|| href(subject_type, subject_id, committee))
+        .flatten()
+}
+
+/// The portal page that shows an entry's subject, where there is one, whoever is looking.
+/// Activity lists use [`recent`], which also checks that the viewer can open it.
 pub fn href(
     subject_type: &str,
     subject_id: Option<&str>,
@@ -173,5 +195,46 @@ mod tests {
             Some("/portal/ticker/".into())
         );
         assert_eq!(href("something_else", None, None), None);
+    }
+
+    #[test]
+    fn links_need_a_page_the_viewer_can_open() {
+        use crate::models::Role;
+        use crate::permissions::tests::viewer;
+
+        let nova = Uuid::now_v7().to_string();
+        let other = Uuid::now_v7().to_string();
+        let events = Some(Committee::Events);
+        let lead = viewer(
+            &[(Role::Lead, events, true)],
+            vec![Uuid::parse_str(&nova).unwrap()],
+        );
+        let director = viewer(&[(Role::Director, events, true)], vec![]);
+
+        assert_eq!(href_for(&lead, subject::PERSON, None, events), None);
+        assert_eq!(
+            href_for(&director, subject::PERSON, None, events),
+            Some("/portal/people/".into())
+        );
+        assert_eq!(
+            href_for(&lead, subject::PROJECT, Some(&nova), events),
+            Some(format!("/portal/projects/{nova}/"))
+        );
+        assert_eq!(
+            href_for(&lead, subject::PROJECT, Some(&other), events),
+            None
+        );
+        assert_eq!(
+            href_for(&director, subject::PROJECT, Some(&other), events),
+            Some(format!("/portal/projects/{other}/"))
+        );
+        assert_eq!(
+            href_for(&lead, subject::COMMITTEE_PAGE, None, events),
+            Some("/portal/committees/events/".into())
+        );
+        assert_eq!(
+            href_for(&lead, subject::ANNOUNCEMENT, None, events),
+            Some("/portal/ticker/".into())
+        );
     }
 }

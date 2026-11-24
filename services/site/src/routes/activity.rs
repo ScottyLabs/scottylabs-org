@@ -52,7 +52,7 @@ mod tests {
     use super::*;
     use crate::audit::{Entry, record, subject};
     use crate::models::{Committee, Role};
-    use crate::testing::{self, Req};
+    use crate::testing::{self, Req, UserSpec};
 
     #[test]
     fn limits_are_clamped() {
@@ -157,5 +157,74 @@ mod tests {
         assert_eq!(denied.status, StatusCode::FORBIDDEN);
         let anonymous = Req::get("/api/activity").send(&app).await;
         assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn links_only_to_pages_the_viewer_can_open(db: PgPool) {
+        let app = testing::app(db.clone()).await;
+        let nova = testing::project(&db, Committee::Events, "nova").await;
+        let other = testing::project(&db, Committee::Events, "other").await;
+        let director = testing::user(
+            &db,
+            "linkdirector",
+            &[(Role::Director, Some(Committee::Events))],
+        )
+        .await;
+        let lead = UserSpec::new("linklead")
+            .lead(Committee::Events, true)
+            .edits(nova)
+            .create(&db)
+            .await;
+
+        let mut conn = db.acquire().await.unwrap();
+        for (subject_type, subject_id, summary) in [
+            (subject::PERSON, lead.id, "Added a lead in Events"),
+            (subject::PROJECT, nova, "Published Nova"),
+            (subject::PROJECT, other, "Published Other"),
+        ] {
+            record(
+                &mut conn,
+                Entry {
+                    actor: Some(director.id),
+                    action: "test.action",
+                    subject_type,
+                    subject_id: Some(subject_id.to_string()),
+                    committee: Some(Committee::Events),
+                    summary: summary.into(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let links = |res: &testing::Res| -> Vec<serde_json::Value> {
+            res.json["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| e["href"].clone())
+                .collect()
+        };
+
+        let lead_view = Req::get("/api/activity").user(&lead).send(&app).await;
+        assert_eq!(
+            links(&lead_view),
+            [
+                serde_json::Value::Null,
+                format!("/portal/projects/{nova}/").into(),
+                serde_json::Value::Null,
+            ]
+        );
+        let people = Req::get("/api/people").user(&lead).send(&app).await;
+        assert_eq!(people.status, StatusCode::FORBIDDEN);
+
+        let director_view = Req::get("/api/activity").user(&director).send(&app).await;
+        assert_eq!(
+            links(&director_view),
+            [
+                serde_json::Value::from(format!("/portal/projects/{other}/")),
+                format!("/portal/projects/{nova}/").into(),
+                "/portal/people/".into(),
+            ]
+        );
     }
 }

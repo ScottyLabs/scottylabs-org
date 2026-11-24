@@ -156,6 +156,13 @@ pub fn project_access(viewer: &Viewer, owner: Committee, project_id: Uuid) -> Pr
     }
 }
 
+/// Open a project in the portal, read only unless [`project_access`] allows more. Mirrors `GET /api/projects`: admins and directors see every project, leads the ones they edit.
+pub fn can_view_project(viewer: &Viewer, project_id: Uuid) -> bool {
+    is_admin(viewer)
+        || !director_of(viewer).is_empty()
+        || viewer.lead_projects.contains(&project_id)
+}
+
 /// Featured flag and slug changes.
 pub fn can_curate_projects(viewer: &Viewer) -> bool {
     is_admin(viewer)
@@ -393,6 +400,21 @@ pub(crate) mod tests {
             Some(Uuid::now_v7()),
             true
         ));
+    }
+
+    #[test]
+    fn projects_are_visible_to_directors_and_their_leads() {
+        let nova = Uuid::now_v7();
+        let other = Uuid::now_v7();
+        let admin = viewer(&[(Role::Admin, None, true)], vec![]);
+        let director = viewer(&[(Role::Director, Some(Committee::Events), true)], vec![]);
+        let lead = viewer(&[(Role::Lead, Some(Committee::Events), true)], vec![nova]);
+        let member = viewer(&[], vec![]);
+        assert!(can_view_project(&admin, other));
+        assert!(can_view_project(&director, other));
+        assert!(can_view_project(&lead, nova));
+        assert!(!can_view_project(&lead, other));
+        assert!(!can_view_project(&member, other));
     }
 
     #[test]
