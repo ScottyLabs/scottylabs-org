@@ -19,6 +19,7 @@
     value: string | null;
     /** True while the date picker is open; nothing is set until it closes with a date. */
     picking?: boolean;
+    /** The current time, kept fresh by the page so the presets and the sentence follow the clock. */
     now: Date;
     error?: string | null;
   } = $props();
@@ -31,9 +32,11 @@
 
   const preset = $derived(presetFor(value, now));
   const custom = $derived(value !== null && preset === null);
+  const describedBy = $derived(error ? `${sentenceId} ${errorId}` : sentenceId);
 
   let phone = $state(false);
   let pickButton = $state<HTMLElement>();
+  let options = $state<HTMLElement>();
   let popover = $state<HTMLElement>();
   let popoverLeft = $state(0);
 
@@ -47,7 +50,17 @@
 
   function choose(option: ExpiryPreset) {
     picking = false;
-    value = presetExpiry(option, now);
+    // Counted from this moment, not from when the page opened.
+    value = presetExpiry(option, new Date());
+  }
+
+  /** Takes the keyboard to the field, for example when it has a problem: the open calendar, the chosen option or Pick a date. */
+  export function focus() {
+    const target =
+      popover?.querySelector<HTMLElement>("[data-day][tabindex='0']") ??
+      options?.querySelector<HTMLElement>("[aria-pressed='true']") ??
+      pickButton;
+    target?.focus();
   }
 
   async function openPicker() {
@@ -106,13 +119,13 @@
 
 <div class="expiry">
   <span id={labelId} class="expiry__label">Expires</span>
-  <div class="expiry__options" role="group" aria-labelledby={labelId}>
+  <div class="expiry__options" role="group" aria-labelledby={labelId} bind:this={options}>
     {#each EXPIRY_PRESETS as option (option.value)}
       <button
         type="button"
         class={["expiry__option", !picking && preset === option.value && "expiry__option--selected"]}
         aria-pressed={!picking && preset === option.value ? "true" : "false"}
-        aria-describedby={sentenceId}
+        aria-describedby={describedBy}
         onclick={() => choose(option.value)}
       >
         {option.label}
@@ -124,6 +137,7 @@
       aria-haspopup="dialog"
       aria-expanded={picking ? "true" : "false"}
       aria-controls={phone ? undefined : popoverId}
+      aria-describedby={describedBy}
       bind:this={pickButton}
       onclick={() => void openPicker()}
     >

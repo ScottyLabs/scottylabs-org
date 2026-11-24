@@ -22,6 +22,7 @@ import {
   zonedInstant,
 } from "../src/lib/ticker/format.ts";
 import { offersList, reservesSpace, tickerMode } from "../src/lib/ticker/mode.ts";
+import { actionNote, composerRole, submitLabel } from "../src/lib/ticker/portal/wording.ts";
 
 // Tuesday, November 24, 2026, 12:00 PM in Pittsburgh.
 const NOW = new Date("2026-11-24T17:00:00Z");
@@ -132,4 +133,49 @@ Deno.test("the strip holds its height unless the feed was empty last time", () =
   assert.equal(reservesSpace(null), true);
   assert.equal(reservesSpace(3), true);
   assert.equal(reservesSpace(0), false);
+});
+
+Deno.test("the composer's button and note fit the person and the announcement", () => {
+  const base = { isLive: false, isWaiting: false, manages: false, postsDirectly: false };
+  assert.equal(composerRole({ ...base, postsDirectly: true }), "publish");
+  assert.equal(composerRole(base), "submit");
+  assert.equal(
+    composerRole({ ...base, isLive: true, manages: true, postsDirectly: true }),
+    "edit-live",
+  );
+  // A director editing a lead's submission approves it; they do not send it to an admin.
+  assert.equal(
+    composerRole({ ...base, isWaiting: true, manages: true, postsDirectly: true }),
+    "review",
+  );
+  assert.equal(composerRole({ ...base, isWaiting: true }), "submit");
+
+  assert.equal(submitLabel("publish"), "Publish announcement");
+  assert.equal(submitLabel("submit"), "Send for approval");
+  assert.equal(submitLabel("review"), "Save changes");
+  assert.equal(submitLabel("edit-live"), "Save changes");
+
+  assert.equal(actionNote("publish", "Events", []), null);
+  assert.equal(actionNote("edit-live", "Events", ["Evan Foster"]), null);
+  assert.match(
+    actionNote("review", "Events", []) ?? "",
+    /^Saving keeps it waiting for approval\./u,
+  );
+  assert.equal(
+    actionNote("submit", "Events", ["Evan Foster"]),
+    "Evan Foster, Director of Events, approves announcements from leads before they go live.",
+  );
+  assert.equal(
+    actionNote("submit", "Events", []),
+    "An admin approves announcements from leads in Events before they go live.",
+  );
+});
+
+Deno.test("a chosen expiry is described from the current time, past midnight too", () => {
+  const tomorrow = presetExpiry("tomorrow", NOW);
+  // 12:30 AM the next day, with the composer still open.
+  const later = new Date("2026-11-25T05:30:00Z");
+  assert.equal(presetFor(tomorrow, later), null);
+  assert.equal(distanceInDays(tomorrow, later), "today");
+  assert.equal(presetExpiry("tomorrow", later), "2026-11-27T04:59:00.000Z");
 });

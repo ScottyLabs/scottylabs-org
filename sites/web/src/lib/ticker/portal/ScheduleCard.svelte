@@ -9,6 +9,7 @@
     expiresAt,
     editing,
     direct,
+    reviewing = false,
     approvers,
     slots,
   }: {
@@ -17,6 +18,8 @@
     editing: Announcement | null;
     /** Goes live without approval. */
     direct: boolean;
+    /** The viewer approves this waiting announcement themselves. */
+    reviewing?: boolean;
     approvers: readonly PersonRef[];
     slots: { used: number; total: number } | null;
   } = $props();
@@ -26,6 +29,7 @@
   const goesLive = $derived.by(() => {
     if (live && editing?.startsAt) return `Went live ${formatDay(editing.startsAt, now)}`;
     if (direct) return `Now, ${formatDay(now, now)}`;
+    if (reviewing) return "When you approve it";
     return approvers.length > 0 ? `When ${listNames(approvers.map((person) => person.name))} approves it` : "When it is approved";
   });
 

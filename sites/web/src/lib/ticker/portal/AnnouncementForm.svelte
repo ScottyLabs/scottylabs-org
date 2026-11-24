@@ -16,9 +16,10 @@
   import { committeeName, getPortalSession } from "../../portal/index.ts";
   import { Button, Callout, Field, TextArea, TextInput } from "../../portal/ui/index.ts";
   import { COMMITTEES } from "../../portal/committees.ts";
-  import { MESSAGE_MAX, expiryProblem, listNames, presetExpiry, sourceOrder } from "../format.ts";
+  import { MESSAGE_MAX, expiryProblem, presetExpiry, sourceOrder } from "../format.ts";
   import { KINDS } from "../kinds.ts";
   import { approversOf, postsDirectly } from "./api.ts";
+  import { actionNote, composerRole, submitLabel, type ComposerRole } from "./wording.ts";
   import ExpiryField from "./ExpiryField.svelte";
   import ComposerPreview from "./ComposerPreview.svelte";
   import ScheduleCard from "./ScheduleCard.svelte";
@@ -36,9 +37,10 @@
     editing?: Announcement | null;
     /** The live tab, for the slots and the people who approve. */
     live: AnnouncementListResponse | null;
+    /** The current time, kept fresh by the page. */
     now: Date;
     /** Saves the announcement. Throws an ApiError the form shows beside its fields. */
-    onsave: (input: AnnouncementInput, sendsForApproval: boolean, approvers: PersonRef[]) => Promise<void>;
+    onsave: (input: AnnouncementInput, role: ComposerRole, approvers: PersonRef[]) => Promise<void>;
   } = $props();
 
   const session = getPortalSession();
@@ -66,23 +68,24 @@
   let saving = $state(false);
   let messageInput = $state<HTMLTextAreaElement | null>(null);
   let linkInput = $state<HTMLInputElement | null>(null);
+  let expiryField = $state<ExpiryField>();
 
   // A source the person may no longer post from stays selectable on its own announcement.
   const sourceChoices = $derived(sources.includes(committee) ? sources : [committee, ...sources]);
   const isLive = $derived(editing !== null && editing.state === "live");
   const isWaiting = $derived(editing !== null && (editing.state === "pending_approval" || editing.state === "sent_back"));
-  const direct = $derived(isLive || (!isWaiting && postsDirectly(permissions, committee)));
+  const role = $derived(
+    composerRole({
+      isLive,
+      isWaiting,
+      manages: editing?.canManage === true,
+      postsDirectly: postsDirectly(permissions, committee),
+    }),
+  );
+  const direct = $derived(role === "edit-live" || role === "publish");
   const approvers = $derived(live === null ? [] : approversOf(live.approvers, committee));
-  const slotsFull = $derived(!isLive && direct && live !== null && live.slots.used >= live.slots.total);
-
-  const submitLabel = $derived(isLive ? "Save changes" : direct ? "Publish announcement" : "Send for approval");
-  const approverNote = $derived.by(() => {
-    if (direct) return null;
-    const name = committeeName(committee);
-    if (approvers.length === 0) return `An admin approves announcements from leads in ${name} before they go live.`;
-    const role = approvers.length === 1 ? `Director of ${name}, approves` : `directors of ${name}, approve`;
-    return `${listNames(approvers.map((person) => person.name))}, ${role} announcements from leads before they go live.`;
-  });
+  const slotsFull = $derived(role === "publish" && live !== null && live.slots.used >= live.slots.total);
+  const note = $derived(actionNote(role, committeeName(committee), approvers.map((person) => person.name)));
 
   const draft = $derived({ kind, committee, message: message.trim() || "Your announcement", linkUrl: linkUrl.trim() || null });
 
@@ -118,6 +121,7 @@
     await tick();
     if (problems.message) messageInput?.focus();
     else if (problems.linkUrl) linkInput?.focus();
+    else if (problems.expiresAt) expiryField?.focus();
   }
 
   async function submit(event: SubmitEvent) {
@@ -133,7 +137,7 @@
     try {
       await onsave(
         { kind, committee, message: message.trim(), linkUrl: linkUrl.trim() || null, expiresAt },
-        !direct,
+        role,
         approvers,
       );
     } catch (error) {
@@ -219,7 +223,7 @@
       />
     </Field>
 
-    <ExpiryField bind:value={expiresAt} bind:picking {now} error={errors.expiresAt} />
+    <ExpiryField bind:this={expiryField} bind:value={expiresAt} bind:picking {now} error={errors.expiresAt} />
 
     {#if formError !== null}
       <Callout tone="error" role="alert">{formError}</Callout>
@@ -229,9 +233,9 @@
 
     <div class="composer__actions">
       <Button variant="subtle" size="lg" href="/portal/ticker/">Cancel</Button>
-      <Button type="submit" size="lg" loading={saving}>{submitLabel}</Button>
+      <Button type="submit" size="lg" loading={saving}>{submitLabel(role)}</Button>
     </div>
-    {#if approverNote !== null}<p class="composer__note">{approverNote}</p>{/if}
+    {#if note !== null}<p class="composer__note">{note}</p>{/if}
   </div>
 
   <div class="composer__schedule">
@@ -240,6 +244,7 @@
       expiresAt={picking ? null : expiresAt}
       {editing}
       {direct}
+      reviewing={role === "review"}
       {approvers}
       slots={live?.slots ?? null}
     />

@@ -11,12 +11,14 @@
   import AnnouncementForm from "#lib/ticker/portal/AnnouncementForm.svelte";
   import ComposerHeading from "#lib/ticker/portal/ComposerHeading.svelte";
   import { createAnnouncement, getAnnouncement, listAnnouncements } from "#lib/ticker/portal/api.ts";
+  import { Clock } from "#lib/ticker/portal/clock.svelte.ts";
+  import type { ComposerRole } from "#lib/ticker/portal/wording.ts";
 
   const session = getPortalSession();
   const toasts = getToasts();
   const canPost = $derived(session.current.permissions.tickerSources.length > 0);
   const from = page.url.searchParams.get("from");
-  const now = new Date();
+  const clock = new Clock();
 
   let live = $state.raw<AnnouncementListResponse | null>(null);
   let initial = $state.raw<Partial<AnnouncementInput> | null>(null);
@@ -50,9 +52,9 @@
     if (!signal.aborted) ready = true;
   }
 
-  async function save(input: AnnouncementInput, sendsForApproval: boolean, approvers: PersonRef[]) {
+  async function save(input: AnnouncementInput, role: ComposerRole, approvers: PersonRef[]) {
     const created = await createAnnouncement(input);
-    if (sendsForApproval) {
+    if (role === "submit") {
       const names = listNames(approvers.map((person) => person.name));
       toasts.success(names === "" ? "Sent for approval." : `Sent to ${names} for approval.`);
       await goto(`/portal/ticker/?tab=waiting&highlight=${created.id}`);
@@ -84,7 +86,7 @@
     {#if loadError !== null}
       <Callout tone="warning">{loadError} You can still write a new one below.</Callout>
     {/if}
-    <AnnouncementForm {initial} {live} {now} onsave={save} />
+    <AnnouncementForm {initial} {live} now={clock.now} onsave={save} />
   {/if}
 </div>
 
