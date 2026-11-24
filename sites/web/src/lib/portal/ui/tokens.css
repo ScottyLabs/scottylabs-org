@@ -1,0 +1,95 @@
+/*
+ * Tokens for the portal UI kit (src/lib/portal/ui). Values come from the portal frames in the
+ * design file; text colors are nudged where the design falls short of WCAG AA (4.5:1).
+ * Imported once by the root layout, so the kit also works on public pages.
+ */
+:root {
+  --p-font: Satoshi, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --p-mono: JetBrainsMono, "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Surfaces */
+  --p-bg: #f5f5f5;
+  --p-surface: #ffffff;
+  --p-surface-muted: #f5f5f5;
+  --p-surface-strong: #e6e6e6;
+  --p-border: #d6d6d6;
+  --p-border-muted: #e6e6e6;
+  --p-scrim: rgba(0, 0, 0, 0.45);
+
+  /* Text. #808080 in the design is 3.9:1 on white, so the tertiary color is darker. */
+  --p-text: #1e1e1e;
+  --p-text-secondary: #666666;
+  --p-text-tertiary: #6e6e6e;
+  --p-text-disabled: #a3a3a3;
+  --p-placeholder: #757575;
+
+  /* Inverse (filled buttons, toasts) */
+  --p-inverse: #1e1e1e;
+  --p-inverse-hover: #383838;
+  --p-inverse-pressed: #4d4d4d;
+  --p-on-inverse: #ffffff;
+  --p-toast: #1c1c1f;
+
+  /* Status */
+  --p-success: #1a7f37;
+  --p-warning: #d97805;
+  --p-warning-text: #9a5300;
+  --p-info: #24a4ff;
+  --p-info-text: #0b67b3;
+  --p-neutral: #808080;
+  --p-danger: #c62828;
+  --p-danger-hover: #a61f1f;
+  --p-danger-text: #b42318;
+  --p-danger-surface: #fdecec;
+  --p-warning-surface: #fff4e5;
+  --p-info-surface: #e9f4fe;
+
+  /* Focus: 2px ring with at least 3:1 against white and #f5f5f5. */
+  --p-focus: #1f4ce0;
+
+  /* Brand */
+  --p-brand-gradient: linear-gradient(90deg, #40d2fc 0%, #1f4ce0 50%, #fb1a32 100%);
+  --p-tab-gradient: linear-gradient(90deg, #36a5f2 0%, #d28dff 47.12%, #ff8d8d 99.52%);
+  --p-selection: #24a4ff;
+
+  /* Shape */
+  --p-radius-sm: 8px;
+  --p-radius: 10px;
+  --p-radius-lg: 14px;
+  --p-radius-xl: 16px;
+  --p-radius-pill: 999px;
+
+  /* Elevation */
+  --p-shadow-card: 0 8px 28px rgba(0, 0, 0, 0.1);
+  --p-shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.14);
+  --p-shadow-dialog: 0 10px 32px rgba(0, 0, 0, 0.18);
+
+  /* Motion */
+  --p-ease: cubic-bezier(0.2, 0, 0, 1);
+  --p-duration: 160ms;
+
+  /* Layout */
+  --p-topbar-height: 64px;
+  --p-topbar-height-mobile: 56px;
+  --p-tabbar-height: 64px;
+  --p-content-width: 1200px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --p-duration: 0ms;
+  }
+}
+
+/* Visually hidden but read by assistive technology. */
+.p-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

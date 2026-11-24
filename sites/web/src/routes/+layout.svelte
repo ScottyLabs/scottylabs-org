@@ -1,10 +1,10 @@
 <script lang="ts">
+  // Shared by the public site, (site), and the portal, /portal. Each group adds its own chrome.
   import "../app.css";
+  import "#lib/portal/ui/tokens.css";
   import { onMount, type Snippet } from "svelte";
   import posthog from "posthog-js";
   import { PUBLIC_POSTHOG_HOST, PUBLIC_POSTHOG_KEY } from "$app/env/public";
-  import Header from "#lib/sections/home/Header.svelte";
-  import Footer from "#lib/sections/home/Footer.svelte";
   import satoshiFont from "#lib/assets/fonts/Satoshi-Regular.woff2";
   import satoshiFontBold from "#lib/assets/fonts/Satoshi-Bold.woff2";
   import satoshiFontMedium from "#lib/assets/fonts/Satoshi-Medium.woff2";
@@ -31,21 +31,4 @@
   {/each}
 </svelte:head>
 
-<div class="layout">
-  <Header />
-  <main>
-    {@render children()}
-  </main>
-  <Footer />
-</div>
-
-<style>
-  .layout {
-    display: flex;
-    flex-direction: column;
-    min-height: 100vh;
-  }
-  main {
-    flex-grow: 1;
-  }
-</style>
+{@render children()}

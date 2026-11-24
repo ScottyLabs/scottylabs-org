@@ -1,0 +1,192 @@
+/*
+ * Shared table styles for portal lists (Projects, People, Ticker). The portal layout imports this
+ * file, so the classes work on every portal page:
+ *
+ *   <div class="p-table-card">
+ *     <table class="p-table p-table--stack">
+ *       <thead><tr><th scope="col">Project</th>...</tr></thead>
+ *       <tbody><tr><td data-label="Project">...</td>...</tr></tbody>
+ *     </table>
+ *   </div>
+ *   <p class="p-table-footnote">Showing 9 of 16.</p>
+ *
+ * `p-table--stack` turns each row into a card on narrow screens and shows each cell's
+ * `data-label` before its value. Without it, wide tables scroll sideways inside the card.
+ */
+
+.p-table-card {
+  box-sizing: border-box;
+  border: 1px solid var(--p-border);
+  border-radius: var(--p-radius-xl);
+  background: var(--p-surface);
+  overflow-x: auto;
+}
+
+.p-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--p-text);
+  font-family: var(--p-font);
+  font-size: 0.875rem;
+  line-height: 20px;
+}
+
+.p-table th {
+  padding: 10px 8px;
+  color: var(--p-text-tertiary);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 16px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.p-table td {
+  padding: 12px 8px;
+  border-top: 1px solid var(--p-border);
+  vertical-align: middle;
+}
+
+.p-table th:first-child,
+.p-table td:first-child {
+  padding-left: 20px;
+}
+
+.p-table th:last-child,
+.p-table td:last-child {
+  padding-right: 20px;
+}
+
+.p-table tbody tr {
+  transition: background-color var(--p-duration) var(--p-ease);
+}
+
+.p-table tbody tr:hover {
+  background: #fafafa;
+}
+
+/* A row that was just added or changed, for example after publishing. */
+.p-table tbody tr.p-table__row--highlight {
+  background: var(--p-info-surface);
+}
+
+.p-table__primary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.p-table__thumb {
+  flex: none;
+  width: 64px;
+  height: 48px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: var(--p-radius-sm);
+  object-fit: cover;
+  background: var(--p-surface-muted);
+}
+
+.p-table__title {
+  display: block;
+  color: var(--p-text);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.p-table__subtitle {
+  display: block;
+  color: var(--p-text-tertiary);
+  font-family: var(--p-mono);
+  font-size: 0.75rem;
+  line-height: 16px;
+}
+
+.p-table__muted {
+  color: var(--p-text-secondary);
+}
+
+.p-table__mono {
+  font-family: var(--p-mono);
+  font-size: 0.75rem;
+}
+
+.p-table__actions {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.p-table__actions > * + * {
+  margin-left: 8px;
+}
+
+.p-table-footnote {
+  margin: 12px 0 0;
+  color: var(--p-text-tertiary);
+  font-family: var(--p-font);
+  font-size: 0.75rem;
+  line-height: 16px;
+}
+
+@media (max-width: 720px) {
+  .p-table--stack thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+  }
+
+  .p-table--stack,
+  .p-table--stack tbody,
+  .p-table--stack tr,
+  .p-table--stack td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .p-table--stack tr {
+    padding: 14px 16px;
+    border-top: 1px solid var(--p-border);
+  }
+
+  .p-table--stack tbody tr:first-child {
+    border-top: 0;
+  }
+
+  .p-table--stack td,
+  .p-table--stack td:first-child,
+  .p-table--stack td:last-child {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+    border-top: 0;
+    text-align: right;
+  }
+
+  .p-table--stack td[data-label]::before {
+    content: attr(data-label);
+    flex: none;
+    color: var(--p-text-tertiary);
+    font-size: 0.75rem;
+    text-align: left;
+  }
+
+  .p-table--stack td.p-table__cell--full {
+    display: block;
+    text-align: left;
+  }
+
+  .p-table--stack td.p-table__cell--full::before {
+    content: none;
+  }
+
+  .p-table--stack .p-table__actions {
+    justify-content: flex-start;
+    padding-top: 10px;
+  }
+}
