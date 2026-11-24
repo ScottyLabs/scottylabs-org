@@ -14,10 +14,6 @@
   });
 </script>
 
-<svelte:head>
-  <title>Signing you in - ScottyLabs Portal</title>
-</svelte:head>
-
 <div class="checking" role="status" aria-live="polite">
   {#if visible}
     <div class="checking__content">

@@ -77,7 +77,8 @@
     align-items: center;
     justify-content: space-between;
     gap: 24px;
-    height: var(--p-topbar-height);
+    /* The bottom border makes up the rest of the bar's height. */
+    height: calc(var(--p-topbar-height) - 1px);
     padding: 0 40px;
   }
   .topbar__left {

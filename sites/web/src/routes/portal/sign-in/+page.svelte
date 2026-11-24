@@ -98,7 +98,9 @@
               Single sign-on starts working here once this site is connected to Keycloak.
               {#if config.devLogin}Until then, use development sign-in below.{/if}
             </Callout>
-            <Button size="lg" icon={LogIn} disabled>Continue with ScottyLabs</Button>
+            <Button size="lg" icon={LogIn} disabled class="sign-in__continue">
+              Continue with ScottyLabs
+            </Button>
           {:else}
             <Button size="lg" icon={LogIn} href={loginHref} data-sveltekit-reload class="sign-in__continue">
               Continue with ScottyLabs
@@ -240,7 +242,12 @@
   }
 
   .sign-in__panel {
-    position: relative;
+    position: sticky;
+    top: 0;
+    align-self: start;
+    box-sizing: border-box;
+    height: 100vh;
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -326,7 +333,8 @@
       width: 100%;
     }
     .sign-in__panel {
-      min-height: 300px;
+      position: relative;
+      height: 300px;
       padding: 0;
       background: var(--p-surface);
     }

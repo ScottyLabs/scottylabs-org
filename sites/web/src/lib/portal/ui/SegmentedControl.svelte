@@ -20,7 +20,7 @@
     class?: string;
   } = $props();
 
-  const buttons: HTMLButtonElement[] = [];
+  const buttons: HTMLButtonElement[] = $state([]);
 
   // The checked option takes focus; with none checked, the first enabled one does.
   const focusIndex = $derived.by(() => {

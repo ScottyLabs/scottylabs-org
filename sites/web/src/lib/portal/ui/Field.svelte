@@ -65,7 +65,7 @@
 <div class={["p-field", className]}>
   <div class="p-field__top">
     <label class={["p-field__label", hideLabel && "p-sr-only"]} for={id}>
-      {label}{#if optional}<span class="p-field__optional"> (optional)</span>{/if}
+      {label}{#if optional}{" "}<span class="p-field__optional">(optional)</span>{/if}
     </label>
     {#if counter}
       <span id={counterId} class={["p-field__counter", over && "p-field__counter--over"]}>
