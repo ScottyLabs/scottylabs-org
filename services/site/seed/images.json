@@ -1,0 +1,158 @@
+{
+  "/seed/photos/c01.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c02.jpg": {
+    "width": 1000,
+    "height": 562
+  },
+  "/seed/photos/c03.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c04.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c05.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c06.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c07.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c08.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c09.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c10.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c11.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c12.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c13.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c14.jpg": {
+    "width": 1000,
+    "height": 992
+  },
+  "/seed/photos/c15.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/c16.jpg": {
+    "width": 1000,
+    "height": 750
+  },
+  "/seed/photos/t01.jpg": {
+    "width": 1000,
+    "height": 1500
+  },
+  "/seed/photos/t02.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t03.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t04.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t05.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t06.jpg": {
+    "width": 1000,
+    "height": 1500
+  },
+  "/seed/photos/t07.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t08.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t09.jpg": {
+    "width": 1000,
+    "height": 680
+  },
+  "/seed/photos/t10.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t11.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/photos/t12.jpg": {
+    "width": 1000,
+    "height": 667
+  },
+  "/seed/projects/bussign.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/components.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/courses.jpg": {
+    "width": 1440,
+    "height": 826
+  },
+  "/seed/projects/docs.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/eats.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/housing.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/maps.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/quest.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/study.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/tartanhacks.jpg": {
+    "width": 1440,
+    "height": 900
+  },
+  "/seed/projects/vote.jpg": {
+    "width": 1440,
+    "height": 900
+  }
+}
