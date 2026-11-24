@@ -155,20 +155,32 @@
 {/if}
 
 <style>
+  /* The wrapper is the scroller and holds the indicator, so the indicator moves with the tabs
+     when they scroll sideways on narrow screens. */
   .p-tabs {
     --track: 3px;
     position: relative;
+    padding-bottom: var(--track);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
     font-family: var(--p-font);
-    border-bottom: var(--track) solid var(--p-border-muted);
+    /* The grey track stays put under the visible tabs while the indicator scrolls with them. */
+    background: linear-gradient(var(--p-border-muted), var(--p-border-muted)) left bottom / 100%
+      var(--track) no-repeat;
+
+    &::-webkit-scrollbar {
+      display: none;
+    }
   }
   .p-tabs__list {
     display: flex;
     gap: 24px;
+    width: max-content;
+    min-width: 100%;
     margin: 0;
     padding: 0;
     list-style: none;
-    overflow-x: auto;
-    scrollbar-width: none;
   }
   .p-tabs__item {
     display: flex;
@@ -220,7 +232,7 @@
   .p-tabs__indicator {
     position: absolute;
     left: 0;
-    bottom: calc(-1 * var(--track));
+    bottom: 0;
     width: var(--indicator-width, 0);
     height: var(--track);
     border-radius: var(--track);
