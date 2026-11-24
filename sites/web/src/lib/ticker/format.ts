@@ -156,6 +156,11 @@ export function leavesLabel(expiresAt: string, now: Date = new Date()): string {
   return Date.parse(expiresAt) > now.getTime() ? `Leaves ${relative}` : `Left ${relative}`;
 }
 
+/** A message in curly quotes, for sentences about it. */
+export function quoted(text: string): string {
+  return "\u201C" + text + "\u201D";
+}
+
 /** "Thomas Kanz", "Thomas Kanz and Evan Foster", "A, B and C". */
 export function listNames(names: readonly string[]): string {
   if (names.length <= 1) return names.join("");
