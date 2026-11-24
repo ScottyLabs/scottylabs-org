@@ -1,20 +1,321 @@
-//! Per-IP request limits. Platform track.
+//! Per-IP request limits, kept in memory: sign-in and dev login 20 a minute, uploads 30, other writes 120. Reads are not limited.
+//!
+//! Each (class, client) pair has a token bucket that refills evenly over a minute. Idle buckets are pruned once a minute and the table has a hard size cap, so memory stays bounded however many addresses show up.
 
-use axum::extract::{Request, State};
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
+
+use axum::extract::{ConnectInfo, Request, State};
+use axum::http::header::RETRY_AFTER;
+use axum::http::{HeaderMap, HeaderValue, Method};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 
+use crate::auth::csrf::{full_path, is_write};
+use crate::error::AppError;
 use crate::state::AppState;
 
-#[derive(Default)]
-pub struct RateLimiter;
+/// Buckets kept at most. Past this, after pruning, the table starts over rather than grow.
+const MAX_BUCKETS: usize = 50_000;
+const PRUNE_EVERY: Duration = Duration::from_secs(60);
 
-impl RateLimiter {
-    pub fn new() -> Self {
-        Self
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Class {
+    SignIn,
+    Write,
+    Upload,
+}
+
+impl Class {
+    pub fn per_minute(self) -> u32 {
+        match self {
+            Self::SignIn => 20,
+            Self::Write => 120,
+            Self::Upload => 30,
+        }
+    }
+
+    fn refill_per_second(self) -> f64 {
+        f64::from(self.per_minute()) / 60.0
     }
 }
 
-pub async fn limit(State(_state): State<AppState>, request: Request, next: Next) -> Response {
-    next.run(request).await
+/// Which limit a request counts against, if any. `path` is the full path including `/api`.
+pub fn classify(method: &Method, path: &str) -> Option<Class> {
+    match (method, path) {
+        (&Method::GET, "/api/auth/login") | (&Method::POST, "/api/auth/dev-login") => {
+            Some(Class::SignIn)
+        }
+        (&Method::POST, "/api/media") => Some(Class::Upload),
+        _ if is_write(method) => Some(Class::Write),
+        _ => None,
+    }
+}
+
+struct Bucket {
+    tokens: f64,
+    updated: Instant,
+}
+
+struct Table {
+    buckets: HashMap<(Class, IpAddr), Bucket>,
+    pruned_at: Instant,
+}
+
+pub struct RateLimiter {
+    table: Mutex<Table>,
+}
+
+impl Default for RateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RateLimiter {
+    pub fn new() -> Self {
+        Self {
+            table: Mutex::new(Table {
+                buckets: HashMap::new(),
+                pruned_at: Instant::now(),
+            }),
+        }
+    }
+
+    /// Takes one request from the client's bucket. On refusal, returns how long until the next one is allowed.
+    pub fn check(&self, class: Class, client: IpAddr, now: Instant) -> Result<(), Duration> {
+        let mut table = self.table.lock().unwrap_or_else(PoisonError::into_inner);
+        if now.saturating_duration_since(table.pruned_at) >= PRUNE_EVERY
+            || table.buckets.len() >= MAX_BUCKETS
+        {
+            prune(&mut table, now);
+        }
+        let capacity = f64::from(class.per_minute());
+        let rate = class.refill_per_second();
+        let bucket = table.buckets.entry((class, client)).or_insert(Bucket {
+            tokens: capacity,
+            updated: now,
+        });
+        let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * rate).min(capacity);
+        bucket.updated = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            Ok(())
+        } else {
+            Err(Duration::from_secs_f64((1.0 - bucket.tokens) / rate))
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.table
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .buckets
+            .len()
+    }
+}
+
+/// Drops buckets that have refilled completely, since a fresh bucket behaves the same.
+fn prune(table: &mut Table, now: Instant) {
+    table.buckets.retain(|(class, _), bucket| {
+        let elapsed = now.saturating_duration_since(bucket.updated).as_secs_f64();
+        bucket.tokens + elapsed * class.refill_per_second() < f64::from(class.per_minute())
+    });
+    if table.buckets.len() >= MAX_BUCKETS {
+        tracing::warn!(
+            buckets = table.buckets.len(),
+            "rate limit table is full; starting over"
+        );
+        table.buckets.clear();
+    }
+    table.pruned_at = now;
+}
+
+/// The address limits apply to. Kennel runs Caddy on the same host, so a loopback peer means the real client is the right-most `X-Forwarded-For` entry, which Caddy wrote. Any other peer is the client itself, and its headers are not trusted.
+pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap) -> IpAddr {
+    let ip = match peer {
+        Some(peer) if peer.is_loopback() => forwarded_for(headers).unwrap_or(peer),
+        Some(peer) => peer,
+        None => IpAddr::from([0, 0, 0, 0]),
+    };
+    normalize(ip)
+}
+
+fn forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
+    let last_header = headers.get_all("x-forwarded-for").iter().next_back()?;
+    let last_entry = last_header.to_str().ok()?.rsplit(',').next()?.trim();
+    last_entry.parse().ok()
+}
+
+/// One IPv6 holder usually controls a whole /64, so the /64 is the client.
+fn normalize(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(_) => ip,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let segments = v6.segments();
+                IpAddr::V6(Ipv6Addr::new(
+                    segments[0],
+                    segments[1],
+                    segments[2],
+                    segments[3],
+                    0,
+                    0,
+                    0,
+                    0,
+                ))
+            }
+        },
+    }
+}
+
+pub async fn limit(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let Some(class) = classify(request.method(), full_path(&request)) else {
+        return next.run(request).await;
+    };
+    let peer = request
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|info| info.0.ip());
+    let client = client_ip(peer, request.headers());
+    match state.limits.check(class, client, Instant::now()) {
+        Ok(()) => next.run(request).await,
+        Err(wait) => {
+            let mut response = AppError::RateLimited.into_response();
+            let seconds = wait.as_secs().max(1).to_string();
+            if let Ok(value) = HeaderValue::from_str(&seconds) {
+                response.headers_mut().insert(RETRY_AFTER, value);
+            }
+            response
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn classifies_requests() {
+        assert_eq!(
+            classify(&Method::GET, "/api/auth/login"),
+            Some(Class::SignIn)
+        );
+        assert_eq!(
+            classify(&Method::POST, "/api/auth/dev-login"),
+            Some(Class::SignIn)
+        );
+        assert_eq!(classify(&Method::POST, "/api/media"), Some(Class::Upload));
+        assert_eq!(
+            classify(&Method::PATCH, "/api/people/assignments/x"),
+            Some(Class::Write)
+        );
+        assert_eq!(
+            classify(&Method::DELETE, "/api/announcements/x"),
+            Some(Class::Write)
+        );
+        assert_eq!(classify(&Method::GET, "/api/me"), None);
+        assert_eq!(classify(&Method::GET, "/api/public/ticker"), None);
+    }
+
+    #[test]
+    fn buckets_empty_then_refill() {
+        let limiter = RateLimiter::new();
+        let client = ip("203.0.113.9");
+        let start = Instant::now();
+        for _ in 0..20 {
+            assert!(limiter.check(Class::SignIn, client, start).is_ok());
+        }
+        let wait = limiter.check(Class::SignIn, client, start).unwrap_err();
+        assert!(wait <= Duration::from_secs(3), "{wait:?}");
+
+        // Other clients and other classes are separate.
+        assert!(
+            limiter
+                .check(Class::SignIn, ip("203.0.113.10"), start)
+                .is_ok()
+        );
+        assert!(limiter.check(Class::Write, client, start).is_ok());
+
+        // One request comes back every three seconds.
+        assert!(
+            limiter
+                .check(Class::SignIn, client, start + Duration::from_secs(3))
+                .is_ok()
+        );
+        assert!(
+            limiter
+                .check(Class::SignIn, client, start + Duration::from_secs(3))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn idle_buckets_are_pruned() {
+        let limiter = RateLimiter::new();
+        let start = Instant::now();
+        for n in 0..100u8 {
+            limiter
+                .check(Class::Write, IpAddr::from([198, 51, 100, n]), start)
+                .unwrap();
+        }
+        assert_eq!(limiter.len(), 100);
+        limiter
+            .check(
+                Class::Write,
+                ip("198.51.100.200"),
+                start + Duration::from_secs(61),
+            )
+            .unwrap();
+        assert_eq!(limiter.len(), 1);
+    }
+
+    #[test]
+    fn trusts_forwarded_for_only_behind_a_local_proxy() {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "x-forwarded-for",
+            HeaderValue::from_static("1.1.1.1, 203.0.113.7"),
+        );
+        assert_eq!(
+            client_ip(Some(ip("127.0.0.1")), &headers),
+            ip("203.0.113.7")
+        );
+        assert_eq!(client_ip(Some(ip("::1")), &headers), ip("203.0.113.7"));
+        // A remote peer cannot pick its own address.
+        assert_eq!(
+            client_ip(Some(ip("198.51.100.4")), &headers),
+            ip("198.51.100.4")
+        );
+        // Without the header the proxy itself is the client.
+        assert_eq!(
+            client_ip(Some(ip("127.0.0.1")), &HeaderMap::new()),
+            ip("127.0.0.1")
+        );
+        let mut garbage = HeaderMap::new();
+        garbage.append("x-forwarded-for", HeaderValue::from_static("nonsense"));
+        assert_eq!(client_ip(Some(ip("127.0.0.1")), &garbage), ip("127.0.0.1"));
+    }
+
+    #[test]
+    fn ipv6_clients_are_grouped_by_prefix() {
+        let headers = HeaderMap::new();
+        assert_eq!(
+            client_ip(Some(ip("2001:db8:1:2:aaaa::1")), &headers),
+            ip("2001:db8:1:2::")
+        );
+        assert_eq!(
+            client_ip(Some(ip("::ffff:203.0.113.5")), &headers),
+            ip("203.0.113.5")
+        );
+    }
 }
