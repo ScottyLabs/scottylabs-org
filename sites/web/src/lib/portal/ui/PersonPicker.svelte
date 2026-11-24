@@ -16,18 +16,17 @@
   import Spinner from "./Spinner.svelte";
   import { getFieldContext } from "./field-context.ts";
   import {
+    type FoundPerson,
     type PickedPerson,
-    isExcluded,
+    type PickerOption,
+    choosableOption,
     isKnownPerson,
     normalizeAndrewId,
     personInitials,
     personName,
+    pickerOptions,
+    resultsAreCurrent,
   } from "./person-picker.ts";
-
-  type Found = PeopleSearchResponse["people"][number];
-  type Option =
-    | { kind: "person"; key: string; person: Found }
-    | { kind: "andrew_id"; key: string; andrewId: string };
 
   const DEBOUNCE_MS = 200;
 
@@ -63,7 +62,7 @@
   const isInvalid = $derived(invalid ?? field?.invalid ?? false);
 
   let query = $state("");
-  let results = $state.raw<Found[]>([]);
+  let results = $state.raw<FoundPerson[]>([]);
   let searchedFor = $state("");
   let loading = $state(false);
   let searchError = $state<string | null>(null);
@@ -76,26 +75,16 @@
   let controller: AbortController | null = null;
 
   const typedId = $derived(allowAndrewId ? normalizeAndrewId(query) : null);
-  const settled = $derived(!loading && searchedFor === query.trim());
-  const options = $derived(buildOptions(results, typedId, settled));
+  // False from the first key press until the search for the new text answers. Until then the
+  // list shows the earlier results dimmed, and none of them can be chosen.
+  const settled = $derived(resultsAreCurrent(query, searchedFor, loading));
+  const options = $derived(pickerOptions(results, typedId, settled, exclude));
   const expanded = $derived(open && query.trim() !== "");
 
   onDestroy(() => {
     clearTimeout(timer);
     controller?.abort();
   });
-
-  function buildOptions(found: readonly Found[], andrewId: string | null, ready: boolean): Option[] {
-    const list: Option[] = found
-      .filter((person) => !isExcluded(person, exclude))
-      .map((person) => ({ kind: "person", key: `person-${person.id}`, person }));
-    // Offer the typed Andrew ID only once the search has answered, so nobody adds a person twice.
-    const known = found.some((person) => person.andrewId.toLowerCase() === andrewId);
-    if (ready && andrewId !== null && !known && !isExcluded({ andrewId }, exclude)) {
-      list.push({ kind: "andrew_id", key: `andrew-${andrewId}`, andrewId });
-    }
-    return list;
-  }
 
   function optionId(index: number): string {
     return `${listboxId}-${index.toString()}`;
@@ -104,6 +93,8 @@
   function search(): void {
     clearTimeout(timer);
     controller?.abort();
+    controller = null;
+    activeIndex = -1;
     const q = query.trim();
     searchError = null;
     if (q === "") {
@@ -121,18 +112,23 @@
   async function runSearch(q: string): Promise<void> {
     const current = new AbortController();
     controller = current;
+    let found: FoundPerson[] = [];
+    let failure: string | null = null;
     try {
       const response = await get<PeopleSearchResponse>("/people/search", {
         query: { q },
         signal: current.signal,
       });
-      results = response.people;
+      found = response.people;
     } catch (error) {
       if (isAbortError(error)) return;
-      results = [];
-      searchError = isApiError(error) ? error.message : "The search did not work. Try again.";
+      failure = isApiError(error) ? error.message : "The search did not work. Try again.";
     }
+    // A newer search has started since; its answer is the one to show.
     if (controller !== current) return;
+    controller = null;
+    results = found;
+    searchError = failure;
     loading = false;
     searchedFor = q;
     activeIndex = options.length > 0 ? 0 : -1;
@@ -149,7 +145,7 @@
     return `${people.toString()} ${people === 1 ? "person" : "people"} found.${extra}`;
   }
 
-  function choose(option: Option): void {
+  function choose(option: PickerOption): void {
     const next: PickedPerson =
       option.kind === "person" ? option.person : { andrewId: option.andrewId };
     value = next;
@@ -185,12 +181,12 @@
 
   function onListMouseMove(event: MouseEvent): void {
     const index = optionAt(event);
-    if (index !== null) activeIndex = index;
+    if (index !== null && settled) activeIndex = index;
   }
 
   function onListClick(event: MouseEvent): void {
     const index = optionAt(event);
-    const option = index === null ? undefined : options[index];
+    const option = index === null ? undefined : choosableOption(options, index, settled);
     if (option !== undefined) choose(option);
   }
 
@@ -206,7 +202,8 @@
   };
 
   function onkeydown(event: KeyboardEvent): void {
-    const count = options.length;
+    // Earlier results cannot be moved through or chosen while the new search runs.
+    const count = settled ? options.length : 0;
     switch (event.key) {
       case "ArrowDown":
         event.preventDefault();
@@ -222,11 +219,12 @@
         if (open && count > 0) activeIndex = (activeIndex - 1 + count) % count;
         break;
       case "Enter": {
-        const option = expanded ? options[activeIndex] : undefined;
-        if (option !== undefined) {
-          event.preventDefault();
-          choose(option);
-        }
+        if (!expanded) break;
+        // While the list is open, Enter belongs to it and does not submit the form, even when the
+        // search has not answered yet.
+        event.preventDefault();
+        const option = choosableOption(options, activeIndex, settled);
+        if (option !== undefined) choose(option);
         break;
       }
       case "Escape":
@@ -294,7 +292,14 @@
   </div>
 
   <div class="picker__popup" hidden={!expanded}>
-    <ul id={listboxId} class="picker__list" role="listbox" aria-label="People" {@attach pointerChoice}>
+    <ul
+      id={listboxId}
+      class={["picker__list", !settled && "picker__list--stale"]}
+      role="listbox"
+      aria-label="People"
+      aria-busy={loading ? "true" : undefined}
+      {@attach pointerChoice}
+    >
       {#each options as option, index (option.key)}
         <li
           id={optionId(index)}
@@ -471,6 +476,10 @@
     padding: 6px 8px;
     border-radius: var(--p-radius-sm);
     cursor: pointer;
+  }
+  .picker__list--stale .picker__option {
+    cursor: default;
+    opacity: 0.5;
   }
   .picker__option--active {
     background: var(--p-surface-muted);
