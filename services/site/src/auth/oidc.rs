@@ -176,6 +176,15 @@ pub struct OidcProvider {
 impl OidcProvider {
     /// `http` must not follow redirects, so a compromised endpoint cannot bounce requests elsewhere.
     pub fn new(settings: OidcSettings, http: reqwest::Client) -> Self {
+        // The groups are logged so a deployment shows which Keycloak groups it trusts. Only the admin group grants anything; project membership alone does not open the portal.
+        tracing::info!(
+            keycloak = %settings.keycloak_url,
+            realm = %settings.keycloak_realm,
+            client_id = %settings.client_id,
+            admin_group = %settings.project_admin_group,
+            project_group = %settings.project_group,
+            "sign-in through Keycloak is configured"
+        );
         Self {
             settings,
             http,

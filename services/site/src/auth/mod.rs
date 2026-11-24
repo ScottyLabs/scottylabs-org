@@ -29,7 +29,6 @@ pub struct Viewer {
 
 #[derive(Clone, Debug, FromRow)]
 pub struct Assignment {
-    pub id: Uuid,
     pub role: Role,
     pub committee: Option<Committee>,
     pub can_post_ticker: bool,

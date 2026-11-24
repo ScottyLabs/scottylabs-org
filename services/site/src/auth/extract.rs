@@ -87,7 +87,7 @@ async fn load_viewer(state: &AppState, headers: &HeaderMap) -> AppResult<Option<
 
 async fn load_roles(state: &AppState, user_id: Uuid) -> AppResult<Vec<Assignment>> {
     let roles = sqlx::query_as::<_, Assignment>(
-        "SELECT id, role, committee, can_post_ticker FROM role_assignments
+        "SELECT role, committee, can_post_ticker FROM role_assignments
          WHERE user_id = $1 ORDER BY created_at, id",
     )
     .bind(user_id)

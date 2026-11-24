@@ -273,7 +273,6 @@ pub(crate) mod tests {
             roles: roles
                 .iter()
                 .map(|(role, committee, can_post_ticker)| Assignment {
-                    id: Uuid::now_v7(),
                     role: *role,
                     committee: *committee,
                     can_post_ticker: *can_post_ticker,
