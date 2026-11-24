@@ -312,6 +312,10 @@ Each builder owns the files of their track. Edit shared files only where this ta
 
 Record changes to this contract here, newest first, with the reason.
 
+- 2026-11-24, platform web. `sites/web/vite.config.ts` proxies to `SITE_SERVICE_URL` when it is set (default `http://127.0.0.1:8080`), so builds can run side by side on other ports. Prerendering warns instead of failing when `/projects/` or `/committees/` answer 404, because the header links to them before those routes exist; remove that handler once both routes are in.
+
+- 2026-11-24, platform web. How portal pages plug in: call the API with the helpers in `src/lib/api/client.ts`, whose paths are relative to `/api` (`get<MeResponse>("/me")`); read the signed-in person with `getPortalSession()` and show confirmations with `getToasts()` (both from `src/lib/portal/index.ts`); build pages from `src/lib/portal/ui/index.ts` and the `p-table` classes. Render the page's `<h1>` straight away (`PageHeader` does), since the shell moves focus to it after navigation. Unknown `/portal/` addresses get the portal error card from the root `+error.svelte`.
+
 ### 2026-11-24, ticker
 
 All additive.
@@ -328,9 +332,7 @@ All additive.
 
 - **Six slots under concurrency**: every write that can add to or reorder the live set takes `pg_advisory_xact_lock(724610)` before counting.
 
-- 2026-11-24, platform web. `sites/web/vite.config.ts` proxies to `SITE_SERVICE_URL` when it is set (default `http://127.0.0.1:8080`), so builds can run side by side on other ports. Prerendering warns instead of failing when `/projects/` or `/committees/` answer 404, because the header links to them before those routes exist; remove that handler once both routes are in.
-
-- 2026-11-24, platform web. How portal pages plug in: call the API with the helpers in `src/lib/api/client.ts`, whose paths are relative to `/api` (`get<MeResponse>("/me")`); read the signed-in person with `getPortalSession()` and show confirmations with `getToasts()` (both from `src/lib/portal/index.ts`); build pages from `src/lib/portal/ui/index.ts` and the `p-table` classes. Render the page's `<h1>` straight away (`PageHeader` does), since the shell moves focus to it after navigation. Unknown `/portal/` addresses get the portal error card from the root `+error.svelte`.
+- **Web**: the ticker is `#lib/ticker/Ticker.svelte`. Without props it fetches `/api/public/ticker` in the browser (and again every 5 minutes); pass `announcements` and `variant="card"` to show a given list inside a card, as the portal's live preview does. Portal links other tracks can use: `/portal/ticker/` (`?tab=waiting|expired`, `?highlight=<id>` marks a row), `/portal/ticker/new/` (`?from=<id>` prefills from an announcement that left the ticker) and `/portal/ticker/<id>/` to edit. In `Hero.svelte` the strip keeps its place between the two hairlines on wide screens and moves under the hero text on screens up to 1024 px, as in the mobile design; the hero clips with `overflow: clip` so focusing a moving announcement cannot scroll it sideways.
 
 ### 2026-11-24, platform backend review fixes
 
