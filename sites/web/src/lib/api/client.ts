@@ -271,8 +271,7 @@ function codeForStatus(status: number): ApiErrorCode {
       return "validation_failed";
     case 429:
       return "rate_limited";
-    case 503:
-      return "auth_not_configured";
+    // A 503 without the service's JSON body came from a proxy or a starting service, so it says nothing about sign-in. Only the service's own body may carry auth_not_configured.
     default:
       return status >= 500 ? "internal" : "unexpected_response";
   }

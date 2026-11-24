@@ -180,6 +180,23 @@ Deno.test("error bodies become ApiErrors", async () => {
   assert.match(proxy.message, /Try again/u);
 });
 
+Deno.test("only the service's own body says sign-in is not set up", async () => {
+  const outage = await errorFromResponse(
+    new Response("<html>Service unavailable</html>", { status: 503 }),
+  );
+  assert.equal(outage.code, "internal");
+  assert.match(outage.message, /Try again/u);
+
+  const notConfigured = await errorFromResponse(
+    Response.json(
+      { error: { code: "auth_not_configured", message: "Sign-in is not set up yet." } },
+      { status: 503 },
+    ),
+  );
+  assert.equal(notConfigured.code, "auth_not_configured");
+  assert.equal(notConfigured.message, "Sign-in is not set up yet.");
+});
+
 interface Call {
   url: string;
   init: RequestInit;
