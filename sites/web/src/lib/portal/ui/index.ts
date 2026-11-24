@@ -16,6 +16,7 @@ export { default as Field } from "./Field.svelte";
 export { default as IconButton } from "./IconButton.svelte";
 export { default as Menu, type MenuTriggerProps } from "./Menu.svelte";
 export { default as PageHeader } from "./PageHeader.svelte";
+export { default as PersonPicker } from "./PersonPicker.svelte";
 export { default as SegmentedControl } from "./SegmentedControl.svelte";
 export { default as Select } from "./Select.svelte";
 export { default as Sheet } from "./Sheet.svelte";
@@ -29,6 +30,13 @@ export { default as TextInput } from "./TextInput.svelte";
 export { default as ToastRegion } from "./ToastRegion.svelte";
 export { getFieldContext, type FieldContext } from "./field-context.ts";
 export { lockScroll } from "./scroll-lock.ts";
+export {
+  type PickedPerson,
+  isKnownPerson,
+  normalizeAndrewId,
+  personInitials,
+  personName,
+} from "./person-picker.ts";
 export type {
   ButtonSize,
   ButtonVariant,

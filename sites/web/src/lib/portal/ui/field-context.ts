@@ -4,6 +4,8 @@ import { getContext, setContext } from "svelte";
 
 export interface FieldContext {
   readonly id: string;
+  /** The label's id, for controls a `<label for>` cannot name, such as a contenteditable. */
+  readonly labelId: string;
   /** Space-separated ids of the help, counter and error text. */
   readonly describedBy: string | undefined;
   readonly invalid: boolean;

@@ -34,6 +34,7 @@
 
   const uid = $props.id();
   const id = $derived(idProp ?? `field-${uid}`);
+  const labelId = $derived(`${id}-label`);
   const helpId = $derived(`${id}-help`);
   const counterId = $derived(`${id}-counter`);
   const errorId = $derived(`${id}-error`);
@@ -50,6 +51,9 @@
     get id() {
       return id;
     },
+    get labelId() {
+      return labelId;
+    },
     get describedBy() {
       return describedBy;
     },
@@ -64,7 +68,7 @@
 
 <div class={["p-field", className]}>
   <div class="p-field__top">
-    <label class={["p-field__label", hideLabel && "p-sr-only"]} for={id}>
+    <label id={labelId} class={["p-field__label", hideLabel && "p-sr-only"]} for={id}>
       {label}{#if optional}{" "}<span class="p-field__optional">(optional)</span>{/if}
     </label>
     {#if counter}
