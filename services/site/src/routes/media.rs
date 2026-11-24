@@ -194,8 +194,11 @@ mod tests {
     use axum::http::StatusCode;
     use sqlx::PgPool;
 
+    use std::time::Duration;
+
     use super::requested_width;
     use crate::media::process::tests::{jpeg, png, webp};
+    use crate::media::tests::fake_s3;
     use crate::models::{Committee, Role};
     use crate::testing::{self, Req, Res, TestUser};
 
@@ -271,6 +274,32 @@ mod tests {
                 Some("public, max-age=31536000, immutable")
             );
             assert_eq!(res.header("x-content-type-options"), Some("nosniff"));
+            let decoded = image::load_from_memory(&res.body).unwrap();
+            assert_eq!(decoded.width(), served, "{asked}");
+        }
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn serves_images_stored_in_s3(db: PgPool) {
+        let mut config = testing::config();
+        config.s3 = Some(fake_s3(Duration::ZERO).await);
+        let app = testing::app_with(db.clone(), config).await;
+        let lead = testing::user(&db, "s3lead", &[(Role::Lead, Some(Committee::Events))]).await;
+
+        let res = upload(&app, &lead, "photo.jpg", "image/jpeg", &jpeg(1200, 600), "").await;
+        assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+        let id = res.json["id"].as_str().unwrap().to_owned();
+        let blobs: i64 = sqlx::query_scalar("SELECT count(*) FROM media_blobs")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(blobs, 0);
+
+        for (asked, served) in [("?w=480", 480), ("", 1200)] {
+            let res = Req::get(&format!("/media/{id}{asked}")).send(&app).await;
+            assert_eq!(res.status, StatusCode::OK);
+            let length = res.body.len().to_string();
+            assert_eq!(res.header("content-length"), Some(length.as_str()));
             let decoded = image::load_from_memory(&res.body).unwrap();
             assert_eq!(decoded.width(), served, "{asked}");
         }

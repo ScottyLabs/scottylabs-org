@@ -23,6 +23,9 @@ use crate::error::{AppError, AppResult};
 const PRESIGN_FOR: Duration = Duration::from_secs(60);
 /// Decoding a large image takes hundreds of megabytes, so only a few run at once.
 const CONCURRENT_PROCESSING: usize = 2;
+/// How long fetching an image from S3 may wait for its next bytes before giving up.
+const DOWNLOAD_STALL: Duration = Duration::from_secs(15);
+const DOWNLOAD_CONNECT: Duration = Duration::from_secs(5);
 
 struct S3Backend {
     bucket: Bucket,
@@ -32,7 +35,10 @@ struct S3Backend {
 pub struct MediaStore {
     s3: Option<S3Backend>,
     db: PgPool,
-    http: reqwest::Client,
+    /// For uploads to S3, with a deadline for the whole request.
+    upload_http: reqwest::Client,
+    /// For images streamed from S3 to visitors. It has no deadline for the whole download, because a visitor on a slow connection sets the pace; it only gives up when S3 stops sending.
+    download_http: reqwest::Client,
     processing: Semaphore,
 }
 
@@ -44,7 +50,19 @@ pub struct MediaBody {
 }
 
 impl MediaStore {
-    pub fn new(s3: Option<S3Settings>, db: PgPool, http: reqwest::Client) -> Self {
+    /// `http` uploads to S3 and must not follow redirects. Downloads use a client of their own.
+    pub fn new(s3: Option<S3Settings>, db: PgPool, http: reqwest::Client) -> anyhow::Result<Self> {
+        let download_http =
+            download_client(DOWNLOAD_STALL).context("building the media download client")?;
+        Ok(Self::with_clients(s3, db, http, download_http))
+    }
+
+    fn with_clients(
+        s3: Option<S3Settings>,
+        db: PgPool,
+        upload_http: reqwest::Client,
+        download_http: reqwest::Client,
+    ) -> Self {
         let s3 = s3.and_then(|settings| {
             match Bucket::new(
                 settings.endpoint.clone(),
@@ -65,7 +83,8 @@ impl MediaStore {
         Self {
             s3,
             db,
-            http,
+            upload_http,
+            download_http,
             processing: Semaphore::new(CONCURRENT_PROCESSING),
         }
     }
@@ -158,7 +177,7 @@ impl MediaStore {
             .put_object(Some(&s3.credentials), &key)
             .sign(PRESIGN_FOR);
         let response = self
-            .http
+            .upload_http
             .put(url)
             .header(reqwest::header::CONTENT_TYPE, content_type)
             .body(bytes.to_vec())
@@ -226,7 +245,7 @@ impl MediaStore {
             .get_object(Some(&s3.credentials), &key)
             .sign(PRESIGN_FOR);
         let response = self
-            .http
+            .download_http
             .get(url)
             .send()
             .await
@@ -253,6 +272,15 @@ impl MediaStore {
     }
 }
 
+fn download_client(stall: Duration) -> reqwest::Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .connect_timeout(DOWNLOAD_CONNECT)
+        .read_timeout(stall)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent("scottylabs-site")
+        .build()
+}
+
 fn object_key(id: Uuid, width: u32) -> String {
     format!("media/{id}/{width}")
 }
@@ -272,8 +300,22 @@ pub fn choose_variant(stored: &[i32], wanted: Option<u32>) -> Option<i32> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::collections::HashMap;
+    use std::convert::Infallible;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    use axum::Router;
+    use axum::extract::State;
+    use axum::http::{Method, StatusCode, Uri, header};
+    use axum::response::{IntoResponse, Response};
+    use futures::StreamExt;
+    use http_body_util::BodyExt;
+
     use super::*;
+    use crate::media::process::tests::jpeg;
+    use crate::testing;
 
     #[test]
     fn chooses_the_smallest_variant_that_is_wide_enough() {
@@ -291,5 +333,119 @@ mod tests {
     fn keys_follow_the_contract() {
         let id = Uuid::nil();
         assert_eq!(object_key(id, 960), format!("media/{id}/960"));
+    }
+
+    /// A stand-in for Garage: keeps PUT bodies by path and sends them back on GET in
+    /// [`CHUNKS`] pieces, pausing before every piece after the first.
+    #[derive(Clone)]
+    struct FakeS3 {
+        objects: Arc<Mutex<HashMap<String, Bytes>>>,
+        pause: Duration,
+    }
+
+    const CHUNKS: usize = 8;
+
+    async fn fake_s3_handler(
+        State(s3): State<FakeS3>,
+        method: Method,
+        uri: Uri,
+        body: Bytes,
+    ) -> Response {
+        let key = uri.path().to_owned();
+        if method == Method::PUT {
+            s3.objects.lock().unwrap().insert(key, body);
+            return StatusCode::OK.into_response();
+        }
+        let Some(object) = s3.objects.lock().unwrap().get(&key).cloned() else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let size = object.len().div_ceil(CHUNKS).max(1);
+        let pieces: Vec<(usize, Bytes)> = (0..object.len())
+            .step_by(size)
+            .map(|start| object.slice(start..(start + size).min(object.len())))
+            .enumerate()
+            .collect();
+        let pause = s3.pause;
+        let stream = futures::stream::iter(pieces).then(move |(index, piece)| async move {
+            if index > 0 {
+                tokio::time::sleep(pause).await;
+            }
+            Ok::<_, Infallible>(piece)
+        });
+        (
+            [(header::CONTENT_LENGTH, object.len())],
+            Body::from_stream(stream),
+        )
+            .into_response()
+    }
+
+    /// Starts a fake S3 server and returns settings that point at it.
+    pub(crate) async fn fake_s3(pause: Duration) -> S3Settings {
+        let state = FakeS3 {
+            objects: Arc::default(),
+            pause,
+        };
+        let app = Router::new().fallback(fake_s3_handler).with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        S3Settings {
+            endpoint: url::Url::parse(&format!("http://{address}")).unwrap(),
+            region: "garage".into(),
+            access_key: "test-access".into(),
+            secret_key: "test-secret".into(),
+            bucket: "media".into(),
+        }
+    }
+
+    /// Saves a 1200 px JPEG (variants 480, 960, 1200) through a store whose downloads give up after `stall` without new bytes.
+    async fn stored_in_s3(
+        db: &PgPool,
+        pause: Duration,
+        stall: Duration,
+    ) -> (MediaStore, Uuid, Processed) {
+        let store = MediaStore::with_clients(
+            Some(fake_s3(pause).await),
+            db.clone(),
+            reqwest::Client::new(),
+            download_client(stall).unwrap(),
+        );
+        let owner = testing::user(db, "s3owner", &[]).await;
+        let processed = process::process(&jpeg(1200, 600)).unwrap();
+        let id = Uuid::now_v7();
+        store.save(id, &processed, owner.id).await.unwrap();
+        (store, id, processed)
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn slow_downloads_are_not_cut_off(db: PgPool) {
+        let stall = Duration::from_millis(400);
+        let (store, id, processed) = stored_in_s3(&db, Duration::from_millis(150), stall).await;
+        let storage: String = sqlx::query_scalar("SELECT storage FROM media WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(storage, "s3");
+
+        let started = Instant::now();
+        let media = store.open(id, Some(700)).await.unwrap().unwrap();
+        let expected = &processed.variants[1];
+        assert_eq!(expected.width, 960);
+        assert_eq!(media.length, Some(expected.bytes.len() as u64));
+        let body = media.body.collect().await.expect("the whole image arrives");
+        // Seven pauses of 150 ms: the download outlasts the stall limit twice over and still completes.
+        assert!(started.elapsed() > stall * 2);
+        assert_eq!(body.to_bytes(), expected.bytes);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn stalled_downloads_end_with_an_error(db: PgPool) {
+        let (store, id, _) =
+            stored_in_s3(&db, Duration::from_secs(2), Duration::from_millis(200)).await;
+        let media = store.open(id, None).await.unwrap().unwrap();
+        let started = Instant::now();
+        assert!(media.body.collect().await.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

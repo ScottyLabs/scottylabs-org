@@ -32,7 +32,11 @@ impl AppState {
             .oidc
             .clone()
             .map(|settings| Arc::new(OidcProvider::new(settings, http.clone())));
-        let media = Arc::new(MediaStore::new(config.s3.clone(), db.clone(), http.clone()));
+        let media = Arc::new(MediaStore::new(
+            config.s3.clone(),
+            db.clone(),
+            http.clone(),
+        )?);
         Ok(Self {
             db,
             config,
