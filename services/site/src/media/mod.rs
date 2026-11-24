@@ -3,6 +3,7 @@
 
 pub mod process;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, anyhow};
@@ -39,7 +40,7 @@ pub struct MediaStore {
     upload_http: reqwest::Client,
     /// For images streamed from S3 to visitors. It has no deadline for the whole download, because a visitor on a slow connection sets the pace; it only gives up when S3 stops sending.
     download_http: reqwest::Client,
-    processing: Semaphore,
+    processing: Arc<Semaphore>,
 }
 
 /// A stored image ready to send.
@@ -85,7 +86,7 @@ impl MediaStore {
             db,
             upload_http,
             download_http,
-            processing: Semaphore::new(CONCURRENT_PROCESSING),
+            processing: Arc::new(Semaphore::new(CONCURRENT_PROCESSING)),
         }
     }
 
@@ -95,14 +96,7 @@ impl MediaStore {
 
     /// Checks and re-encodes an upload off the async runtime.
     pub async fn process(&self, bytes: Bytes) -> Result<Processed, ProcessError> {
-        let _permit = self
-            .processing
-            .acquire()
-            .await
-            .map_err(|_| ProcessError::Encode("the media store is shutting down".into()))?;
-        tokio::task::spawn_blocking(move || process::process(&bytes))
-            .await
-            .map_err(|error| ProcessError::Encode(error.to_string()))?
+        run_limited(&self.processing, move || process::process(&bytes)).await?
     }
 
     /// Stores every variant, then records the image. Without a database row nothing is served.
@@ -272,6 +266,25 @@ impl MediaStore {
     }
 }
 
+/// Runs blocking work once one of `limit`'s permits is free. The permit moves into the blocking task and is released only when the work ends: tokio cannot cancel blocking tasks, so a client that hangs up mid-upload must not free a slot while its image is still being decoded.
+async fn run_limited<T, F>(limit: &Arc<Semaphore>, work: F) -> Result<T, ProcessError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = Arc::clone(limit)
+        .acquire_owned()
+        .await
+        .map_err(|_| ProcessError::Encode("the media store is shutting down".into()))?;
+    tokio::task::spawn_blocking(move || {
+        let result = work();
+        drop(permit);
+        result
+    })
+    .await
+    .map_err(|error| ProcessError::Encode(error.to_string()))
+}
+
 fn download_client(stall: Duration) -> reqwest::Result<reqwest::Client> {
     reqwest::Client::builder()
         .connect_timeout(DOWNLOAD_CONNECT)
@@ -303,7 +316,7 @@ pub fn choose_variant(stored: &[i32], wanted: Option<u32>) -> Option<i32> {
 pub(crate) mod tests {
     use std::collections::HashMap;
     use std::convert::Infallible;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Mutex;
     use std::time::Instant;
 
     use axum::Router;
@@ -333,6 +346,38 @@ pub(crate) mod tests {
     fn keys_follow_the_contract() {
         let id = Uuid::nil();
         assert_eq!(object_key(id, 960), format!("media/{id}/960"));
+    }
+
+    #[tokio::test]
+    async fn a_dropped_upload_keeps_its_slot_until_decoding_ends() {
+        let limit = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = std::sync::mpsc::channel::<()>();
+        let request = tokio::spawn({
+            let limit = Arc::clone(&limit);
+            async move {
+                run_limited(&limit, move || {
+                    let _ = started_tx.send(());
+                    let _ = finish_rx.recv();
+                })
+                .await
+            }
+        });
+        started_rx.await.unwrap();
+
+        // The client hangs up, so the request is dropped, but the decode keeps running.
+        request.abort();
+        assert!(request.await.unwrap_err().is_cancelled());
+        assert_eq!(limit.available_permits(), 0);
+
+        finish_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while limit.available_permits() == 0 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the slot is released when decoding ends");
     }
 
     /// A stand-in for Garage: keeps PUT bodies by path and sends them back on GET in
