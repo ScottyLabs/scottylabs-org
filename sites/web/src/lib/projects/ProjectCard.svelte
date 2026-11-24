@@ -193,7 +193,7 @@
     padding: 0 16px 8px;
     color: var(--card-color);
     font-size: 56px;
-    font-weight: 700;
+    font-weight: 600;
     line-height: 62px;
     letter-spacing: -0.025em;
   }
@@ -219,7 +219,7 @@
     margin: 0;
     color: var(--p-text);
     font-size: 1.25rem;
-    font-weight: 700;
+    font-weight: 600;
     line-height: 28px;
     letter-spacing: -0.01em;
     text-overflow: ellipsis;
@@ -373,6 +373,7 @@
     }
     .project-card__committee {
       grid-area: committee;
+      justify-self: end;
       display: inline-flex;
       align-items: center;
       gap: 6px;
@@ -392,8 +393,10 @@
     .project-card__description {
       margin-top: 4px;
     }
+    /* The committee and the links share a column; both hug the card's right edge. */
     .project-card__links {
       align-self: end;
+      justify-self: end;
       margin-top: 6px;
     }
     .project-card__facts {
