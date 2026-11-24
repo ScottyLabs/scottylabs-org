@@ -61,7 +61,26 @@
     unlock = null;
   });
 
+  // The cancel event alone cannot hold the dialog open: Chrome makes it non-cancelable when there
+  // was no click or key press since the dialog opened. Stopping Escape itself prevents the close
+  // request. Listening on the document also covers focus resting on the body.
+  $effect(() => {
+    if (!open || dismissible) return;
+    document.addEventListener("keydown", holdEscape, { capture: true });
+    return () => document.removeEventListener("keydown", holdEscape, { capture: true });
+  });
+
+  function holdEscape(event: KeyboardEvent) {
+    if (event.key === "Escape") event.preventDefault();
+  }
+
   function handleClose() {
+    // Something closed the dialog while it must stay open, such as a close request that got past
+    // the guards. Open it again rather than drop a save in progress.
+    if (open && !dismissible && dialog !== undefined) {
+      dialog.showModal();
+      return;
+    }
     unlock?.();
     unlock = null;
     open = false;
