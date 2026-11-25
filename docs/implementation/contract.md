@@ -73,7 +73,7 @@ Seeded only when `SEED_DEMO_CONTENT=1` (dev shell, previews):
 | `spchoksh` | Sara Chokshi | lead, events, can post to the ticker, edits Nova |
 | `newmember` | New Member | no role |
 
-Bundled seed images live in `sites/web/static/seed/` and are referenced as `/seed/...`.
+Bundled seed images live in `sites/web/static/seed/` and are referenced as `/seed/...`. Each seed photo also has a `-480.jpg` copy, and a `-960.jpg` one where that is at most 80% of its width, written by `sites/web/scripts/seed-sizes.ts` (see Changes, 2026-11-25).
 
 ## Conventions
 
@@ -338,6 +338,21 @@ Each area keeps the files below; change another area's files only together with 
 ## Changes
 
 Record changes to this contract here, newest first, with the reason.
+
+### 2026-11-25, final web review fixes
+
+Web only; no endpoint changed. `types.ts` gains one optional field.
+
+- **`ProjectCard.videoUrl?: string | null`** (optional): when it is set, the featured card on the Projects page shows "Watch video", linking to `/projects/<slug>/#watch` (Figma 52:8705). The service does not send it yet; `routes::projects::public::published_cards` should fill it from the published version's `videoUrl`, after which the field can become required.
+- **One video reader and one link host helper.** `videoEmbed` lives in `src/lib/media/video.ts` (also exported from `#lib/media/index.ts` and `#lib/projects/index.ts`) and returns `{ provider: "youtube" | "vimeo", providerName, embedUrl }`. Committee and project pages play the same links, the ones `blocks::video_id` accepts (keep the two in step; this replaces `src/lib/committees/video.ts` in the 2026-11-24 committee pages review entry), and project pages keep the start time and the unlisted Vimeo hash. `models::check_video_url` still accepts any YouTube or Vimeo link for projects, so a channel link saves and then shows only as a plain "Watch the video" link; projects should validate with `blocks::video_id` too. `linkHost(url, { httpsOnly })` lives in `src/lib/site/links.ts` (hostname without `www.` or port, null for anything that is not an http or https link).
+- **Seed photos in responsive sizes.** `src()` and `srcset()` in `src/lib/media/images.ts` treat `/seed/<path>.jpg` with a known width like uploads: `seedWidths` lists 480 and 960 where they are at most 80% of the width, then the width itself, and `seedVariantPath` names the copy (`/seed/photos/c10-480.jpg`). Run `deno run -A scripts/seed-sizes.ts` from `sites/web` after adding or replacing a seed photo.
+- **Portal fields** are 48 px tall with 16 px text (`--p-field-height`, `--p-field-font`, `--p-field-line` in `tokens.css`). `.p-fields-compact` on a container gives 40 px and 14 px, for the committee page editor and list toolbars. Below 768 px every field uses 16 px text, so iOS does not zoom in on focus.
+- **Phones, full screen.** Below 600 px the portal layout hides its top bar and tab bar on `/portal/ticker/<new or id>/` and `/portal/projects/<id>/` and sets `--p-tabbar-height` to 0, so bars that dock above the tab bar dock at the bottom edge. Those pages draw their own app bar.
+- **Publishing a committee page returns to the list** at `/portal/committees/?highlight=<slug>`, which marks that row (spec F7 step 5). The publish dialog says so.
+- **Rich text editing on the canvas.** `BlockRenderer` takes `textEditor` (the `RichTextEditor` component), which the editor canvas passes in; render blocks no longer import editor code. On the canvas the page's headings are one level lower (`headingTag` in `src/lib/committees/render/types.ts`).
+- **Lighter public pages.** The prerendered Projects, Committees and committee pages preload their content JSON from the HTML; hero images load with `fetchpriority="high"`; project cards below the featured one are lazy; PostHog loads after the page in its own chunk; JetBrains Mono is not preloaded and Latin text uses a 44 KB WOFF subset (`JetBrainsMono-Regular-latin.woff`). The root error page loads the portal's error card only for portal addresses.
+- **Phone project cards** keep the 4:3 cover and the monogram of spec P-2 and P-3; Figma 44:8364 shows a square with the name.
+- **Not changed yet: search over the whole description.** Spec P-5 and section 11 list a `q` filter on `GET /api/public/projects` matching name, summary, description, committee and kind; the service ignores `q`, and the Projects page searches the card's excerpt, the first 240 characters of the description, in the browser. Words later in a long description are not found until the service adds `q` (or sends the plain description) and the page uses it.
 
 ### 2026-11-24, sign-in hardening and roles from governance
 
