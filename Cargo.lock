@@ -2775,6 +2775,7 @@ dependencies = [
  "openidconnect",
  "rand 0.9.5",
  "reqwest",
+ "rsa",
  "rusty-s3",
  "serde",
  "serde_json",

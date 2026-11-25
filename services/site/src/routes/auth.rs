@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::audit;
 use crate::auth::normalize_andrew_id;
-use crate::auth::oidc::{Identity, OidcProvider, SignInError, decode_state};
+use crate::auth::oidc::{Identity, OidcProvider, RelayState, SignInError, clip, decode_state};
 use crate::auth::session::{self, NewSession, secrets_match};
 use crate::config::{Config, DevLogin};
 use crate::error::{AppError, AppResult};
@@ -204,9 +204,7 @@ async fn callback(
                 response
             }
             Err(error) => {
-                if let SignInError::Failed(cause) = &error {
-                    tracing::warn!(error = ?cause, "Keycloak sign-in failed");
-                }
+                error.log();
                 sign_in_error(error.code())
             }
         },
@@ -245,6 +243,14 @@ async fn take_attempt(state: &AppState, csrf: &str) -> AppResult<Option<Attempt>
     Ok(attempt)
 }
 
+/// Uses up the attempt behind a refused callback, so its `state` cannot be tried again.
+async fn discard_attempt(state: &AppState, relay: Option<&RelayState>) -> Result<(), SignInError> {
+    if let Some(relay) = relay {
+        take_attempt(state, &relay.csrf).await.map_err(internal)?;
+    }
+    Ok(())
+}
+
 /// The callback's checks, in order. Returns where to send the person and their new session.
 async fn finish_sign_in(
     state: &AppState,
@@ -256,20 +262,33 @@ async fn finish_sign_in(
         .as_deref()
         .and_then(decode_state);
 
+    // RFC 9207: Keycloak names itself in `iss`, on errors too, and Ricochet passes it through. A callback without `iss` is still accepted.
+    if let Some(iss) = query_param(query, "iss")
+        && iss != oidc.issuer()
+    {
+        discard_attempt(state, relay.as_ref()).await?;
+        return Err(SignInError::Failed(anyhow::anyhow!(
+            "the callback names the issuer {:?}, not {:?}",
+            clip(&iss),
+            oidc.issuer()
+        )));
+    }
+
     if let Some(error) = query_param(query, "error") {
-        if let Some(relay) = &relay {
-            take_attempt(state, &relay.csrf).await.map_err(internal)?;
-        }
-        return Err(if error == "access_denied" {
-            SignInError::Cancelled
-        } else {
-            SignInError::Failed(anyhow::anyhow!("Keycloak returned error {error:?}"))
-        });
+        discard_attempt(state, relay.as_ref()).await?;
+        return Err(SignInError::provider(
+            &error,
+            query_param(query, "error_description").as_deref(),
+        ));
     }
 
     let relay = relay.ok_or_else(|| failed("the callback has no valid state"))?;
     match session::read_cookie(headers, attempt_cookie_name(&state.config)) {
-        None => return Err(SignInError::Expired),
+        None => {
+            return Err(SignInError::Expired(
+                "the browser came back without the sign-in cookie",
+            ));
+        }
         Some(cookie) if !secrets_match(&cookie, &relay.csrf) => {
             return Err(failed("the state does not belong to this browser"));
         }
@@ -278,9 +297,13 @@ async fn finish_sign_in(
     let attempt = take_attempt(state, &relay.csrf)
         .await
         .map_err(internal)?
-        .ok_or(SignInError::Expired)?;
+        .ok_or(SignInError::Expired(
+            "the sign-in attempt is unknown or was already used",
+        ))?;
     if !attempt.fresh {
-        return Err(SignInError::Expired);
+        return Err(SignInError::Expired(
+            "the sign-in attempt is older than ten minutes",
+        ));
     }
     let code = query_param(query, "code").ok_or_else(|| failed("the callback has no code"))?;
 
@@ -414,7 +437,7 @@ fn same_group(a: &str, b: &str) -> bool {
     a.trim_start_matches('/') == b.trim_start_matches('/')
 }
 
-/// Members of `PROJECT_ADMIN_GROUP` are admins. An admin role that came only from the group goes away when the token shows they left it, unless they are the last admin. Tokens without a `groups` claim change nothing.
+/// Members of `PROJECT_ADMIN_GROUP` are admins. An admin role that came only from the group goes away when the token shows they left it (any `groups` list without the group, including an empty one), unless they are the last admin. Tokens without a `groups` claim change nothing.
 pub async fn sync_admin_group(
     conn: &mut PgConnection,
     user_id: Uuid,

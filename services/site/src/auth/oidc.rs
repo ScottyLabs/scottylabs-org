@@ -1,6 +1,6 @@
 //! Keycloak sign-in through the Ricochet relay: authorization code flow with PKCE (S256), a nonce, and a fully verified ID token.
 //!
-//! Keycloak redirects to Ricochet (`OAUTH_RELAY_URL`), which decodes `state` and forwards the browser to its `return_to` with `code` and `state` unchanged. So `state` carries our callback URL plus a random `csrf` that keys the stored attempt.
+//! Keycloak redirects to Ricochet (`OAUTH_RELAY_URL`), which decodes `state` and forwards the browser to its `return_to` with every provider parameter unchanged (`code`, `state`, `iss`, `session_state`, `error`, `error_description`). So `state` carries our callback URL plus a random `csrf` that keys the stored attempt.
 
 use std::time::{Duration, Instant};
 
@@ -16,9 +16,9 @@ use openidconnect::core::{
 use openidconnect::{
     AdditionalClaims, AuthenticationFlow, AuthorizationCode, ClaimsVerificationError, Client,
     ClientId, ClientSecret, CsrfToken, EmptyExtraTokenFields, EndpointMaybeSet, EndpointNotSet,
-    EndpointSet, IdTokenClaims, IdTokenFields, IssuerUrl, Nonce, PkceCodeChallenge,
-    PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope, SignatureVerificationError,
-    StandardErrorResponse, StandardTokenResponse, TokenResponse,
+    EndpointSet, IdTokenClaims, IdTokenFields, IdTokenVerifier, IssuerUrl, Nonce,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RequestTokenError, Scope,
+    SignatureVerificationError, StandardErrorResponse, StandardTokenResponse, TokenResponse,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::Mutex;
@@ -33,11 +33,19 @@ const DISCOVERY_TTL: Duration = Duration::from_secs(60 * 60);
 const MIN_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 /// `state` values longer than this are not ours.
 const MAX_STATE_LEN: usize = 4096;
+/// Text from a callback URL or an error response is cut to this many characters before it is logged.
+const MAX_LOGGED_CHARS: usize = 200;
+/// Keycloak signs ID tokens with RS256. Accepting only that refuses tokens signed with the client secret (HS256), which discovery also lists.
+const ID_TOKEN_ALGORITHM: CoreJwsSigningAlgorithm = CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256;
 
 /// The `groups` claim governance adds to tokens, in full-path form such as `/projects/scottylabs-org`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct GroupClaims {
-    #[serde(default, deserialize_with = "one_or_many")]
+    #[serde(
+        default,
+        deserialize_with = "one_or_many",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub groups: Option<Vec<String>>,
 }
 
@@ -135,22 +143,56 @@ pub struct Identity {
     pub groups: Option<Vec<String>>,
 }
 
-/// Why finishing a sign-in failed. Maps to the `error` codes the sign-in page understands.
+/// Why finishing a sign-in failed. [`SignInError::code`] is the `error` the sign-in page understands; [`SignInError::log`] says why in the service log, never with codes or secrets.
 #[derive(Debug)]
 pub enum SignInError {
-    /// The person backed out at Keycloak.
-    Cancelled,
-    /// The code or attempt was used, unknown or too old.
-    Expired,
+    /// Keycloak sent the browser back with `error` instead of a code. `access_denied` means the person backed out.
+    Provider {
+        error: String,
+        description: Option<String>,
+    },
+    /// The attempt was unknown, used or too old, or the browser came back without the sign-in cookie. People going back or waiting cause this, so it is logged at info.
+    Expired(&'static str),
+    /// Keycloak refused to exchange the code. `invalid_grant` usually means a used or slow code, but a wrong redirect URI or PKCE verifier says the same, so it is logged as a warning.
+    TokenRefused {
+        error: String,
+        description: Option<String>,
+    },
     Failed(anyhow::Error),
 }
 
 impl SignInError {
+    /// From the callback's `error` and `error_description`, which anyone can put in a URL, so both are cut short.
+    pub fn provider(error: &str, description: Option<&str>) -> Self {
+        Self::Provider {
+            error: clip(error),
+            description: description.map(clip),
+        }
+    }
+
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Cancelled => "cancelled",
-            Self::Expired => "expired",
-            Self::Failed(_) => "failed",
+            Self::Provider { error, .. } if error == "access_denied" => "cancelled",
+            Self::TokenRefused { error, .. } if error == "invalid_grant" => "expired",
+            Self::Expired(_) => "expired",
+            Self::Provider { .. } | Self::TokenRefused { .. } | Self::Failed(_) => "failed",
+        }
+    }
+
+    pub fn log(&self) {
+        match self {
+            Self::Provider { error, description } => tracing::warn!(
+                error = ?error,
+                description = ?description,
+                "Keycloak sent the sign-in back with an error"
+            ),
+            Self::Expired(reason) => tracing::info!(reason, "sign-in expired"),
+            Self::TokenRefused { error, description } => tracing::warn!(
+                error = ?error,
+                description = ?description,
+                "Keycloak refused the authorization code"
+            ),
+            Self::Failed(cause) => tracing::warn!(error = ?cause, "Keycloak sign-in failed"),
         }
     }
 }
@@ -159,6 +201,11 @@ impl From<anyhow::Error> for SignInError {
     fn from(error: anyhow::Error) -> Self {
         Self::Failed(error)
     }
+}
+
+/// Cuts outside text short before it goes into the log.
+pub fn clip(text: &str) -> String {
+    text.chars().take(MAX_LOGGED_CHARS).collect()
 }
 
 struct Discovery {
@@ -246,6 +293,7 @@ impl OidcProvider {
         let csrf = random_token();
         let state = encode_state(callback_url, &csrf);
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        // Only `openid` (added by the library), `email` and `profile`. The realm also offers `microprofile-jwt`, whose mapper writes realm roles into a claim also named `groups`, which would replace the group paths that PROJECT_ADMIN_GROUP is matched against.
         let (url, _, nonce) = client
             .authorize_url(
                 AuthenticationFlow::<CoreResponseType>::AuthorizationCode,
@@ -279,11 +327,10 @@ impl OidcProvider {
             .request_async(&self.http)
             .await
             .map_err(|error| match error {
-                RequestTokenError::ServerResponse(body)
-                    if *body.error() == CoreErrorResponseType::InvalidGrant =>
-                {
-                    SignInError::Expired
-                }
+                RequestTokenError::ServerResponse(body) => SignInError::TokenRefused {
+                    error: clip(body.error().as_ref()),
+                    description: body.error_description().map(|text| clip(text)),
+                },
                 other => SignInError::Failed(anyhow!("token exchange failed: {other}")),
             })?;
         let id_token = response
@@ -291,7 +338,7 @@ impl OidcProvider {
             .ok_or_else(|| anyhow!("Keycloak returned no ID token"))?;
         let nonce = Nonce::new(nonce);
 
-        let claims = match id_token.claims(&client.id_token_verifier(), &nonce) {
+        let claims = match id_token.claims(&id_token_verifier(&client), &nonce) {
             Ok(claims) => claims.clone(),
             Err(ClaimsVerificationError::SignatureVerification(
                 SignatureVerificationError::NoMatchingKey,
@@ -299,7 +346,7 @@ impl OidcProvider {
                 // Keycloak rotated its keys since discovery. Fetch them again and retry once.
                 let client = self.client(self.metadata(true).await?)?;
                 id_token
-                    .claims(&client.id_token_verifier(), &nonce)
+                    .claims(&id_token_verifier(&client), &nonce)
                     .map_err(|error| anyhow!("ID token rejected after refreshing keys: {error}"))?
                     .clone()
             }
@@ -307,6 +354,13 @@ impl OidcProvider {
         };
         identity(&claims).map_err(SignInError::Failed)
     }
+}
+
+/// Checks signature, issuer, audience and expiry, accepting only [`ID_TOKEN_ALGORITHM`].
+fn id_token_verifier(client: &SiteClient) -> IdTokenVerifier<'_, CoreJsonWebKey> {
+    client
+        .id_token_verifier()
+        .set_allowed_algs([ID_TOKEN_ALGORITHM])
 }
 
 fn identity(claims: &IdTokenClaims<GroupClaims, CoreGenderClaim>) -> anyhow::Result<Identity> {
@@ -367,6 +421,53 @@ mod tests {
         assert_eq!(decode_state(&URL_SAFE_NO_PAD.encode(b"[1,2]")), None);
         assert_eq!(decode_state(&encode_state("x", "")), None);
         assert_eq!(decode_state(&"a".repeat(MAX_STATE_LEN + 1)), None);
+    }
+
+    #[test]
+    fn sign_in_errors_map_to_the_sign_in_page_codes() {
+        let refused = |error: &str| SignInError::TokenRefused {
+            error: error.into(),
+            description: None,
+        };
+        assert_eq!(
+            SignInError::provider("access_denied", None).code(),
+            "cancelled"
+        );
+        assert_eq!(
+            SignInError::provider("invalid_request", Some("Missing parameter")).code(),
+            "failed"
+        );
+        assert_eq!(SignInError::Expired("no cookie").code(), "expired");
+        assert_eq!(refused("invalid_grant").code(), "expired");
+        assert_eq!(refused("unauthorized_client").code(), "failed");
+        assert_eq!(SignInError::Failed(anyhow!("broken")).code(), "failed");
+    }
+
+    #[test]
+    fn text_from_urls_is_cut_short_before_logging() {
+        let long = "x".repeat(MAX_LOGGED_CHARS * 5);
+        let SignInError::Provider { error, description } =
+            SignInError::provider(&long, Some(&long))
+        else {
+            panic!("expected a provider error");
+        };
+        assert_eq!(error.chars().count(), MAX_LOGGED_CHARS);
+        assert_eq!(
+            description.map(|d| d.chars().count()),
+            Some(MAX_LOGGED_CHARS)
+        );
+        assert_eq!(clip("caf\u{e9}"), "caf\u{e9}");
+    }
+
+    #[test]
+    fn missing_groups_stay_missing_when_serialized() {
+        let none = serde_json::to_value(GroupClaims { groups: None }).unwrap();
+        assert_eq!(none, serde_json::json!({}));
+        let empty = serde_json::to_value(GroupClaims {
+            groups: Some(Vec::new()),
+        })
+        .unwrap();
+        assert_eq!(empty, serde_json::json!({ "groups": [] }));
     }
 
     #[test]
