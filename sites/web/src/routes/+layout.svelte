@@ -4,6 +4,7 @@
   import "#lib/portal/ui/tokens.css";
   import { onMount, type Snippet } from "svelte";
   import posthog from "posthog-js";
+  import { page } from "$app/state";
   import { PUBLIC_POSTHOG_HOST, PUBLIC_POSTHOG_KEY } from "$app/env/public";
   import satoshiFont from "#lib/assets/fonts/Satoshi-Regular.woff2";
   import satoshiFontBold from "#lib/assets/fonts/Satoshi-Bold.woff2";
@@ -25,7 +26,10 @@
 
 <svelte:head>
   <title>ScottyLabs</title>
-  <meta name="description" content="The landing page for Scottylabs" />
+  <!-- A page that writes its own description returns { ownDescription: true } from its load. -->
+  {#if page.data.ownDescription !== true}
+    <meta name="description" content="The landing page for Scottylabs" />
+  {/if}
   {#each [satoshiFont, satoshiFontBold, satoshiFontMedium, satoshiFontBlack, jetbrainsMono] as font (font)}
     <link rel="preload" href={font} as="font" type="font/woff2" crossorigin="anonymous" />
   {/each}
