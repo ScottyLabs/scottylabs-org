@@ -99,6 +99,8 @@ struct PublishedRow {
 const PUBLISHED_COLUMNS: &str = "id, slug, featured, published, published_at";
 
 /// Published projects, featured first and then by name, optionally only those owned by one committee. For the Projects page and the committees track's projects block.
+///
+/// The committee is the published version's owner. The `committee` column follows the draft, so a project moved in an unpublished draft stays with its old committee until the move is published.
 pub async fn published_cards<'e>(
     db: impl PgExecutor<'e>,
     committee: Option<Committee>,
@@ -106,7 +108,7 @@ pub async fn published_cards<'e>(
     let rows = sqlx::query_as::<_, PublishedRow>(&format!(
         "SELECT {PUBLISHED_COLUMNS} FROM projects
          WHERE state = 'published' AND published IS NOT NULL
-           AND ($1::text IS NULL OR committee = $1)
+           AND ($1::text IS NULL OR published->>'committee' = $1)
          ORDER BY featured DESC, lower(published->>'name'), slug"
     ))
     .bind(committee)

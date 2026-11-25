@@ -160,6 +160,39 @@ async fn visitors_see_published_projects_featured_first(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn a_move_shows_on_committee_lists_only_once_published(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let admin = UserSpec::new("admin").admin().create(&db).await;
+    published(&db, Committee::Events, "tartanhacks", "TartanHacks").await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let lists = |app: axum::Router| async move {
+        let (_, events) = testing::get(&app, "/api/public/projects?committee=events", None).await;
+        let (_, tech) = testing::get(&app, "/api/public/projects?committee=tech", None).await;
+        (names(&events), names(&tech))
+    };
+
+    let (status, body) = save(&app, &admin, nova, full(Committee::Tech, "Nova", json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        lists(app.clone()).await,
+        (vec!["Nova".to_owned(), "TartanHacks".to_owned()], vec![])
+    );
+    let cards = super::public::published_cards(&db, Some(Committee::Tech))
+        .await
+        .unwrap();
+    assert!(cards.is_empty());
+
+    let (status, _) = act(&app, &admin, nova, "publish").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        lists(app.clone()).await,
+        (vec!["TartanHacks".to_owned()], vec!["Nova".to_owned()])
+    );
+    let (_, page) = testing::get(&app, "/api/public/projects/nova", None).await;
+    assert_eq!(page["project"]["committee"], "tech");
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn visitors_open_project_pages_and_follow_renames(db: PgPool) {
     let app = testing::app(db.clone()).await;
     let admin = UserSpec::new("admin").admin().create(&db).await;
