@@ -313,7 +313,7 @@ export interface ProjectDetail extends ProjectCard {
   publishedAt: string;
 }
 
-/** GET /api/public/projects */
+/** GET /api/public/projects?committee= */
 export interface PublicProjectsResponse {
   projects: ProjectCard[];
 }
@@ -383,8 +383,11 @@ export interface ProjectEditorResponse {
     draft: ProjectDoc;
     published: ProjectDoc | null;
     hasUnpublishedChanges: boolean;
+    /** A lead's submission while it waits, or the note it came back with since the last publish. */
     pendingApproval: ApprovalRef | null;
     editors: PersonRef[];
+    /** Directors of the owning committee, who approve what leads send. */
+    approvers: PersonRef[];
     checklist: ProjectChecklist;
     updatedAt: string;
     canEdit: boolean;

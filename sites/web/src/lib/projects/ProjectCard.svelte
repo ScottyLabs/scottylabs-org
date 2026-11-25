@@ -1,27 +1,5 @@
 <script lang="ts" module>
-  import type { ProjectKind, ProjectStatus } from "../api/types.ts";
-
-  export const PROJECT_STATUS_LABELS: Readonly<Record<ProjectStatus, string>> = {
-    live: "Live",
-    in_development: "In development",
-    annual: "Annual",
-    ongoing: "Ongoing",
-  };
-
-  export const PROJECT_KIND_LABELS: Readonly<Record<ProjectKind, string>> = {
-    app: "App",
-    event: "Event",
-    tool: "Tool",
-    brand: "Brand",
-    program: "Program",
-    fundraiser: "Fundraiser",
-    other: "Other",
-  };
-
-  /** The public page of a project, with the trailing slash the site serves it under. */
-  export function projectPath(slug: string): string {
-    return `/projects/${encodeURIComponent(slug)}/`;
-  }
+  export { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, projectPath } from "./labels.ts";
 </script>
 
 <script lang="ts">
@@ -36,6 +14,7 @@
   import { COMMITTEES } from "../portal/committees.ts";
   import CommitteeChip from "../portal/ui/CommitteeChip.svelte";
   import SelectionBox from "../site/SelectionBox.svelte";
+  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, projectPath } from "./labels.ts";
 
   let {
     project,
