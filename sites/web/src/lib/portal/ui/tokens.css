@@ -73,6 +73,27 @@
   --p-topbar-height-mobile: 56px;
   --p-tabbar-height: 64px;
   --p-content-width: 1200px;
+
+  /* Form fields (Figma Text field: 48 px, 16 px text). Containers with tight space, such as the
+     committee page editor's panels and list toolbars, take .p-fields-compact. */
+  --p-field-height: 48px;
+  --p-field-font: 1rem;
+  --p-field-line: 22px;
+}
+
+.p-fields-compact {
+  --p-field-height: 40px;
+  --p-field-font: 0.875rem;
+  --p-field-line: 20px;
+}
+
+/* Below 16 px, iOS Safari zooms the page into a field when it gets focus. */
+@media (max-width: 768px) {
+  :root,
+  .p-fields-compact {
+    --p-field-font: 1rem;
+    --p-field-line: 22px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

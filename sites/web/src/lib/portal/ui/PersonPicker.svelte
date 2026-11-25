@@ -352,8 +352,8 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 40px;
-    padding: 3px 12px 3px 4px;
+    min-height: var(--p-field-height);
+    padding: calc((var(--p-field-height) - 34px) / 2) 12px calc((var(--p-field-height) - 34px) / 2) 4px;
     border: 1px solid var(--p-border);
     border-radius: var(--p-radius);
     background: var(--p-surface);
@@ -427,8 +427,8 @@
     background: transparent;
     color: var(--p-text);
     font: inherit;
-    font-size: 0.875rem;
-    line-height: 20px;
+    font-size: var(--p-field-font);
+    line-height: var(--p-field-line);
     outline: none;
 
     &::placeholder {

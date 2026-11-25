@@ -629,9 +629,9 @@
     min-height: 120px;
     max-height: 480px;
     overflow-y: auto;
-    padding: 10px 12px;
-    font-size: 0.875rem;
-    line-height: 20px;
+    padding: 12px;
+    font-size: var(--p-field-font);
+    line-height: var(--p-field-line);
   }
   .rte--disabled .rte__text {
     cursor: not-allowed;
@@ -645,10 +645,10 @@
     user-select: none;
   }
   .rte--field .rte__placeholder {
-    top: 10px;
+    top: 12px;
     left: 12px;
-    font-size: 0.875rem;
-    line-height: 20px;
+    font-size: var(--p-field-font);
+    line-height: var(--p-field-line);
   }
 
   /* Inline: the text takes the type of the block it sits in. */

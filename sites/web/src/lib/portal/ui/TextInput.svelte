@@ -52,16 +52,16 @@
   .p-input input {
     box-sizing: border-box;
     width: 100%;
-    min-height: 40px;
-    padding: 9px 12px;
+    min-height: var(--p-field-height);
+    padding: calc((var(--p-field-height) - var(--p-field-line) - 2px) / 2) 12px;
     border: 1px solid var(--p-border);
     border-radius: var(--p-radius);
     background: var(--p-surface);
     color: var(--p-text);
     font: inherit;
     font-family: var(--p-font);
-    font-size: 0.875rem;
-    line-height: 20px;
+    font-size: var(--p-field-font);
+    line-height: var(--p-field-line);
     transition: border-color var(--p-duration) var(--p-ease);
 
     &::placeholder {
