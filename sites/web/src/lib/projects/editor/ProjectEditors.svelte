@@ -1,9 +1,11 @@
 <script lang="ts">
   // Who may edit the project besides admins and its committee's directors: leads of the owning
-  // committee, whose changes wait for approval. Shown to directors and admins.
-  import { onMount } from "svelte";
+  // committee, whose changes wait for approval. Shown to directors and admins. Only those leads
+  // are offered, so there is nothing to choose that the server would refuse.
+  import { tick } from "svelte";
+  import UserPlus from "@lucide/svelte/icons/user-plus";
   import X from "@lucide/svelte/icons/x";
-  import { get, isApiError, put } from "../../api/client.ts";
+  import { get, isAbortError, isApiError, put } from "../../api/client.ts";
   import type {
     CommitteeSlug,
     PeopleResponse,
@@ -12,15 +14,8 @@
   } from "../../api/types.ts";
   import { COMMITTEES } from "../../portal/committees.ts";
   import { getToasts } from "../../portal/toasts.svelte.ts";
-  import {
-    Avatar,
-    Field,
-    IconButton,
-    type PickedPerson,
-    PersonPicker,
-    isKnownPerson,
-    personName,
-  } from "../../portal/ui/index.ts";
+  import { Avatar, Button, Field, IconButton, Select } from "../../portal/ui/index.ts";
+  import { leadChoices, leadLabel, leadsIn } from "./editors.ts";
 
   let {
     projectId,
@@ -31,41 +26,61 @@
   }: {
     projectId: string;
     projectName: string;
+    /** The saved owner of the project, whose leads can be editors. */
     committee: CommitteeSlug;
     editors: readonly PersonRef[];
     onchange: (response: ProjectEditorResponse) => void;
   } = $props();
 
   const toasts = getToasts();
+  /** The committee's leads; null while they load. */
   let leads = $state.raw<PersonRef[] | null>(null);
-  /** Everyone with a role in the committee who is not a lead there, so the picker leaves them out. */
-  let notLeads = $state.raw<string[]>([]);
-  let picked = $state<PickedPerson | null>(null);
+  let loadFailed = $state(false);
+  let chosen = $state("");
   let error = $state<string | null>(null);
-  let saving = $state(false);
+  let saving = $state<"add" | "remove" | null>(null);
+  let section: HTMLElement | undefined = $state();
 
   const committeeName = $derived(COMMITTEES[committee].name);
-  const exclude = $derived([...editors.map((person) => person.id), ...notLeads]);
+  const choices = $derived(leads === null ? [] : leadChoices(leads, editors));
+  const options = $derived(choices.map((lead) => ({ value: lead.id, label: leadLabel(lead) })));
+  const help = $derived(describeChoices());
+  const placeholder = $derived(
+    leads === null ? "Loading leads" : options.length > 0 ? "Choose a lead" : "No leads to add",
+  );
 
-  onMount(() => {
-    void loadLeads();
+  // The owner can change while the editor is open (an admin moving the project); offer its leads.
+  $effect(() => {
+    const current = committee;
+    const controller = new AbortController();
+    void loadLeads(current, controller.signal);
+    return () => controller.abort();
   });
 
-  async function loadLeads(): Promise<void> {
+  async function loadLeads(current: CommitteeSlug, signal: AbortSignal): Promise<void> {
+    leads = null;
+    loadFailed = false;
+    chosen = "";
+    error = null;
     try {
-      const response = await get<PeopleResponse>("/people", { query: { committee } });
-      const isLead = (row: PeopleResponse["people"][number]) =>
-        row.roles.some((role) => role.role === "lead" && role.committee === committee);
-      leads = response.people.filter(isLead).map((row) => row.person);
-      notLeads = response.people.filter((row) => !isLead(row)).map((row) => row.person.id);
-    } catch {
-      // The server still refuses anyone who is not a lead; this only narrows the search.
+      const response = await get<PeopleResponse>("/people", { query: { committee: current }, signal });
+      leads = leadsIn(response.people, current);
+    } catch (failure) {
+      if (isAbortError(failure)) return;
       leads = [];
+      loadFailed = true;
     }
   }
 
+  function describeChoices(): string | undefined {
+    if (leads === null) return `Loading the leads in ${committeeName}.`;
+    if (loadFailed) return `We couldn\u2019t load the leads in ${committeeName}. Reload the page to try again.`;
+    if (leads.length === 0) return `${committeeName} has no leads yet. Add them on the People page first.`;
+    if (choices.length === 0) return `Every lead in ${committeeName} can already edit it.`;
+    return undefined;
+  }
+
   async function save(userIds: string[], done: string): Promise<boolean> {
-    saving = true;
     error = null;
     try {
       const response = await put<ProjectEditorResponse>(`/projects/${projectId}/editors`, { userIds });
@@ -77,37 +92,53 @@
         ? (failure.field("userIds") ?? failure.message)
         : "We couldn\u2019t change the editors. Try again.";
       return false;
-    } finally {
-      saving = false;
     }
   }
 
-  async function add(person: PickedPerson | null): Promise<void> {
-    if (person === null) return;
-    const lead = isKnownPerson(person) ? leads?.find((candidate) => candidate.id === person.id) : undefined;
-    if (lead === undefined) {
-      error = `${personName(person)} is not a lead in ${committeeName}. Add them as a lead on the People page first.`;
-      picked = null;
-      return;
-    }
+  async function add(event: SubmitEvent): Promise<void> {
+    event.preventDefault();
+    const lead = choices.find((candidate) => candidate.id === chosen);
+    if (lead === undefined || saving !== null) return;
+    saving = "add";
     const added = await save(
       [...editors.map((editor) => editor.id), lead.id],
-      `${lead.name} can now edit ${projectName}.`,
+      `${lead.name || lead.andrewId} can now edit ${projectName}.`,
     );
-    if (added) picked = null;
+    saving = null;
+    if (added) chosen = "";
+    void keepFocus();
   }
 
-  function remove(person: PersonRef): void {
-    void save(
+  async function remove(person: PersonRef): Promise<void> {
+    if (saving !== null) return;
+    saving = "remove";
+    await save(
       editors.filter((editor) => editor.id !== person.id).map((editor) => editor.id),
-      `${person.name} can no longer edit ${projectName}.`,
+      `${person.name || person.andrewId} can no longer edit ${projectName}.`,
     );
+    saving = null;
+    void keepFocus();
+  }
+
+  /** The button pressed can go away or turn off. Keyboard users then continue from the choice of lead, or the heading. */
+  async function keepFocus(): Promise<void> {
+    await tick();
+    const active = document.activeElement;
+    const lost =
+      active === null ||
+      active === document.body ||
+      (section?.contains(active) === true && active.matches(":disabled"));
+    if (!lost) return;
+    const target =
+      section?.querySelector<HTMLElement>("select:not(:disabled)") ??
+      section?.querySelector<HTMLElement>(".editors__heading");
+    target?.focus();
   }
 </script>
 
-<section class="editors" aria-labelledby="editors-heading">
+<section class="editors" aria-labelledby="editors-heading" bind:this={section}>
   <div class="editors__intro">
-    <h2 class="editors__heading" id="editors-heading">Editors</h2>
+    <h2 class="editors__heading" id="editors-heading" tabindex="-1">Editors</h2>
     <p class="editors__text">
       Leads in {committeeName} you add here can edit this project. What they publish waits for your
       approval.
@@ -124,11 +155,11 @@
             <span class="editors__andrew">{person.andrewId}</span>
           </span>
           <IconButton
-            label={`Remove ${person.name} as an editor`}
+            label={`Remove ${person.name || person.andrewId} as an editor`}
             icon={X}
             size="sm"
-            disabled={saving}
-            onclick={() => remove(person)}
+            disabled={saving !== null}
+            onclick={() => void remove(person)}
           />
         </li>
       {/each}
@@ -137,16 +168,28 @@
     <p class="editors__text">No leads can edit it yet.</p>
   {/if}
 
-  <Field label="Add an editor" error={error} help={leads !== null && leads.length === 0 ? `${committeeName} has no leads yet. Add them on the People page.` : undefined}>
-    <PersonPicker
-      bind:value={picked}
-      onchange={(person) => void add(person)}
-      placeholder={`Search leads in ${committeeName}`}
-      allowAndrewId={false}
-      {exclude}
-      disabled={saving}
-    />
-  </Field>
+  <form class="editors__add" onsubmit={(event) => void add(event)}>
+    <Field label="Add an editor" {error} {help}>
+      <div class="editors__row">
+        <Select
+          class="editors__select"
+          bind:value={chosen}
+          {options}
+          {placeholder}
+          disabled={options.length === 0 || saving !== null}
+        />
+        <Button
+          type="submit"
+          variant="outline"
+          icon={UserPlus}
+          loading={saving === "add"}
+          disabled={chosen === "" || saving !== null}
+        >
+          Add editor
+        </Button>
+      </div>
+    </Field>
+  </form>
 </section>
 
 <style>
@@ -166,6 +209,10 @@
     font-size: 1.25rem;
     font-weight: 500;
     line-height: 28px;
+
+    &:focus {
+      outline: none;
+    }
   }
   .editors__text {
     margin: 0;
@@ -207,5 +254,14 @@
     font-size: 0.75rem;
     font-weight: 400;
     line-height: 16px;
+  }
+  .editors__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+
+    & :global(.editors__select) {
+      flex: 1 1 220px;
+    }
   }
 </style>

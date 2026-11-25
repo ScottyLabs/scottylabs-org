@@ -422,7 +422,7 @@
           <ProjectEditors
             projectId={server.id}
             projectName={name}
-            committee={doc.committee}
+            committee={server.draft.committee}
             editors={server.editors}
             onchange={(response) => (server = response.project)}
           />

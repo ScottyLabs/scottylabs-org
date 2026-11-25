@@ -4,7 +4,7 @@
 /* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access */
 
 import assert from "node:assert/strict";
-import type { ProjectCard, ProjectDoc } from "../src/lib/api/types.ts";
+import type { PersonRef, PersonRow, ProjectCard, ProjectDoc } from "../src/lib/api/types.ts";
 import {
   draftCard,
   draftDetail,
@@ -25,6 +25,7 @@ import {
   resultsLine,
   searchTextAfterNavigation,
 } from "../src/lib/projects/filter.ts";
+import { leadChoices, leadLabel, leadsIn } from "../src/lib/projects/editor/editors.ts";
 import { linkHost, linkLabel, projectPath } from "../src/lib/projects/labels.ts";
 import { videoEmbed } from "../src/lib/projects/video.ts";
 
@@ -254,4 +255,66 @@ Deno.test("states read the same in the list and the editor", () => {
   assert.ok(matchesRow(row, "maps"));
   assert.ok(matchesRow(row, "cmu-m"));
   assert.ok(!matchesRow(row, "nova"));
+});
+
+function personRow(
+  person: Partial<PersonRef>,
+  roles: {
+    role: "lead" | "director" | "admin";
+    committee: PersonRow["roles"][number]["committee"];
+  }[],
+): PersonRow {
+  return {
+    person: {
+      id: person.andrewId ?? "id",
+      andrewId: "someone",
+      name: "Someone",
+      initials: "S",
+      email: null,
+      hasSignedIn: true,
+      lastSeenAt: null,
+      ...person,
+    },
+    roles: roles.map((role, index) => ({
+      id: `${person.andrewId ?? "id"}-${index.toString()}`,
+      canPostTicker: false,
+      projectIds: [],
+      appointedBy: null,
+      appointedAt: "2026-11-24T00:00:00Z",
+      source: "portal",
+      ...role,
+    })),
+  };
+}
+
+Deno.test("only leads of the owning committee can be chosen as editors", () => {
+  const people = [
+    personRow({ andrewId: "spchoksh", name: "Sara Chokshi" }, [
+      { role: "lead", committee: "events" },
+    ]),
+    personRow({ andrewId: "evanfost", name: "Evan Foster" }, [
+      { role: "director", committee: "events" },
+    ]),
+    personRow({ andrewId: "techlead", name: "Tech Lead" }, [
+      { role: "lead", committee: "tech" },
+      { role: "director", committee: "events" },
+    ]),
+    personRow({ andrewId: "aaron", name: "" }, [{ role: "lead", committee: "events" }]),
+  ];
+  const leads = leadsIn(people, "events");
+  assert.deepEqual(
+    leads.map((lead) => lead.andrewId),
+    ["spchoksh", "aaron"],
+  );
+  assert.deepEqual(Object.keys(leads[0]).toSorted(), ["andrewId", "id", "initials", "name"]);
+  const sara = leads[0];
+  assert.deepEqual(
+    leadChoices(leads, []).map((lead) => leadLabel(lead)),
+    ["aaron", "Sara Chokshi (spchoksh)"],
+  );
+  assert.deepEqual(
+    leadChoices(leads, [sara]).map((lead) => lead.andrewId),
+    ["aaron"],
+  );
+  assert.deepEqual(leadsIn(people, "design"), []);
 });
