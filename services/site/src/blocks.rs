@@ -588,12 +588,14 @@ fn clean_block(content: &mut BlockContent, fields: &mut Fields<'_>) {
 }
 
 fn clean_rich_text(body: &mut String, fields: &mut Fields<'_>) {
-    let clean = richtext::sanitize(body);
+    const TOO_MUCH: &str =
+        "This text has too much formatting to save. Remove some of it and try again.";
+    let Ok(clean) = richtext::clean(body) else {
+        fields.add("body", TOO_MUCH);
+        return;
+    };
     if clean.len() > limits::BODY_HTML_BYTES {
-        fields.add(
-            "body",
-            "This text has too much formatting to save. Remove some of it and try again.",
-        );
+        fields.add("body", TOO_MUCH);
         return;
     }
     if richtext::plain_text(&clean).chars().count() > richtext::MAX_TEXT_CHARS {

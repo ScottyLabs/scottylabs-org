@@ -438,6 +438,34 @@ async fn saves_need_the_latest_version_and_a_valid_page(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn text_with_too_much_markup_is_refused_at_once(db: PgPool) {
+    let app = setup(&db).await;
+    let anish = testing::persona(&db, "apallati").await;
+    let page = editor(&app, &anish, "tech").await;
+    let mut doc = page["draft"].clone();
+    let text = doc["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|b| b["type"] == "text")
+        .unwrap();
+    // Thousands of unclosed tables take the HTML parser time that grows with the square of their number.
+    doc["blocks"][text]["props"]["body"] = json!("<table>x".repeat(31_000));
+    let started = std::time::Instant::now();
+    let (status, body) = save(&app, &anish, "tech", &doc, &page["draftVersion"]).await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"][format!("blocks.{text}.body")],
+        "This text has too much formatting to save. Remove some of it and try again."
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn uploaded_photos_take_their_stored_size(db: PgPool) {
     let app = setup(&db).await;
     let anish = testing::persona(&db, "apallati").await;

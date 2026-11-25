@@ -30,11 +30,11 @@ use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,site=debug")),
-        )
-        .init();
+    // html5ever warns once per node it cannot place while ammonia sanitizes, which anyone can trigger thousands of times per request, so it logs only errors, whatever RUST_LOG says.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,site=debug"))
+        .add_directive("html5ever=error".parse()?);
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let config = Arc::new(Config::from_env().context("loading configuration")?);
     let db = db::connect(&config.database_url).await?;

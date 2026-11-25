@@ -595,6 +595,44 @@ async fn drafts_are_checked_cleaned_and_kept_from_visitors(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn descriptions_with_too_much_markup_are_refused_at_once(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let base = full(Committee::Events, "Nova", json!({}));
+
+    // Thousands of unclosed tables take the HTML parser time that grows with the square of their number, so they are refused before parsing.
+    let started = std::time::Instant::now();
+    let (status, body) = save(
+        &app,
+        &p.director,
+        nova,
+        with(&base, json!({ "description": "<table>x".repeat(31_000) })),
+    )
+    .await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"]["description"],
+        "The description has too much formatting to save. Remove some of it and try again."
+    );
+
+    // Someone who may not edit the project still gets 403 first.
+    let (status, _) = save(
+        &app,
+        &p.member,
+        nova,
+        with(&base, json!({ "description": "<table>x".repeat(31_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn only_editors_save_and_only_publishers_move_projects(db: PgPool) {
     let app = testing::app(db.clone()).await;
     let p = people(&db).await;

@@ -5,6 +5,24 @@ use std::collections::HashSet;
 /// Longest description or body, counted in characters of visible text.
 pub const MAX_TEXT_CHARS: usize = 4000;
 
+/// Longest markup [`clean`] parses, in bytes. Parsing some malformed markup, such as thousands of unclosed tables, takes time that grows with the square of its length, so longer sources are refused before parsing. 4,000 characters with ordinary formatting stay far below it.
+pub const MAX_SOURCE_BYTES: usize = 16 * MAX_TEXT_CHARS;
+/// Most tags [`clean`] parses, for the same reason.
+pub const MAX_SOURCE_TAGS: usize = MAX_TEXT_CHARS;
+
+/// Markup [`clean`] refused to parse because it is too long or holds too many tags.
+#[derive(Debug, PartialEq, Eq)]
+pub struct TooMuchMarkup;
+
+/// [`sanitize`] for markup someone sent: refuses sources over [`MAX_SOURCE_BYTES`] or [`MAX_SOURCE_TAGS`] without parsing them. CPU bound; handlers run it off the async runtime.
+pub fn clean(raw: &str) -> Result<String, TooMuchMarkup> {
+    let tags = raw.bytes().filter(|byte| *byte == b'<').count();
+    if raw.len() > MAX_SOURCE_BYTES || tags > MAX_SOURCE_TAGS {
+        return Err(TooMuchMarkup);
+    }
+    Ok(sanitize(raw))
+}
+
 /// Keeps only p, br, strong, em, a (https and mailto links), ul, ol and li. Links open in a new tab with `rel="noopener noreferrer nofollow"`. Everything else is removed, keeping its text.
 pub fn sanitize(html: &str) -> String {
     let tags: HashSet<&str> = ["p", "br", "strong", "em", "a", "ul", "ol", "li"]
@@ -83,6 +101,31 @@ mod tests {
         assert!(clean.contains("noopener"));
         assert!(clean.contains(r#"target="_blank""#));
         assert!(!sanitize(r#"<a href="/relative">x</a>"#).contains("href"));
+    }
+
+    #[test]
+    fn long_or_tag_heavy_sources_are_refused_before_parsing() {
+        // Nested tables make the parser's work grow with the square of their number.
+        let bomb = "<table>x".repeat(32_000);
+        let started = std::time::Instant::now();
+        assert_eq!(clean(&bomb), Err(TooMuchMarkup));
+        assert_eq!(
+            clean(&"<table>x".repeat(MAX_SOURCE_TAGS + 1)),
+            Err(TooMuchMarkup)
+        );
+        assert_eq!(clean(&"x".repeat(MAX_SOURCE_BYTES + 1)), Err(TooMuchMarkup));
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+
+        // The most markup allowed still parses quickly, and ordinary text is cleaned as before.
+        let started = std::time::Instant::now();
+        assert!(clean(&"<table>x".repeat(MAX_SOURCE_TAGS)).is_ok());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        let text = format!("<p>{}</p>", "word ".repeat(800));
+        assert_eq!(clean(&text), Ok(sanitize(&text)));
     }
 
     #[test]

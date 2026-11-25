@@ -5,6 +5,7 @@ mod announcements;
 mod approvals;
 mod auth;
 mod committee_pages;
+mod common;
 mod me;
 mod media;
 mod overview;
