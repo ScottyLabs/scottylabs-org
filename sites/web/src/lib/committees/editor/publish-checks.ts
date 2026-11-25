@@ -3,6 +3,7 @@
 import type { Block, CommitteePageDoc, ImageRef } from "../../api/types.ts";
 import { blockName } from "../blocks.ts";
 import { LIMITS } from "../limits.ts";
+import { videoEmbed } from "../video.ts";
 
 export interface PublishProblem {
   /** The block to fix, or null for the page settings. */
@@ -66,6 +67,10 @@ function blockProblems(block: Block, index: number): PublishProblem[] {
       const list: PublishProblem[] = [];
       if (block.props.url.trim() === "")
         list.push(problem("url", "Add a YouTube or Vimeo link to the video, or remove it."));
+      else if (videoEmbed(block.props.url) === null)
+        list.push(
+          problem("url", "Use a link to one YouTube or Vimeo video, not a channel or playlist."),
+        );
       if (needsAlt(block.props.poster)) {
         list.push(
           problem(

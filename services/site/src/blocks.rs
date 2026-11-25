@@ -440,6 +440,57 @@ fn width_phrase(width: u8) -> String {
     format!("{} width", width_name(width))
 }
 
+/// The video a YouTube or Vimeo link plays, read the way the page reads it (`videoEmbed` in sites/web/src/lib/committees/video.ts): YouTube watch, `youtu.be`, embed, shorts and live links, and Vimeo links with a video number. Channels, playlists and profiles play no single video, so the page could not show them.
+pub fn video_id(link: &str) -> Option<String> {
+    let url = url::Url::parse(link.trim()).ok()?;
+    if url.scheme() != "https" {
+        return None;
+    }
+    let host = url.host_str()?;
+    let host = host
+        .strip_prefix("www.")
+        .or_else(|| host.strip_prefix("m."))
+        .unwrap_or(host);
+    let parts: Vec<&str> = url.path().split('/').collect();
+    match host {
+        "youtube.com" | "youtu.be" => {
+            let id = if host == "youtu.be" {
+                parts.get(1).map(|id| (*id).to_owned())
+            } else if url.path() == "/watch" {
+                url.query_pairs()
+                    .find(|(key, _)| key == "v")
+                    .map(|(_, id)| id.into_owned())
+            } else {
+                match (parts.get(1), parts.get(2)) {
+                    (Some(&("embed" | "shorts" | "live")), Some(id)) => Some((*id).to_owned()),
+                    _ => None,
+                }
+            };
+            id.filter(|id| {
+                (6..=20).contains(&id.len())
+                    && id
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+            })
+        }
+        "vimeo.com" | "player.vimeo.com" => {
+            let is_number =
+                |id: &&str| (3..=12).contains(&id.len()) && id.chars().all(|c| c.is_ascii_digit());
+            let named: Vec<&str> = parts.into_iter().filter(|part| !part.is_empty()).collect();
+            let id = if host == "player.vimeo.com" {
+                (named.first() == Some(&"video"))
+                    .then(|| named.get(1).copied())
+                    .flatten()
+                    .filter(is_number)
+            } else {
+                named.into_iter().find(is_number)
+            };
+            id.map(str::to_owned)
+        }
+        _ => None,
+    }
+}
+
 fn clean_block(content: &mut BlockContent, fields: &mut Fields<'_>) {
     match content {
         BlockContent::Cover(cover) => {
@@ -494,7 +545,11 @@ fn clean_block(content: &mut BlockContent, fields: &mut Fields<'_>) {
                 video.url.clear();
             } else {
                 match check_video_url(url) {
-                    Ok(clean) => video.url = clean,
+                    Ok(clean) if video_id(&clean).is_some() => video.url = clean,
+                    Ok(_) => fields.add(
+                        "url",
+                        "Use a link to one YouTube or Vimeo video, not a channel or playlist.",
+                    ),
                     Err(message) => fields.add("url", message),
                 }
             }
@@ -1164,7 +1219,53 @@ mod tests {
             fields(check_for_publishing(&empty)),
             vec!["blocks.2.url".to_owned()]
         );
-        assert!(clean_draft(with_block(2, video("https://youtu.be/abc"))).is_ok());
+        assert!(clean_draft(with_block(2, video("https://youtu.be/dQw4w9WgXcQ"))).is_ok());
+        for channel in [
+            "https://www.youtube.com/@scottylabs",
+            "https://www.youtube.com/playlist?list=PL1234567",
+            "https://vimeo.com/scottylabs",
+        ] {
+            assert_eq!(
+                fields(clean_draft(with_block(2, video(channel)))),
+                vec!["blocks.2.url".to_owned()],
+                "{channel} plays no single video"
+            );
+        }
+    }
+
+    #[test]
+    fn video_links_are_read_like_the_page_reads_them() {
+        for (link, id) in [
+            ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            (
+                "https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=30",
+                "dQw4w9WgXcQ",
+            ),
+            ("https://youtu.be/dQw4w9WgXcQ?si=abc", "dQw4w9WgXcQ"),
+            ("https://www.youtube.com/embed/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://youtube.com/shorts/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://www.youtube.com/live/dQw4w9WgXcQ", "dQw4w9WgXcQ"),
+            ("https://vimeo.com/76979871", "76979871"),
+            ("https://vimeo.com/channels/staffpicks/76979871", "76979871"),
+            ("https://player.vimeo.com/video/76979871", "76979871"),
+        ] {
+            assert_eq!(video_id(link).as_deref(), Some(id), "{link}");
+        }
+        for link in [
+            "",
+            "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            "https://www.youtube.com/@scottylabs",
+            "https://www.youtube.com/watch",
+            "https://www.youtube.com/watch?v=abc",
+            "https://www.youtube.com/watch?v=bad%20id%20here",
+            "https://youtu.be/",
+            "https://www.youtube.com/embed/",
+            "https://vimeo.com/scottylabs",
+            "https://player.vimeo.com/76979871",
+            "https://example.com/watch?v=dQw4w9WgXcQ",
+        ] {
+            assert_eq!(video_id(link), None, "{link}");
+        }
     }
 
     #[test]

@@ -367,6 +367,21 @@ async fn saves_need_the_latest_version_and_a_valid_page(db: PgPool) {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body["error"]["fields"]["blocks.0.image"].is_string());
 
+    // A channel plays no single video, so the page could not show it.
+    let mut channel = moved.clone();
+    channel["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "id": "recap", "type": "video", "width": 12,
+            "props": { "url": "https://www.youtube.com/@scottylabs", "title": "Channel", "poster": null } }));
+    let last = channel["blocks"].as_array().unwrap().len() - 1;
+    let (status, body) = save(&app, &anish, "tech", &channel, &json!(2)).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"][format!("blocks.{last}.url")],
+        "Use a link to one YouTube or Vimeo video, not a channel or playlist."
+    );
+
     // Going back to the published version shows as published again.
     let (status, saved) = save(&app, &anish, "tech", &page["draft"], &json!(2)).await;
     assert_eq!(status, StatusCode::OK);

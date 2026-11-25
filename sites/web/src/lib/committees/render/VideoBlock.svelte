@@ -63,7 +63,9 @@
           {#if embed === null}
             <span class="video__note">
               <Video size={16} strokeWidth={2} aria-hidden="true" />
-              Add a YouTube or Vimeo link in the settings.
+              {props.url.trim() === ""
+                ? "Add a YouTube or Vimeo link in the settings."
+                : "This link does not go to one YouTube or Vimeo video. Change it in the settings."}
             </span>
           {/if}
         {:else}
@@ -86,7 +88,7 @@
         maxLength={LIMITS.videoTitle}
         onchange={(title) => onchange({ ...props, title })}
       />
-      <span class="video__provider">{embed?.provider ?? "Video"} video</span>
+      {#if embed !== null}<span class="video__provider">{embed.provider} video</span>{/if}
     </figcaption>
   </figure>
 {/if}
