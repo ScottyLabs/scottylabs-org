@@ -134,7 +134,8 @@ struct ErrorDetail<'a> {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         if let Self::Internal(cause) = &self {
-            tracing::error!(error = ?cause, "internal error");
+            // `{:#}` puts the whole chain of causes on one line.
+            tracing::error!(error = %format!("{cause:#}"), "internal error");
         }
         let fields = match &self {
             Self::Validation { fields, .. } if !fields.is_empty() => Some(fields),

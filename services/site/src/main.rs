@@ -20,6 +20,7 @@ mod static_files;
 #[cfg(test)]
 mod testing;
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -34,7 +35,11 @@ async fn main() -> anyhow::Result<()> {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,site=debug"))
         .add_directive("html5ever=error".parse()?);
-    tracing_subscriber::fmt().with_env_filter(filter).init();
+    // Colors only on a terminal; journald and log collectors would store the escape codes.
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(std::io::stdout().is_terminal())
+        .init();
 
     let config = Arc::new(Config::from_env().context("loading configuration")?);
     let (sign_in, media) = config.describe();
