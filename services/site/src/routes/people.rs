@@ -7,8 +7,7 @@ mod governance;
 pub use governance::spawn_sync as spawn_governance_sync;
 
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::CACHE_CONTROL;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
@@ -24,7 +23,7 @@ use crate::error::{AppError, AppResult, Problems};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, PersonRef, Role, check_line};
 use crate::permissions::{self, PeopleScope};
-use crate::routes::common::{self, query_param};
+use crate::routes::common::{self, no_store, query_param};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -99,13 +98,6 @@ async fn person_row(conn: &mut PgConnection, user_id: Uuid) -> AppResult<PersonR
         .await?
         .pop()
         .ok_or_else(|| AppError::not_found("person"))
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 // ---------------------------------------------------------------------------

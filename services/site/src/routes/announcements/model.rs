@@ -194,11 +194,6 @@ pub fn approval_too_late(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> bool 
     expires_at <= now + TimeDelta::minutes(APPROVAL_MARGIN_MINUTES)
 }
 
-/// A message in curly quotes, for activity summaries.
-pub fn quote(message: &str) -> String {
-    format!("\u{201C}{message}\u{201D}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,8 +1,24 @@
 //! Small helpers the route modules share.
 
+use axum::http::HeaderValue;
+use axum::http::header::CACHE_CONTROL;
+use axum::response::Response;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+
+/// Marks a response as never cached. `static_files::security_headers` already adds this to API responses that set no `Cache-Control`; handlers use it where they say so on purpose.
+pub fn no_store(mut response: Response) -> Response {
+    response
+        .headers_mut()
+        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
+
+/// Text in curly quotes for activity summaries and messages, trimmed.
+pub fn quoted(text: &str) -> String {
+    format!("\u{201c}{}\u{201d}", text.trim())
+}
 
 /// Runs CPU-bound work, such as sanitizing rich text, on the blocking thread pool, so a slow request never stalls the others that share its async worker thread.
 pub async fn blocking<T>(work: impl FnOnce() -> T + Send + 'static) -> AppResult<T>
@@ -43,6 +59,11 @@ mod tests {
         assert_eq!(query_param(Some("q=a%00b%07"), "q"), Some("ab".into()));
         assert_eq!(query_param(Some("q=%20"), "q"), None);
         assert_eq!(query_param(None, "q"), None);
+    }
+
+    #[test]
+    fn quotes_are_curly_and_trimmed() {
+        assert_eq!(quoted(" Nova "), "\u{201c}Nova\u{201d}");
     }
 
     #[test]

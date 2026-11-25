@@ -1,7 +1,7 @@
 //! Signing in and out: Keycloak through the Ricochet relay, dev sign-in as a seeded persona, and logout.
 
 use axum::extract::{RawQuery, State};
-use axum::http::header::{CACHE_CONTROL, LOCATION};
+use axum::http::header::LOCATION;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -18,6 +18,7 @@ use crate::auth::session::{self, NewSession, secrets_match};
 use crate::config::{Config, DevLogin};
 use crate::error::{AppError, AppResult};
 use crate::models::AuthMode;
+use crate::routes::common::no_store;
 use crate::seed::people::{PERSONAS, persona};
 use crate::state::AppState;
 
@@ -118,13 +119,6 @@ fn redirect(location: &str) -> Response {
 
 fn sign_in_error(code: &str) -> Response {
     redirect(&format!("{SIGN_IN_PAGE}?error={code}"))
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 /// Binds a sign-in to the browser that started it, so nobody can finish their own sign-in in someone else's browser.

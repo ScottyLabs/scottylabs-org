@@ -26,12 +26,12 @@ use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, PersonRef, TickerSource};
 use crate::permissions::{self, Posting};
-use crate::routes::common;
+use crate::routes::common::{self, no_store, quoted};
 use crate::state::AppState;
 
 use model::{
     AnnouncementInput, AnnouncementKind, AnnouncementPatch, AnnouncementState, Row, Valid,
-    approval_too_late, quote, validate,
+    approval_too_late, validate,
 };
 
 /// At most this many announcements are live at once.
@@ -189,13 +189,6 @@ impl Tab {
             )),
         }
     }
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
 }
 
 fn one(announcement: AnnouncementDto) -> Json<AnnouncementResponse> {
@@ -607,7 +600,7 @@ async fn post_new(
                 viewer,
                 "announcement.publish",
                 &row,
-                format!("Posted {} to the ticker", quote(&row.message)),
+                format!("Posted {} to the ticker", quoted(&row.message)),
             )
             .await?;
             row
@@ -629,7 +622,7 @@ async fn post_new(
                 viewer,
                 "announcement.submit",
                 &row,
-                format!("Sent {} for approval", quote(&row.message)),
+                format!("Sent {} for approval", quoted(&row.message)),
             )
             .await?;
             row
@@ -772,11 +765,11 @@ async fn update(
         .await?;
         // An approver who fixes a lead's submission keeps it waiting; it stays the lead's.
         let summary = if updated.created_by == Some(viewer.user_id) {
-            format!("Sent {} for approval again", quote(&updated.message))
+            format!("Sent {} for approval again", quoted(&updated.message))
         } else {
             format!(
                 "Edited {} while it waits for approval",
-                quote(&updated.message)
+                quoted(&updated.message)
             )
         };
         log(&mut tx, &viewer, "announcement.resubmit", &updated, summary).await?;
@@ -786,7 +779,7 @@ async fn update(
             &viewer,
             "announcement.edit",
             &updated,
-            format!("Edited {} on the ticker", quote(&updated.message)),
+            format!("Edited {} on the ticker", quoted(&updated.message)),
         )
         .await?;
     }
@@ -833,11 +826,11 @@ async fn extend(
     }
     let updated = set_expiry(&mut tx, id, expires_at).await?;
     let summary = if expires_at == limit {
-        format!("Extended {} to the 30-day limit", quote(&updated.message))
+        format!("Extended {} to the 30-day limit", quoted(&updated.message))
     } else {
         format!(
             "Extended {} by {} day{}",
-            quote(&updated.message),
+            quoted(&updated.message),
             input.days,
             if input.days == 1 { "" } else { "s" }
         )
@@ -893,7 +886,7 @@ async fn end(
         &viewer,
         "announcement.end",
         &updated,
-        format!("Took {} off the ticker", quote(&updated.message)),
+        format!("Took {} off the ticker", quoted(&updated.message)),
     )
     .await?;
     let announcement = describe_one(&mut tx, &viewer, updated, now).await?;
@@ -1025,7 +1018,7 @@ async fn remove(
         &viewer,
         "announcement.delete",
         &row,
-        format!("Deleted {}", quote(&row.message)),
+        format!("Deleted {}", quoted(&row.message)),
     )
     .await?;
     tx.commit().await?;
@@ -1138,7 +1131,7 @@ pub async fn apply_approval(
         approver,
         "announcement.approve",
         &updated,
-        format!("Approved {} for the ticker", quote(&updated.message)),
+        format!("Approved {} for the ticker", quoted(&updated.message)),
     )
     .await
 }
@@ -1162,7 +1155,7 @@ pub async fn apply_send_back(
         approver,
         "announcement.send_back",
         &updated,
-        format!("Sent {} back for changes", quote(&updated.message)),
+        format!("Sent {} back for changes", quoted(&updated.message)),
     )
     .await
 }

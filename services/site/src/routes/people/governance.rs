@@ -15,11 +15,12 @@ use sqlx::{PgConnection, PgPool};
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
-use super::{clear_lead_projects, display_name, find_or_create_user, no_store, record};
+use super::{clear_lead_projects, display_name, find_or_create_user, record};
 use crate::auth::{PortalViewer, Viewer, normalize_andrew_id};
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, Role};
 use crate::permissions;
+use crate::routes::common::{self, no_store};
 use crate::state::AppState;
 
 const GOVERNANCE_URL: &str =
@@ -118,9 +119,10 @@ impl Listed {
     }
 }
 
+/// A name from the governance file in curly quotes, cut short, since the file is not ours.
 fn quoted(text: &str) -> String {
     let short: String = text.chars().take(MAX_QUOTED_CHARS).collect();
-    format!("\u{201c}{short}\u{201d}")
+    common::quoted(&short)
 }
 
 /// Reads `data/committees.yaml`. The organization director is not a committee director and is ignored; governance never makes anyone an admin.
