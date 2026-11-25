@@ -311,6 +311,13 @@ Each builder owns the files of their track. Edit shared files only where this ta
 
 Record changes to this contract here, newest first, with the reason.
 
+- 2026-11-24, projects review fixes. Additive only.
+
+  - Public project lists, `?committee=` and `published_cards(db, Some(committee))`, filter on the published version's committee (`published->>'committee'`), not the `committee` column, which follows the draft. A move saved in a draft shows on committee lists only once it is published (PR-7). Other modules that list a committee's published projects should do the same.
+  - Discarding a draft that moved the project needs `can_publish_projects_for` the published committee, like any other move.
+  - Migration `0201_one_featured_project.sql` adds a unique partial index, so at most one project is featured. Featuring takes a transaction advisory lock (`hashtext('projects.featured')`) first, so two admins featuring at once take turns instead of one failing. The seed features TartanHacks only when no project is featured yet.
+  - The root layout's generic meta description is now a fallback: a page that writes its own returns `{ ownDescription: true }` from its `load` (the Projects page and project pages do), and the root layout leaves the default out. Other public pages with their own description can do the same.
+
 - 2026-11-24, projects. Additive only.
 
   - `ProjectEditorResponse.project.approvers` lists the directors of the owning committee, so a lead's "Send for approval" can say who decides. `pendingApproval` is the waiting submission, or the sent back one (with its note) until the project is published again; approved and withdrawn ones are not shown.
