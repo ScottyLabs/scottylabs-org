@@ -23,6 +23,7 @@ import {
   matchesSearch,
   relatedProjects,
   resultsLine,
+  searchTextAfterNavigation,
 } from "../src/lib/projects/filter.ts";
 import { linkHost, linkLabel, projectPath } from "../src/lib/projects/labels.ts";
 import { videoEmbed } from "../src/lib/projects/video.ts";
@@ -78,6 +79,27 @@ Deno.test("filters come from the address and go back into it", () => {
   assert.equal(filtersFromParams(new URLSearchParams(`q=${"x".repeat(200)}`)).q.length, 80);
   assert.equal(filtersQuery({ committee: null, q: "  " }), "");
   assert.equal(filtersQuery({ committee: "tech", q: " hack day " }), "?committee=tech&q=hack+day");
+});
+
+Deno.test("typing a word, a space, a pause and another word keeps both words", () => {
+  // "cmu " is typed, and after the pause the address says ?q=cmu.
+  let typed = "cmu ";
+  const settled = filtersQuery({ committee: null, q: typed });
+  assert.equal(settled, "?q=cmu");
+  const fromAddress = filtersFromParams(new URLSearchParams(settled)).q;
+  typed = searchTextAfterNavigation(typed, fromAddress);
+  assert.equal(typed, "cmu ");
+  // Typing goes on from there.
+  typed += "maps";
+  assert.equal(filtersQuery({ committee: null, q: typed }), "?q=cmu+maps");
+  assert.ok(matchesSearch(card({ name: "CMU Maps" }), typed));
+  assert.equal(
+    resultsLine(1, { committee: null, q: typed }),
+    "1 project matches \u201Ccmu maps\u201D",
+  );
+  // A link to another search replaces what is typed.
+  assert.equal(searchTextAfterNavigation("cmu ", "nova"), "nova");
+  assert.equal(searchTextAfterNavigation("cmu ", ""), "");
 });
 
 Deno.test("search looks at name, summary, excerpt, committee, kind and status", () => {

@@ -36,6 +36,14 @@ export function filtersQuery(filters: ProjectFilters): string {
   return query === "" ? "" : `?${query}`;
 }
 
+/**
+ * What the search box should hold after a navigation that set `fromAddress`. The address keeps the
+ * search trimmed, so text being typed ("cmu ") stays as it is while it says the same thing.
+ */
+export function searchTextAfterNavigation(typed: string, fromAddress: string): string {
+  return typed.trim() === fromAddress.trim() ? typed : fromAddress;
+}
+
 /** Lowercase and without accents, so "cafe" finds "Caf\u00E9". */
 export function fold(text: string): string {
   return text

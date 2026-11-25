@@ -3,7 +3,7 @@
   // with a skeleton and loads the published projects in the browser. The committee tab and the
   // search text live in the address (?committee=&q=), so filtered lists can be shared and the
   // project pages' breadcrumb leads back to the same list.
-  import { tick } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import { afterNavigate, goto } from "$app/navigation";
   import Plus from "@lucide/svelte/icons/plus";
   import SearchX from "@lucide/svelte/icons/search-x";
@@ -24,6 +24,7 @@
     filtersQuery,
     rememberFilters,
     resultsLine,
+    searchTextAfterNavigation,
   } from "#lib/projects/filter.ts";
 
   /** Cards shown before "Show more". */
@@ -51,16 +52,21 @@
   const summary = $derived(resultsLine(matching.length, filters));
 
   // Coming here from a link (the header, a breadcrumb, a committee link) sets the filters from
-  // the address. Changes made on the page update the address without a navigation.
-  afterNavigate(({ to }) => {
-    if (to === null) return;
+  // the address. Changes made on the page update the address with a shallow navigation, which
+  // runs this too; those already match the screen, and reading the trimmed search back would eat
+  // the space or the letters typed since.
+  afterNavigate(({ to, shallow }) => {
+    if (to === null || shallow) return;
     const next = filtersFromParams(to.url.searchParams);
     filters = next;
-    searchText = next.q;
+    searchText = searchTextAfterNavigation(searchText, next.q);
     showAll = false;
     rememberFilters(next);
     if (projects === null && loadError === null) void load();
   });
+
+  // A search still settling must not change the address of the page opened next.
+  onDestroy(() => clearTimeout(settleTimer));
 
   async function load(): Promise<void> {
     loadError = null;
