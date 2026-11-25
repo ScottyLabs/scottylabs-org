@@ -4,6 +4,8 @@
 //! with status 200 and `no-store` under `/portal/`; with the project's title, description and Open
 //! Graph tags at `/projects/<slug>/` (404 when no published project has that slug); and with status
 //! 404 everywhere else, so SvelteKit renders its error page.
+//!
+//! The project tags carry [`INJECTED_ATTRIBUTE`], so the app removes them once it writes the head itself (`src/lib/site/head.ts`): crawlers that do not run scripts read them, and a visitor never gets two descriptions or the first project's tags after moving to another page.
 
 use std::path::{Path, PathBuf};
 
@@ -30,6 +32,8 @@ const ONE_HOUR: &str = "public, max-age=3600";
 const NO_STORE: &str = "no-store";
 const FALLBACK_PAGE: &str = "200.html";
 const SITE_NAME: &str = "ScottyLabs";
+/// Marks the tags [`inject_meta`] adds. The web app looks for the same name.
+const INJECTED_ATTRIBUTE: &str = "data-sl-injected";
 const MAX_SLUG_LEN: usize = 100;
 
 pub async fn serve(State(state): State<AppState>, request: Request) -> Response {
@@ -362,7 +366,14 @@ fn absolute(config: &Config, path: &str) -> String {
     format!("{}{path}", config.origin())
 }
 
-/// The tags placed in the shell's `<head>` for a project page. Every value is escaped.
+fn meta_tag(attribute: &str, key: &str, content: &str) -> String {
+    format!(
+        "<meta {attribute}=\"{key}\" content=\"{}\" {INJECTED_ATTRIBUTE}>",
+        escape_html(content)
+    )
+}
+
+/// The tags placed in the shell's `<head>` for a project page, each marked as injected. Every value is escaped.
 fn meta_tags(meta: &ProjectMeta, config: &Config) -> String {
     let name = meta
         .name
@@ -370,7 +381,8 @@ fn meta_tags(meta: &ProjectMeta, config: &Config) -> String {
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .unwrap_or(&meta.slug);
-    let title = format!("{name} | {SITE_NAME}");
+    // The same title the project page sets once it loads.
+    let title = format!("{name} - {SITE_NAME}");
     let description = meta
         .summary
         .as_deref()
@@ -395,42 +407,30 @@ fn meta_tags(meta: &ProjectMeta, config: &Config) -> String {
     });
 
     let mut tags = vec![
-        format!("<title>{}</title>", escape_html(&title)),
         format!(
-            "<meta name=\"description\" content=\"{}\">",
-            escape_html(&description)
-        ),
-        format!("<meta property=\"og:site_name\" content=\"{SITE_NAME}\">"),
-        "<meta property=\"og:type\" content=\"website\">".to_owned(),
-        format!(
-            "<meta property=\"og:title\" content=\"{}\">",
+            "<title {INJECTED_ATTRIBUTE}>{}</title>",
             escape_html(&title)
         ),
+        meta_tag("name", "description", &description),
+        meta_tag("property", "og:site_name", SITE_NAME),
+        meta_tag("property", "og:type", "website"),
+        meta_tag("property", "og:title", &title),
+        meta_tag("property", "og:description", &description),
+        meta_tag("property", "og:url", &url),
         format!(
-            "<meta property=\"og:description\" content=\"{}\">",
-            escape_html(&description)
-        ),
-        format!(
-            "<meta property=\"og:url\" content=\"{}\">",
+            "<link rel=\"canonical\" href=\"{}\" {INJECTED_ATTRIBUTE}>",
             escape_html(&url)
         ),
-        format!("<link rel=\"canonical\" href=\"{}\">", escape_html(&url)),
     ];
     match image {
         Some((src, alt)) => {
-            tags.push(format!(
-                "<meta property=\"og:image\" content=\"{}\">",
-                escape_html(&src)
-            ));
+            tags.push(meta_tag("property", "og:image", &src));
             if !alt.trim().is_empty() {
-                tags.push(format!(
-                    "<meta property=\"og:image:alt\" content=\"{}\">",
-                    escape_html(alt.trim())
-                ));
+                tags.push(meta_tag("property", "og:image:alt", alt.trim()));
             }
-            tags.push("<meta name=\"twitter:card\" content=\"summary_large_image\">".to_owned());
+            tags.push(meta_tag("name", "twitter:card", "summary_large_image"));
         }
-        None => tags.push("<meta name=\"twitter:card\" content=\"summary\">".to_owned()),
+        None => tags.push(meta_tag("name", "twitter:card", "summary")),
     }
     tags.join("\n    ")
 }

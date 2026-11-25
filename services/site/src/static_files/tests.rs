@@ -101,26 +101,49 @@ fn injected_meta_is_escaped() {
     assert!(!html.contains("<script>"));
     assert!(!html.contains("<b>"));
     assert!(html.contains(
-        "<title>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; co | ScottyLabs</title>"
+        "<title data-sl-injected>&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt; &amp; co - ScottyLabs</title>"
     ));
-    assert!(html.contains("<meta name=\"description\" content=\"It&#39;s &quot;quoted&quot; &lt;b&gt;bold&lt;/b&gt;\">"));
+    assert!(html.contains("<meta name=\"description\" content=\"It&#39;s &quot;quoted&quot; &lt;b&gt;bold&lt;/b&gt;\" data-sl-injected>"));
     assert!(html.contains(
-        "<meta property=\"og:image\" content=\"http://localhost:5173/seed/projects/nova.jpg\">"
+        "<meta property=\"og:image\" content=\"http://localhost:5173/seed/projects/nova.jpg\" data-sl-injected>"
     ));
-    assert!(
-        html.contains(
-            "<meta property=\"og:image:alt\" content=\"A &quot;stage&quot; &amp; lights\">"
-        )
-    );
-    assert!(
-        html.contains(
-            "<meta property=\"og:url\" content=\"http://localhost:5173/projects/nova/\">"
-        )
-    );
+    assert!(html.contains(
+        "<meta property=\"og:image:alt\" content=\"A &quot;stage&quot; &amp; lights\" data-sl-injected>"
+    ));
+    assert!(html.contains(
+        "<meta property=\"og:url\" content=\"http://localhost:5173/projects/nova/\" data-sl-injected>"
+    ));
+    assert!(html.contains(
+        "<link rel=\"canonical\" href=\"http://localhost:5173/projects/nova/\" data-sl-injected>"
+    ));
     // The tags land inside the head, once.
     let head_end = html.find("</head>").unwrap();
-    assert!(html.find("<title>").unwrap() < head_end);
-    assert_eq!(html.matches("<title>").count(), 1);
+    assert!(html.find("<title").unwrap() < head_end);
+    assert_eq!(html.matches("<title").count(), 1);
+}
+
+/// The app removes what the service added by this attribute, so every tag it adds must carry it.
+#[test]
+fn every_injected_tag_is_marked() {
+    let config = testing::config();
+    let meta = ProjectMeta {
+        slug: "nova".into(),
+        name: Some("Nova".into()),
+        summary: Some("A hackathon for first-timers".into()),
+        cover_src: Some("/seed/projects/nova.jpg".into()),
+        cover_alt: Some("Students presenting".into()),
+    };
+    let html = inject_meta(SHELL, &meta, &config);
+    let added: Vec<&str> = html
+        .lines()
+        .map(str::trim)
+        .filter(|line| !SHELL.lines().any(|shell_line| shell_line.trim() == *line))
+        .collect();
+    assert_eq!(added.len(), 11, "{added:?}");
+    for tag in added {
+        assert!(tag.contains(" data-sl-injected"), "{tag}");
+    }
+    assert!(!SHELL.contains("data-sl-injected"));
 }
 
 #[test]
@@ -137,7 +160,7 @@ fn covers_from_elsewhere_are_not_advertised() {
     assert!(!html.contains("og:image"));
     assert!(!html.contains("Old"));
     assert!(html.contains("content=\"Nova, a ScottyLabs project.\""));
-    assert!(html.contains("summary\">"));
+    assert!(html.contains("<meta name=\"twitter:card\" content=\"summary\" data-sl-injected>"));
 
     let uploaded = ProjectMeta {
         cover_src: Some("/media/0190e0a4-7c1b-7d2e-9f00-000000000001".into()),
@@ -304,8 +327,10 @@ async fn project_pages_get_their_meta(db: PgPool) {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(res.header("cache-control"), Some("no-cache"));
     let html = res.text();
-    assert!(html.contains("<title>Nova | ScottyLabs</title>"));
-    assert!(html.contains("<meta name=\"description\" content=\"A hackathon for first-timers\">"));
+    assert!(html.contains("<title data-sl-injected>Nova - ScottyLabs</title>"));
+    assert!(html.contains(
+        "<meta name=\"description\" content=\"A hackathon for first-timers\" data-sl-injected>"
+    ));
     assert!(html.contains("og:image\" content=\"http://localhost:5173/seed/projects/nova.jpg\""));
     assert!(html.contains("<div id=\"app\"></div>"));
 
