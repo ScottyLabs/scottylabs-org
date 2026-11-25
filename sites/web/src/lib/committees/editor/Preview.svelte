@@ -1,6 +1,7 @@
 <script lang="ts">
   // Preview (Figma 109:9435, spec CP-8): the draft exactly as visitors will see it, at desktop or
-  // phone width. Escape or "Back to editing" returns to the editor.
+  // phone width. A full-screen modal dialog, so the editor behind it is inert. Escape or "Back to
+  // editing" returns to the editor, and focus goes back to what opened the preview.
   import Monitor from "@lucide/svelte/icons/monitor";
   import Smartphone from "@lucide/svelte/icons/smartphone";
   import { Button } from "../../portal/ui/index.ts";
@@ -19,23 +20,30 @@
     onpublish: () => void;
   } = $props();
 
-  let region: HTMLElement | undefined = $state();
+  let dialog: HTMLDialogElement | undefined = $state();
+  let closed = false;
 
   $effect(() => {
-    region?.querySelector<HTMLElement>("[data-preview-back]")?.focus();
+    if (dialog === undefined) return;
+    const opener = document.activeElement;
+    const element = dialog;
+    element.showModal();
+    element.querySelector<HTMLElement>("[data-preview-back]")?.focus();
+    return () => {
+      closed = true;
+      if (element.open) element.close();
+      if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+    };
   });
 
-  function onkeydown(event: KeyboardEvent) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      onclose();
-    }
+  // Escape closes the dialog by itself, and Chrome does not always let that be cancelled, so the
+  // editor hears about every close, however it happened.
+  function handleClose() {
+    if (!closed) onclose();
   }
 </script>
 
-<svelte:window {onkeydown} />
-
-<div class="preview" bind:this={region} role="region" aria-label="Preview">
+<dialog class="preview" bind:this={dialog} aria-label="Preview" onclose={handleClose}>
   <div class="preview__bar">
     <p class="preview__note">Preview. This is what visitors will see once you publish.</p>
     <div class="preview__device" role="group" aria-label="Preview width">
@@ -61,16 +69,32 @@
       />
     </div>
   </div>
-</div>
+</dialog>
 
 <style>
   .preview {
-    position: fixed;
-    inset: 0;
-    z-index: 65;
-    display: flex;
-    flex-direction: column;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
     background: var(--p-bg);
+    color: var(--p-text);
+    font-family: var(--p-font);
+
+    &[open] {
+      display: flex;
+      flex-direction: column;
+    }
+    &::backdrop {
+      background: transparent;
+    }
+    &:focus-visible {
+      outline: none;
+    }
   }
   .preview__bar {
     display: flex;

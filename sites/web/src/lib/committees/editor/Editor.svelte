@@ -23,6 +23,7 @@
   import TopBar from "./TopBar.svelte";
   import UndoToast, { type UndoNotice } from "./UndoToast.svelte";
   import type { EditorDrag } from "./drag.ts";
+  import { inertOutside } from "./inert.ts";
   import { PageEditor } from "./state.svelte.ts";
 
   let { response }: { response: CommitteePageEditorResponse } = $props();
@@ -211,7 +212,7 @@
   {/if}
 {/snippet}
 
-<div class="editor">
+<div class="editor" {@attach inertOutside}>
   {#if phone.current}
     {@render notices()}
     <MobileEditor {editor} {saveText} onpreview={openPreview} onpublish={openPublish} {onremove} {onmoved} />
