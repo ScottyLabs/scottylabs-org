@@ -35,18 +35,42 @@ function projectName(approval: Pick<Approval, "project">): string {
   return name === undefined || name === "" ? "the project" : name;
 }
 
-/** The review dialog's title: "Sara Chokshi wants to post this", "Sara Chokshi wants to publish Nova". */
+/**
+ * The review dialog's title: "Sara Chokshi wants to post this", "Sara Chokshi wants to publish
+ * Nova", or "Sara Chokshi asked to publish Nova" once it is decided.
+ */
 export function reviewTitle(approval: Approval): string {
   const who = submitterName(approval);
+  const asks = approval.status === "waiting" ? "wants" : "asked";
   return approval.subjectType === "announcement"
-    ? `${who} wants to post this`
-    : `${who} wants to publish ${projectName(approval)}`;
+    ? `${who} ${asks} to post this`
+    : `${who} ${asks} to publish ${projectName(approval)}`;
 }
 
+/** The line under the title: how approval works, or what came of it once decided. */
 export function reviewDescription(approval: Approval): string {
-  return approval.subjectType === "announcement"
-    ? "Posts from leads go live after a director approves them."
-    : "Changes from leads go live after a director approves them.";
+  const announcement = approval.subjectType === "announcement";
+  const lead = submitterFirstName(approval);
+  if (approval.status === "waiting") {
+    return announcement
+      ? "Posts from leads go live after a director approves them."
+      : "Changes from leads go live after a director approves them.";
+  }
+  if (approval.status === "approved") {
+    return announcement
+      ? "It was approved and went on the ticker, so nothing is left to decide."
+      : "The changes were approved and went live, so nothing is left to decide.";
+  }
+  if (approval.status === "sent_back") {
+    return announcement
+      ? `It was sent back to ${lead}, so nothing is left to decide.`
+      : `The changes were sent back to ${lead}, so nothing is left to decide.`;
+  }
+  return `${capitalized(lead)} changed it after sending it, so nothing is left to decide.`;
+}
+
+function capitalized(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** The confirmation after "Approve and publish". */

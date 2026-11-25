@@ -188,9 +188,11 @@
 
     {#if decided}
       {@const status = submissionStatus(approval)}
-      <Callout tone="info" title={`${status.label}. ${status.detail}.`}>
-        {#if approval.note}Note: {approval.note}{:else}Nothing is left to decide here.{/if}
-      </Callout>
+      {#if approval.note}
+        <Callout tone="info" title={`${status.label}. ${status.detail}.`}>Note: {approval.note}</Callout>
+      {:else}
+        <Callout tone="info" title={`${status.label}. ${status.detail}.`} />
+      {/if}
     {:else}
       <Field label={`Note to ${firstName}`} optional error={noteError} counter={noteCounter}>
         <TextArea

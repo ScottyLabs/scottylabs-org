@@ -20,6 +20,7 @@ import {
   approvedMessage,
   linkHost,
   projectCardFromDoc,
+  reviewDescription,
   reviewTitle,
   sentBackMessage,
   submissionStatus,
@@ -146,6 +147,31 @@ Deno.test("the review dialog names the lead and what they sent", () => {
   assert.equal(
     sentBackMessage(approval({ submittedBy: null })),
     "Sent back to the lead with your note.",
+  );
+});
+
+Deno.test("a decided submission is worded in the past tense", () => {
+  const decided = { decidedBy: EVAN, decidedAt: "2026-11-23T16:00:00Z", canDecide: false };
+  const project = { subjectType: "project" as const, announcement: null, project: NOVA_DOC };
+  assert.equal(
+    reviewDescription(approval({})),
+    "Posts from leads go live after a director approves them.",
+  );
+  const sentBack = approval({ ...project, ...decided, status: "sent_back" });
+  assert.equal(reviewTitle(sentBack), "Sara Chokshi asked to publish Nova");
+  assert.equal(
+    reviewDescription(sentBack),
+    "The changes were sent back to Sara, so nothing is left to decide.",
+  );
+  const approved = approval({ ...decided, status: "approved" });
+  assert.equal(reviewTitle(approved), "Sara Chokshi asked to post this");
+  assert.equal(
+    reviewDescription(approved),
+    "It was approved and went on the ticker, so nothing is left to decide.",
+  );
+  assert.equal(
+    reviewDescription(approval({ submittedBy: null, status: "withdrawn" })),
+    "The lead changed it after sending it, so nothing is left to decide.",
   );
 });
 
