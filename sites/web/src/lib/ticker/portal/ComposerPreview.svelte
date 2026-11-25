@@ -22,7 +22,7 @@
   <!-- The form above already says everything the preview shows, so it is hidden from screen readers. -->
   <div class="preview__strip" aria-hidden="true" inert>
     <DogMark variant="gradient" width={29} />
-    <TickerItem {announcement} focusable={false} />
+    <TickerItem class="preview__item" {announcement} focusable={false} />
     <DogMark variant="gradient" width={29} />
   </div>
   <p class="preview__note">
@@ -59,13 +59,30 @@
     line-height: 16px;
   }
   .preview__strip {
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: 28px;
-    height: 66px;
-    padding: 0 14px;
-    overflow: clip;
+    min-height: 66px;
+    padding: 8px 14px;
     border-bottom: 1px solid var(--p-border);
+  }
+  .preview__strip > :global(.dog-mark) {
+    flex: none;
+  }
+  /* The ticker keeps an item on one line and scrolls it. A message too long for the strip wraps
+     here instead, as in the approval dialog, so the committee chip, the link arrow and both dog
+     marks stay in view at their real size. */
+  .preview__strip > :global(.preview__item) {
+    flex: 0 1 auto;
+    min-width: 0;
+    height: auto;
+    min-height: 36px;
+    white-space: normal;
+  }
+  .preview__strip :global(.preview__item .ticker-item__message) {
+    overflow: visible;
+    overflow-wrap: anywhere;
   }
   .preview__note {
     margin: 0;
@@ -87,7 +104,7 @@
     }
     .preview__strip {
       gap: 24px;
-      height: 68px;
+      min-height: 68px;
       border-bottom: 0;
     }
   }
