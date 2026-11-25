@@ -303,20 +303,17 @@ export interface ProjectCard {
   cover: ImageRef | null;
   siteUrl: string | null;
   repoUrl: string | null;
-  /**
-   * The project's YouTube or Vimeo link, for the featured card's "Watch video". Optional until
-   * the service's published_cards fills it in; leave it out where no video is shown.
-   */
-  videoUrl?: string | null;
+  /** A link to one YouTube or Vimeo video, for the featured card's "Watch video" and the project page. */
+  videoUrl: string | null;
   featured: boolean;
 }
 
+/** The card's fields, `videoUrl` among them, and the rest of the page. */
 export interface ProjectDetail extends ProjectCard {
   /** Sanitized HTML, same rules as the text block. */
   description: string;
   builtWith: CommitteeSlug[];
   media: ImageRef[];
-  videoUrl: string | null;
   publishedAt: string;
 }
 

@@ -45,6 +45,7 @@ function card(fields: Partial<ProjectCard>): ProjectCard {
     cover: null,
     siteUrl: null,
     repoUrl: null,
+    videoUrl: null,
     featured: false,
     ...fields,
   };

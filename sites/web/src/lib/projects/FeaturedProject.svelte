@@ -17,7 +17,7 @@
   const href = $derived(projectPath(project.slug));
   const style = $derived(COMMITTEES[project.committee]);
   const description = $derived(project.excerpt.trim() === "" ? project.summary : project.excerpt);
-  const hasVideo = $derived(project.videoUrl !== undefined && project.videoUrl !== null);
+  const hasVideo = $derived(project.videoUrl !== null);
 </script>
 
 <section class="featured" aria-labelledby="featured-label">

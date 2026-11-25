@@ -99,6 +99,7 @@ export function projectCardFromDoc(id: string, doc: ProjectDoc): ProjectCard {
     cover: doc.media[0] ?? null,
     siteUrl: doc.siteUrl,
     repoUrl: doc.repoUrl,
+    videoUrl: doc.videoUrl,
     featured: false,
   };
 }

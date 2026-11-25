@@ -41,6 +41,8 @@ pub struct ProjectCard {
     pub cover: Option<ImageRef>,
     pub site_url: Option<String>,
     pub repo_url: Option<String>,
+    /// For the featured card's "Watch video", which opens the project page at its video.
+    pub video_url: Option<String>,
     pub featured: bool,
 }
 
@@ -58,12 +60,13 @@ impl ProjectCard {
             cover: doc.cover().cloned(),
             site_url: doc.site_url.clone(),
             repo_url: doc.repo_url.clone(),
+            video_url: doc.video_url.clone(),
             featured,
         }
     }
 }
 
-/// One project page. Mirrors `ProjectDetail` in types.ts.
+/// One project page. Mirrors `ProjectDetail` in types.ts. The card brings `videoUrl`.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectDetail {
@@ -72,7 +75,6 @@ struct ProjectDetail {
     description: String,
     built_with: Vec<Committee>,
     media: Vec<ImageRef>,
-    video_url: Option<String>,
     published_at: DateTime<Utc>,
 }
 
@@ -95,6 +97,12 @@ struct PublishedRow {
     featured: bool,
     published: JsonColumn<ProjectDoc>,
     published_at: Option<DateTime<Utc>>,
+}
+
+impl PublishedRow {
+    fn card(&self) -> ProjectCard {
+        ProjectCard::new(self.id, self.slug.clone(), self.featured, &self.published)
+    }
 }
 
 const PUBLISHED_COLUMNS: &str = "id, slug, featured, published, published_at";
@@ -170,11 +178,10 @@ async fn project_page(state: &AppState, raw_slug: &str) -> AppResult<Response> {
         let doc = &row.published;
         let body = PublicProjectResponse {
             project: Some(ProjectDetail {
-                card: ProjectCard::new(row.id, row.slug.clone(), row.featured, doc),
+                card: row.card(),
                 description: doc.description.clone(),
                 built_with: doc.built_with.clone(),
                 media: doc.media.clone(),
-                video_url: doc.video_url.clone(),
                 published_at: row.published_at.unwrap_or_else(Utc::now),
             }),
             redirect_to: None,

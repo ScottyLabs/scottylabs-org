@@ -91,6 +91,7 @@ export function draftCard(doc: ProjectDoc, meta: ProjectMeta): ProjectCard {
     cover: doc.media[0] ?? null,
     siteUrl: blankToNull(doc.siteUrl),
     repoUrl: blankToNull(doc.repoUrl),
+    videoUrl: blankToNull(doc.videoUrl),
     featured: meta.featured,
   };
 }
@@ -106,7 +107,6 @@ export function draftDetail(
     description: doc.description,
     builtWith: doc.builtWith.filter((committee) => committee !== doc.committee),
     media: doc.media,
-    videoUrl: blankToNull(doc.videoUrl),
     publishedAt,
   };
 }

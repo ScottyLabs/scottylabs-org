@@ -146,6 +146,7 @@ async fn visitors_see_published_projects_featured_first(db: PgPool) {
     assert_eq!(card["excerpt"], "All about TartanHacks.");
     assert_eq!(card["cover"]["src"], "/seed/projects/maps.jpg");
     assert_eq!(card["committee"], "events");
+    assert_eq!(card["videoUrl"], Value::Null);
     assert!(card.get("description").is_none());
 
     let (status, body) = testing::get(&app, "/api/public/projects?committee=tech", None).await;
@@ -203,7 +204,7 @@ async fn visitors_open_project_pages_and_follow_renames(db: PgPool) {
         full(
             Committee::Tech,
             "CMU Maps",
-            json!({ "builtWith": ["design"], "videoUrl": "https://youtu.be/abc", "siteUrl": "https://cmumaps.com/" }),
+            json!({ "builtWith": ["design"], "videoUrl": "https://youtu.be/dQw4w9WgXcQ", "siteUrl": "https://cmumaps.com/" }),
         ),
     )
     .await;
@@ -217,8 +218,15 @@ async fn visitors_open_project_pages_and_follow_renames(db: PgPool) {
     assert_eq!(project["name"], "CMU Maps");
     assert_eq!(project["description"], "<p>All about CMU Maps.</p>");
     assert_eq!(project["builtWith"], json!(["design"]));
-    assert_eq!(project["videoUrl"], "https://youtu.be/abc");
+    assert_eq!(project["videoUrl"], "https://youtu.be/dQw4w9WgXcQ");
+    // The card brings the video link, so it is sent once.
+    assert_eq!(res.text().matches("\"videoUrl\"").count(), 1);
     assert_eq!(project["media"].as_array().unwrap().len(), 1);
+    let (_, list) = testing::get(&app, "/api/public/projects", None).await;
+    assert_eq!(
+        list["projects"][0]["videoUrl"],
+        "https://youtu.be/dQw4w9WgXcQ"
+    );
     assert!(project["publishedAt"].is_string());
     assert_eq!(res.json["redirectTo"], Value::Null);
 
