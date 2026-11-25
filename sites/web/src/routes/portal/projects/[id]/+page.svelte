@@ -139,13 +139,15 @@
     void saver.flush();
   });
 
-  // Every edit goes to the saver; it saves a moment after the last one.
+  // Every edit goes to the saver; it saves a moment after the last one. What the last action
+  // reported is about the project before this edit, so it goes too.
   $effect(() => {
     if (doc === null) return;
     const json = JSON.stringify(doc);
     untrack(() => {
       if (saver === null) return;
       publishErrors = {};
+      actionError = null;
       saver.change(JSON.parse(json) as ProjectDoc);
     });
   });
