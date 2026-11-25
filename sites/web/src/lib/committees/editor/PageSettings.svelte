@@ -8,6 +8,7 @@
   import { LIMITS, cleanChannel } from "../limits.ts";
   import LockedRow from "./LockedRow.svelte";
   import TextField from "./TextField.svelte";
+  import { altTextField } from "./photo-undo.ts";
   import type { PageEditor } from "./state.svelte.ts";
 
   let { editor, compact = false }: { editor: PageEditor; compact?: boolean } = $props();
@@ -55,7 +56,7 @@
       {disabled}
       error={coverProblems.image}
       altError={coverProblems["image.alt"]}
-      onchange={(image) => setCover({ image }, null)}
+      onchange={(image) => setCover({ image }, altTextField("image", cover.props.image, image))}
     />
   {/if}
 

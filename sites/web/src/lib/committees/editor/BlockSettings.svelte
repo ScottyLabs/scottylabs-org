@@ -14,6 +14,7 @@
   import TeamsFields from "./TeamsFields.svelte";
   import TextField from "./TextField.svelte";
   import WidthControl from "./WidthControl.svelte";
+  import { altTextField, altTextFieldInList } from "./photo-undo.ts";
   import type { PageEditor } from "./state.svelte.ts";
 
   let {
@@ -83,7 +84,8 @@
     value={current.props.images}
     error={problems.images}
     altErrors={galleryAltErrors(current.props.images)}
-    onchange={(images) => set(current, { ...current.props, images }, null)}
+    onchange={(images) =>
+      set(current, { ...current.props, images }, altTextFieldInList("images", current.props.images, images))}
   />
   <TextField
     label="Caption"
@@ -145,7 +147,7 @@
       {disabled}
       error={problems.image}
       altError={problems["image.alt"]}
-      onchange={(image) => set(block, { ...block.props, image }, null)}
+      onchange={(image) => set(block, { ...block.props, image }, altTextField("image", block.props.image, image))}
     />
     <TextField
       label="Caption"
@@ -182,7 +184,7 @@
       {disabled}
       error={problems.poster}
       altError={problems["poster.alt"]}
-      onchange={(poster) => set(block, { ...block.props, poster }, null)}
+      onchange={(poster) => set(block, { ...block.props, poster }, altTextField("poster", block.props.poster, poster))}
     />
   {:else if block.type === "stats"}
     <StatsFields
