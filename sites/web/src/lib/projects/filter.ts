@@ -1,5 +1,7 @@
 // Filtering the Projects page by committee and search text, and keeping both in the address.
 // Pure functions, so the page and the tests share them.
+//
+// The page filters the cards it has loaded as you type. Cards carry only the start of each description, so searches of two or more characters also go to the service (GET /api/public/projects?q=), which matches the same way against the whole description, and the projects it finds are added to the ones found here.
 
 import type { CommitteeSlug, ProjectCard } from "../api/types.ts";
 import { COMMITTEES, isCommitteeSlug } from "../portal/committees.ts";
@@ -66,31 +68,138 @@ export function searchableText(project: ProjectCard): string {
   );
 }
 
-/** True when every word of the search text appears somewhere in the project. */
-export function matchesSearch(project: ProjectCard, q: string): boolean {
-  const words = fold(q)
+/** The folded words of a search. The service splits and folds them the same way. */
+export function searchWords(q: string): string[] {
+  return fold(q)
     .split(/\s+/u)
     .filter((word) => word !== "");
+}
+
+/** True when every word of the search text appears somewhere in the project. */
+export function matchesSearch(project: ProjectCard, q: string): boolean {
+  const words = searchWords(q);
   if (words.length === 0) return true;
   const text = searchableText(project);
   return words.every((word) => text.includes(word));
 }
 
+const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * The projects shown for the filters: those in the committee that match the search here, plus
+ * those the service matched (`alsoMatching`, by id; see remoteMatches), in the order given.
+ */
 export function filterProjects(
   projects: readonly ProjectCard[],
   filters: ProjectFilters,
+  alsoMatching: ReadonlySet<string> = NONE,
 ): ProjectCard[] {
   return projects.filter(
     (project) =>
       (filters.committee === null || project.committee === filters.committee) &&
-      matchesSearch(project, filters.q),
+      (matchesSearch(project, filters.q) || alsoMatching.has(project.id)),
   );
+}
+
+/** Searches at least this long also go to the service, which reads whole descriptions. */
+export const MIN_REMOTE_QUERY = 2;
+
+/**
+ * Two searches with the same key find the same projects: the folded words, one space apart.
+ * "Caf\u00E9 " and "cafe" share one.
+ */
+export function searchKey(q: string): string {
+  return searchWords(q).join(" ");
+}
+
+/** The search to send to the service, trimmed, or null when the loaded cards are enough. */
+export function remoteQuery(q: string): string | null {
+  const trimmed = q.trim();
+  if (Array.from(trimmed).length < MIN_REMOTE_QUERY || searchKey(trimmed) === "") return null;
+  return trimmed;
+}
+
+/** What the service found for one search key. */
+export interface RemoteAnswer {
+  key: string;
+  ids: ReadonlySet<string>;
+}
+
+/**
+ * Where the service's search for one key stands. While it is pending, `carried` holds an earlier
+ * answer this search narrows (see pendingSearch).
+ */
+export type RemoteSearch =
+  | { key: string; status: "pending"; carried?: RemoteAnswer }
+  | { key: string; status: "done"; ids: ReadonlySet<string> }
+  | { key: string; status: "failed" };
+
+/**
+ * True when every project that matches the later search also matches the earlier one: each
+ * earlier word is inside a later word, as when typing on ("zeph" to "zephyrine tiles").
+ */
+export function narrows(earlier: string, later: string): boolean {
+  const words = later.split(" ");
+  return earlier.split(" ").every((word) => words.some((other) => other.includes(word)));
+}
+
+/**
+ * The state while the service looks for `key`. While the search only narrows, the projects the
+ * service alone found for the words typed so far (matches deep in a description) stay until it
+ * answers, instead of vanishing at every key press and coming back; the new answer can only take
+ * them away. Matches on the loaded cards are left out: the page narrows those itself, at once.
+ */
+export function pendingSearch(
+  current: RemoteSearch | null,
+  key: string,
+  projects: readonly ProjectCard[],
+): RemoteSearch {
+  const known = lastAnswer(current);
+  if (known === undefined || !narrows(known.key, key)) return { key, status: "pending" };
+  const deep = projects.filter(
+    (project) => known.ids.has(project.id) && !matchesSearch(project, known.key),
+  );
+  return {
+    key,
+    status: "pending",
+    carried: { key: known.key, ids: new Set(deep.map((project) => project.id)) },
+  };
+}
+
+/** The newest answer the service gave, if it still counts for this search or one before it. */
+function lastAnswer(current: RemoteSearch | null): RemoteAnswer | undefined {
+  if (current?.status === "done") return { key: current.key, ids: current.ids };
+  return current?.status === "pending" ? current.carried : undefined;
+}
+
+/**
+ * The ids the service matched for this search text, to add to the local matches: its answer for
+ * this very search, or while that is pending an earlier answer it narrows. None when the request
+ * failed: the local result stands.
+ */
+export function remoteMatches(remote: RemoteSearch | null, q: string): ReadonlySet<string> {
+  if (remote === null || remoteQuery(q) === null || remote.key !== searchKey(q)) return NONE;
+  if (remote.status === "done") return remote.ids;
+  return remote.status === "pending" ? (remote.carried?.ids ?? NONE) : NONE;
+}
+
+/**
+ * True while the service has yet to answer for this search text, so "no matches" may still
+ * change. Searches too short to send never wait, and neither do ones whose request failed.
+ */
+export function awaitingRemote(remote: RemoteSearch | null, q: string): boolean {
+  if (remoteQuery(q) === null) return false;
+  return remote === null || remote.key !== searchKey(q) || remote.status === "pending";
 }
 
 export type CommitteeCounts = Record<CommitteeSlug | "all", number>;
 
 /** How many projects each committee tab would show for the search text. */
-export function committeeCounts(projects: readonly ProjectCard[], q: string): CommitteeCounts {
+export function committeeCounts(
+  projects: readonly ProjectCard[],
+  q: string,
+  alsoMatching: ReadonlySet<string> = NONE,
+): CommitteeCounts {
   const counts: CommitteeCounts = {
     all: 0,
     events: 0,
@@ -102,7 +211,7 @@ export function committeeCounts(projects: readonly ProjectCard[], q: string): Co
     foundry: 0,
   };
   for (const project of projects) {
-    if (!matchesSearch(project, q)) continue;
+    if (!matchesSearch(project, q) && !alsoMatching.has(project.id)) continue;
     counts.all += 1;
     counts[project.committee] += 1;
   }

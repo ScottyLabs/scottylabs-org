@@ -2,12 +2,14 @@
   // The Projects page (Figma 50:8319; phone 44:8364; spec P-1 to P-7). The page is prerendered
   // with a skeleton and loads the published projects in the browser. The committee tab and the
   // search text live in the address (?committee=&q=), so filtered lists can be shared and the
-  // project pages' breadcrumb leads back to the same list.
-  import { onDestroy, tick } from "svelte";
+  // project pages' breadcrumb leads back to the same list. Searches filter the loaded cards at
+  // once; from two characters the service also looks through whole descriptions, and what it finds
+  // is added (filter.ts).
+  import { onDestroy, tick, untrack } from "svelte";
   import { afterNavigate, goto } from "$app/navigation";
   import Plus from "@lucide/svelte/icons/plus";
   import SearchX from "@lucide/svelte/icons/search-x";
-  import { get, isApiError } from "#lib/api/client.ts";
+  import { get, isAbortError, isApiError } from "#lib/api/client.ts";
   import type { CommitteeSlug, ProjectCard as Card, PublicProjectsResponse } from "#lib/api/types.ts";
   import { COMMITTEES } from "#lib/portal/committees.ts";
   import Skeleton from "#lib/portal/ui/Skeleton.svelte";
@@ -17,13 +19,19 @@
   import ProjectSearch from "#lib/projects/ProjectSearch.svelte";
   import {
     type ProjectFilters,
+    type RemoteSearch,
     NO_FILTERS,
+    awaitingRemote,
     committeeCounts,
     filterProjects,
     filtersFromParams,
     filtersQuery,
+    pendingSearch,
     rememberFilters,
+    remoteMatches,
+    remoteQuery,
     resultsLine,
+    searchKey,
     searchTextAfterNavigation,
   } from "#lib/projects/filter.ts";
 
@@ -31,6 +39,8 @@
   const PAGE_SIZE = 12;
   /** How long typing pauses before the address and the screen reader announcement catch up. */
   const SETTLE_MS = 400;
+  /** How long typing pauses before the search goes to the service. */
+  const REMOTE_DELAY_MS = 250;
 
   let projects = $state.raw<Card[] | null>(null);
   let loadError = $state<string | null>(null);
@@ -40,9 +50,19 @@
   let announced = $state("");
   let grid: HTMLUListElement | undefined = $state();
   let settleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The service's search over whole descriptions, for the current search text. */
+  let remote = $state.raw<RemoteSearch | null>(null);
+  let remoteTimer: ReturnType<typeof setTimeout> | undefined;
+  let remoteRequest: AbortController | null = null;
+  /** A settled search waits for the service before its count is announced. */
+  let announceWhenAnswered = false;
 
-  const counts = $derived(projects === null ? null : committeeCounts(projects, filters.q));
-  const matching = $derived(projects === null ? [] : filterProjects(projects, filters));
+  const alsoMatching = $derived(remoteMatches(remote, filters.q));
+  const awaiting = $derived(awaitingRemote(remote, filters.q));
+  const counts = $derived(projects === null ? null : committeeCounts(projects, filters.q, alsoMatching));
+  const matching = $derived(projects === null ? [] : filterProjects(projects, filters, alsoMatching));
+  // Nothing matches here yet, but the descriptions may hold a match: wait instead of saying none.
+  const searching = $derived(projects !== null && projects.length > 0 && matching.length === 0 && awaiting);
   const featured = $derived(matching.find((project) => project.featured) ?? null);
   const rest = $derived(
     featured === null ? matching : matching.filter((project) => project.id !== featured.id),
@@ -66,14 +86,68 @@
   });
 
   // A search still settling must not change the address of the page opened next.
-  onDestroy(() => clearTimeout(settleTimer));
+  onDestroy(() => {
+    clearTimeout(settleTimer);
+    clearTimeout(remoteTimer);
+    remoteRequest?.abort();
+  });
+
+  $effect(() => {
+    const q = remoteQuery(filters.q);
+    untrack(() => askService(q));
+  });
+
+  /** Sends the search to the service after a pause in typing, dropping any older one. */
+  function askService(q: string | null): void {
+    const key = q === null ? null : searchKey(q);
+    // Asked already: the same words, typed differently or after a committee change.
+    if (key !== null && remote?.key === key) return;
+    clearTimeout(remoteTimer);
+    remoteRequest?.abort();
+    remoteRequest = null;
+    if (q === null || key === null) {
+      remote = null;
+      return;
+    }
+    remote = pendingSearch(remote, key, projects ?? []);
+    remoteTimer = setTimeout(() => void fetchMatches(q, key), REMOTE_DELAY_MS);
+  }
+
+  async function fetchMatches(q: string, key: string): Promise<void> {
+    const request = new AbortController();
+    remoteRequest = request;
+    let answer: RemoteSearch;
+    try {
+      const response = await get<PublicProjectsResponse>("/public/projects", { query: { q }, signal: request.signal });
+      answer = { key, status: "done", ids: new Set(response.projects.map((project) => project.id)) };
+    } catch (error) {
+      if (isAbortError(error)) return;
+      // The loaded cards still filter; only matches deep in a description are missed.
+      answer = { key, status: "failed" };
+    } finally {
+      if (remoteRequest === request) remoteRequest = null;
+    }
+    if (remote?.key !== key) return;
+    remote = answer;
+    if (announceWhenAnswered) announce();
+  }
+
+  /** Tells screen readers how many projects match, once the service has answered for the search. */
+  function announce(): void {
+    if (projects === null) {
+      announced = "";
+      return;
+    }
+    announceWhenAnswered = awaiting;
+    if (!awaiting) announced = resultsLine(matching.length, filters);
+  }
 
   async function load(): Promise<void> {
     loadError = null;
     try {
       const response = await get<PublicProjectsResponse>("/public/projects");
       projects = response.projects;
-      announced = resultsLine(filterProjects(response.projects, filters).length, filters);
+      announce();
     } catch (error) {
       loadError = isApiError(error)
         ? "We couldn\u2019t load the projects. Check your connection and try again."
@@ -86,10 +160,11 @@
     showAll = false;
     rememberFilters(next);
     clearTimeout(settleTimer);
+    announceWhenAnswered = false;
     const apply = () => {
       // Only the address changes; this is not a new page.
       void goto(`/projects/${filtersQuery(next)}`, { shallow: true, replace: true });
-      announced = projects === null ? "" : resultsLine(matching.length, next);
+      announce();
     };
     if (settle === "now") apply();
     else settleTimer = setTimeout(apply, SETTLE_MS);
@@ -148,9 +223,15 @@
   <div class="centered-section">
     <CommitteeFilter selected={filters.committee} {counts} href={tabHref} onselect={selectCommittee} />
 
-    <div class="results" aria-busy={projects === null && loadError === null}>
+    <div class="results" aria-busy={(projects === null && loadError === null) || searching}>
       <p class="results__line">
-        {#if projects !== null}{summary}{:else if loadError === null}<Skeleton width="96px" height="14px" />{/if}
+        {#if searching}
+          Searching the descriptions&hellip;
+        {:else if projects !== null}
+          {summary}
+        {:else if loadError === null}
+          <Skeleton width="96px" height="14px" />
+        {/if}
       </p>
       <p class="p-sr-only" aria-live="polite">{announced}</p>
 
@@ -180,6 +261,8 @@
             </li>
           {/each}
         </ul>
+      {:else if searching}
+        <!-- No card matches yet; the service is still reading the descriptions. -->
       {:else if matching.length === 0}
         <div class="empty">
           <span class="empty__icon" aria-hidden="true"><SearchX size={22} strokeWidth={1.75} /></span>

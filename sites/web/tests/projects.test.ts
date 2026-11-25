@@ -18,14 +18,21 @@ import {
   stateLabel,
 } from "../src/lib/projects/drafts.ts";
 import {
+  type RemoteSearch,
+  awaitingRemote,
   committeeCounts,
   filterProjects,
   filtersFromParams,
   filtersQuery,
   fold,
   matchesSearch,
+  narrows,
+  pendingSearch,
   relatedProjects,
+  remoteMatches,
+  remoteQuery,
   resultsLine,
+  searchKey,
   searchTextAfterNavigation,
 } from "../src/lib/projects/filter.ts";
 import { leadChoices, leadLabel, leadsIn } from "../src/lib/projects/editor/editors.ts";
@@ -131,6 +138,130 @@ Deno.test("committee tabs count what the search finds", () => {
     filterProjects(PROJECTS, { committee: "events", q: "nova" }).map((p) => p.slug),
     ["nova"],
   );
+});
+
+Deno.test("searches of two or more characters also go to the service", () => {
+  assert.equal(remoteQuery("m"), null);
+  assert.equal(remoteQuery(" m "), null);
+  assert.equal(remoteQuery("  "), null);
+  // Folding leaves no word to look for.
+  assert.equal(remoteQuery("^^"), null);
+  assert.equal(remoteQuery(" ma "), "ma");
+  assert.equal(remoteQuery("Caf\u00E9 forbes "), "Caf\u00E9 forbes");
+  // The same words, typed differently, are one search.
+  assert.equal(searchKey(" Caf\u00E9   FORBES"), "cafe forbes");
+  assert.equal(searchKey("cafe forbes"), searchKey("CAFE\tForbes "));
+});
+
+Deno.test("projects the service matched in their descriptions join the local matches", () => {
+  // Only the service knows "zephyrine": it is deep in CMU Maps' description.
+  const answered: RemoteSearch = { key: "zephyrine", status: "done", ids: new Set(["cmu-maps"]) };
+  const q = "Zephyrine ";
+  assert.equal(filterProjects(PROJECTS, { committee: null, q }).length, 0);
+  const extra = remoteMatches(answered, q);
+  assert.deepEqual(
+    filterProjects(PROJECTS, { committee: null, q }, extra).map((p) => p.slug),
+    ["cmu-maps"],
+  );
+  assert.deepEqual(
+    filterProjects(PROJECTS, { committee: "events", q }, extra).map((p) => p.slug),
+    [],
+  );
+  const counts = committeeCounts(PROJECTS, q, extra);
+  assert.equal(counts.all, 1);
+  assert.equal(counts.tech, 1);
+  assert.equal(counts.events, 0);
+
+  // Local matches stay, in the order loaded, with the service's added among them.
+  const hack: RemoteSearch = { key: "hack", status: "done", ids: new Set(["cafe", "nova"]) };
+  assert.deepEqual(
+    filterProjects(PROJECTS, { committee: null, q: "hack" }, remoteMatches(hack, "hack")).map(
+      (p) => p.slug,
+    ),
+    ["tartanhacks", "nova", "cafe"],
+  );
+  // Ids of projects the page has not loaded are left out.
+  const unknown: RemoteSearch = { key: "hack", status: "done", ids: new Set(["new-one"]) };
+  assert.equal(
+    filterProjects(PROJECTS, { committee: null, q: "hack" }, remoteMatches(unknown, "hack")).length,
+    2,
+  );
+});
+
+Deno.test("an answer counts only for the search it was asked for", () => {
+  const answered: RemoteSearch = { key: "zephyrine", status: "done", ids: new Set(["cmu-maps"]) };
+  // Typing on changes the search; the old answer no longer applies.
+  assert.equal(remoteMatches(answered, "zephyrine tiles").size, 0);
+  assert.equal(remoteMatches(answered, "z").size, 0);
+  assert.equal(remoteMatches({ key: "zephyrine", status: "pending" }, "zephyrine").size, 0);
+  assert.equal(remoteMatches({ key: "zephyrine", status: "failed" }, "zephyrine").size, 0);
+  assert.equal(remoteMatches(null, "zephyrine").size, 0);
+
+  // While the service has not answered, "no matches" is not said yet.
+  assert.ok(awaitingRemote(null, "zephyrine"));
+  assert.ok(awaitingRemote({ key: "zephyrine", status: "pending" }, "ZEPHYRINE"));
+  assert.ok(awaitingRemote(answered, "zephyrine tiles"));
+  assert.ok(!awaitingRemote(answered, "zephyrine "));
+  // A failed request falls back to the local result, and short searches never wait.
+  assert.ok(!awaitingRemote({ key: "zephyrine", status: "failed" }, "zephyrine"));
+  assert.ok(!awaitingRemote(null, "z"));
+  assert.ok(!awaitingRemote(null, ""));
+});
+
+Deno.test("typing on keeps what the service found until it answers again", () => {
+  assert.ok(narrows("zeph", "zephyrine"));
+  assert.ok(narrows("zephyrine", "zephyrine tiles"));
+  assert.ok(narrows("cafe forbes", "forbes cafes"));
+  assert.ok(!narrows("zephyrine", "zeph"));
+  assert.ok(!narrows("zephyrine tiles", "zephyrine"));
+  assert.ok(!narrows("maps", "nova"));
+
+  const answered: RemoteSearch = { key: "zeph", status: "done", ids: new Set(["cmu-maps"]) };
+  // "zephyrine" can only find fewer projects than "zeph", so CMU Maps stays while it is asked.
+  const typing = pendingSearch(answered, "zephyrine", PROJECTS);
+  assert.equal(typing.status, "pending");
+  assert.deepEqual([...remoteMatches(typing, "Zephyrine")], ["cmu-maps"]);
+  assert.deepEqual(
+    filterProjects(
+      PROJECTS,
+      { committee: null, q: "zephyrine" },
+      remoteMatches(typing, "zephyrine"),
+    ).map((p) => p.slug),
+    ["cmu-maps"],
+  );
+  // The count is not announced until the service answers for the new search.
+  assert.ok(awaitingRemote(typing, "zephyrine"));
+  // The carried answer passes from one pending search to the next while each narrows it.
+  const more = pendingSearch(typing, "zephyrine tiles", PROJECTS);
+  assert.deepEqual([...remoteMatches(more, "zephyrine tiles")], ["cmu-maps"]);
+  // The new answer replaces the carried one, even when it finds less.
+  const none: RemoteSearch = { key: "zephyrine tiles", status: "done", ids: new Set() };
+  assert.equal(remoteMatches(none, "zephyrine tiles").size, 0);
+
+  // Only what the service alone found is carried: the cards' own matches narrow at once. For "ca", CMU Maps (campus) and Café finder match on their cards and Nova deep in its description.
+  const ca: RemoteSearch = {
+    key: "ca",
+    status: "done",
+    ids: new Set(["cmu-maps", "cafe", "nova"]),
+  };
+  const cam = pendingSearch(ca, "cam", PROJECTS);
+  assert.deepEqual([...remoteMatches(cam, "cam")], ["nova"]);
+  assert.deepEqual(
+    filterProjects(PROJECTS, { committee: null, q: "cam" }, remoteMatches(cam, "cam")).map(
+      (p) => p.slug,
+    ),
+    ["cmu-maps", "nova"],
+  );
+
+  // Deleting letters widens the search: other projects may match, so nothing is carried.
+  assert.deepEqual(pendingSearch(answered, "ze", PROJECTS), { key: "ze", status: "pending" });
+  assert.deepEqual(pendingSearch(null, "zeph", PROJECTS), { key: "zeph", status: "pending" });
+  // Nor after a failed request, or before the cards have loaded.
+  assert.deepEqual(pendingSearch({ key: "zeph", status: "failed" }, "zephyrine", PROJECTS), {
+    key: "zephyrine",
+    status: "pending",
+  });
+  assert.equal(remoteMatches(pendingSearch(answered, "zephyrine", []), "zephyrine").size, 0);
 });
 
 Deno.test("the results line says what is shown", () => {
