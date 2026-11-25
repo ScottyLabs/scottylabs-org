@@ -15,6 +15,7 @@
   import type { Announcement, AnnouncementTab } from "../../api/types.ts";
   import { formatAbsolute, formatRelative, formatShortDate } from "../../portal/dates.ts";
   import { Avatar, Badge, Button, CommitteeChip, Menu, StatusDot, type MenuItem } from "../../portal/ui/index.ts";
+  import { focusIsLost } from "../../portal/ui/focus.ts";
   import { linkHost } from "../../site/links.ts";
   import { leavesLabel, quoted, timeLeft } from "../format.ts";
   import { kindIcon, kindLabel } from "../kinds.ts";
@@ -104,27 +105,67 @@
   }
 
   function onHandleKeydown(event: KeyboardEvent, id: string) {
+    if (dragging !== null) return;
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       event.preventDefault();
       void moveBy(id, event.key === "ArrowUp" ? -1 : 1);
     }
   }
 
+  // A drag follows the pointer on the window, not on the handle. The rows are keyed, so the first
+  // move takes the handle out of the DOM and puts it back, and the browser then drops the handle's
+  // pointer capture; from there the pointer is let go over whatever is under it. Letting go
+  // anywhere ends the drag and saves the new order once.
+  let dragPointer: number | null = null;
+  let stopListening: (() => void) | null = null;
+
   function onHandlePointerDown(event: PointerEvent, id: string) {
-    if (event.button !== 0 || !(event.currentTarget instanceof HTMLElement)) return;
+    if (event.button !== 0 || dragging !== null || !(event.currentTarget instanceof HTMLElement)) return;
+    // Keeps the pointer's events coming while it is outside the window; nothing relies on it.
     event.currentTarget.setPointerCapture(event.pointerId);
     dragging = id;
+    dragPointer = event.pointerId;
     dragStart = order;
+    const options = { capture: true } as const;
+    const onMove = (move: PointerEvent) => {
+      if (move.pointerId === dragPointer) dragTo(move.clientY);
+    };
+    const onUp = (up: PointerEvent) => {
+      if (up.pointerId === dragPointer) endDrag(true);
+    };
+    const onCancel = (cancel: PointerEvent) => {
+      if (cancel.pointerId === dragPointer) endDrag(false);
+    };
+    const onKey = (key: KeyboardEvent) => {
+      if (key.key !== "Escape") return;
+      key.preventDefault();
+      key.stopPropagation();
+      endDrag(false);
+    };
+    const onBlur = () => endDrag(false);
+    window.addEventListener("pointermove", onMove, options);
+    window.addEventListener("pointerup", onUp, options);
+    window.addEventListener("pointercancel", onCancel, options);
+    window.addEventListener("keydown", onKey, options);
+    window.addEventListener("blur", onBlur);
+    stopListening = () => {
+      window.removeEventListener("pointermove", onMove, options);
+      window.removeEventListener("pointerup", onUp, options);
+      window.removeEventListener("pointercancel", onCancel, options);
+      window.removeEventListener("keydown", onKey, options);
+      window.removeEventListener("blur", onBlur);
+    };
   }
 
-  function onHandlePointerMove(event: PointerEvent) {
+  /** Puts the dragged row where the pointer is: before the first row whose middle is below it. */
+  function dragTo(clientY: number) {
     const id = dragging;
     if (id === null || body === undefined) return;
     const rowElements = [...body.querySelectorAll<HTMLElement>("tr[data-row]")];
     let target = rowElements.length - 1;
     for (const [index, row] of rowElements.entries()) {
       const box = row.getBoundingClientRect();
-      if (event.clientY < box.top + box.height / 2) {
+      if (clientY < box.top + box.height / 2) {
         target = index;
         break;
       }
@@ -132,11 +173,27 @@
     if (order.indexOf(id) !== target) order = moved(id, target);
   }
 
-  function onHandlePointerUp() {
+  /**
+   * Ends the drag. Letting go saves the order on screen; Escape, the window losing focus or the
+   * browser taking over the pointer put the rows back as they were.
+   */
+  function endDrag(keep: boolean) {
     const id = dragging;
+    stopListening?.();
+    stopListening = null;
     dragging = null;
-    if (id !== null && order.join() !== dragStart.join()) commit(order, id);
+    dragPointer = null;
+    if (id === null) return;
+    if (!keep) order = dragStart;
+    else if (order.join() !== dragStart.join()) commit(order, id);
+    // Moving the row in the DOM drops focus from its handle; give it back.
+    void tick().then(() => {
+      if (focusIsLost()) body?.querySelector<HTMLElement>(`[data-handle="${id}"]`)?.focus({ preventScroll: true });
+    });
   }
+
+  // Leaving the page in the middle of a drag must not leave listeners on the window.
+  $effect(() => () => stopListening?.());
 
   function menuItems(announcement: Announcement, index: number): (MenuItem | "separator")[] {
     const items: (MenuItem | "separator")[] = [];
@@ -245,7 +302,7 @@
   {/if}
 {/snippet}
 
-<div class="list" bind:this={root}>
+<div class={["list", dragging !== null && "list--dragging"]} bind:this={root}>
   <div class="p-table-card list__table">
     <table class="p-table">
       <thead>
@@ -285,9 +342,6 @@
                   aria-describedby={handleHelpId}
                   onkeydown={(event) => onHandleKeydown(event, announcement.id)}
                   onpointerdown={(event) => onHandlePointerDown(event, announcement.id)}
-                  onpointermove={onHandlePointerMove}
-                  onpointerup={onHandlePointerUp}
-                  onpointercancel={onHandlePointerUp}
                 >
                   <GripVertical size={16} strokeWidth={1.75} aria-hidden="true" />
                 </button>
@@ -406,6 +460,11 @@
       outline: 2px solid var(--p-focus);
       outline-offset: 0;
     }
+  }
+  /* Once the row moves, the pointer is over other rows and their text; keep the grabbing hand. */
+  .list--dragging,
+  .list--dragging :global(*) {
+    cursor: grabbing;
   }
   .list__row--dragging {
     position: relative;
