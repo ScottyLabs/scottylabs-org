@@ -136,25 +136,30 @@
     const onCancel = (cancel: PointerEvent) => {
       if (cancel.pointerId === dragPointer) endDrag(false);
     };
-    const onKey = (key: KeyboardEvent) => {
-      if (key.key !== "Escape") return;
-      key.preventDefault();
-      key.stopPropagation();
-      endDrag(false);
-    };
-    const onBlur = () => endDrag(false);
     window.addEventListener("pointermove", onMove, options);
     window.addEventListener("pointerup", onUp, options);
     window.addEventListener("pointercancel", onCancel, options);
-    window.addEventListener("keydown", onKey, options);
-    window.addEventListener("blur", onBlur);
+    window.addEventListener("keydown", onDragKey, options);
+    window.addEventListener("blur", onDragBlur);
     stopListening = () => {
       window.removeEventListener("pointermove", onMove, options);
       window.removeEventListener("pointerup", onUp, options);
       window.removeEventListener("pointercancel", onCancel, options);
-      window.removeEventListener("keydown", onKey, options);
-      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("keydown", onDragKey, options);
+      window.removeEventListener("blur", onDragBlur);
     };
+  }
+
+  /** Escape during a drag puts the rows back. */
+  function onDragKey(event: KeyboardEvent) {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    endDrag(false);
+  }
+
+  function onDragBlur() {
+    endDrag(false);
   }
 
   /** Puts the dragged row where the pointer is: before the first row whose middle is below it. */
