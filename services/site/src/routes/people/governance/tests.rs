@@ -130,6 +130,40 @@ async fn governance_lead(db: &PgPool, andrew_id: &str, committee: Committee) -> 
     person
 }
 
+async fn assignment_id(db: &PgPool, andrew_id: &str, committee: Committee) -> Uuid {
+    sqlx::query_scalar(
+        "SELECT r.id FROM role_assignments r JOIN users u ON u.id = r.user_id
+         WHERE u.andrew_id = $1 AND r.committee = $2",
+    )
+    .bind(andrew_id)
+    .bind(committee)
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+/// (andrew_id, committee) of everyone the People page opted out, sorted.
+async fn opt_outs(db: &PgPool) -> Vec<(String, String)> {
+    sqlx::query_as(
+        "SELECT u.andrew_id, o.committee FROM governance_opt_outs o JOIN users u ON u.id = o.user_id
+         ORDER BY u.andrew_id, o.committee",
+    )
+    .fetch_all(db)
+    .await
+    .unwrap()
+}
+
+fn pairs(list: &[(&str, &str)]) -> Vec<(String, String)> {
+    list.iter()
+        .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+        .collect()
+}
+
+async fn send_ok(app: &Router, req: Req) {
+    let res = req.send(app).await;
+    assert!(res.status.is_success(), "{} {}", res.status, res.text());
+}
+
 fn admin_viewer(user_id: Uuid) -> Viewer {
     Viewer {
         user_id,
@@ -159,9 +193,24 @@ fn parses_directors_and_heads_from_the_governance_file() {
         ]
     );
     assert_eq!(
+        listed.committees,
+        [
+            Committee::Events,
+            Committee::Tech,
+            Committee::Design,
+            Committee::Finance
+        ]
+    );
+    assert_eq!(
         listed.head_committees,
         [Committee::Events, Committee::Design, Committee::Finance]
     );
+    assert_eq!(
+        listed.people_in(Committee::Events),
+        ["evanfost", "spchoksh", "helenf"]
+    );
+    assert_eq!(listed.people_in(Committee::Tech), ["apallati"]);
+    assert!(listed.people_in(Committee::Finance).is_empty());
     assert_eq!(
         listed.notes,
         [
@@ -182,6 +231,7 @@ fn committees_without_roles_have_no_heads() {
         parse_committees("committees:\n  foundry:\n    name: Foundry\n    director: pkumara\n")
             .unwrap();
     assert!(listed.heads.is_empty());
+    assert_eq!(listed.committees, [Committee::Foundry]);
     assert_eq!(listed.head_committees, [Committee::Foundry]);
     assert!(listed.notes.is_empty());
 }
@@ -473,6 +523,11 @@ async fn leads_edited_on_the_people_page_survive_later_syncs(db: PgPool) {
         .director(Committee::Events)
         .create(&db)
         .await;
+    // Added by hand and never listed by governance: nothing to say about them.
+    UserSpec::new("handpicked")
+        .lead(Committee::Events, true)
+        .create(&db)
+        .await;
     let yaml = r#"
 committees:
   events:
@@ -511,16 +566,227 @@ committees:
     assert_eq!((report.heads_removed, report.heads_unchanged), (1, 0));
     assert_eq!(
         report.messages,
-        ["dropme is no longer a lead in Events. Governance no longer lists them as a head."]
+        [
+            "dropme is no longer a lead in Events. Governance no longer lists them as a head.",
+            "helenf is still a lead in Events, but governance no longer lists them as a head. Remove them here if they should no longer be a lead.",
+        ]
     );
     let leads: Vec<(String, String)> = sqlx::query_as(
         "SELECT u.andrew_id, r.source FROM role_assignments r JOIN users u ON u.id = r.user_id
-         WHERE r.role = 'lead'",
+         WHERE r.role = 'lead' ORDER BY u.andrew_id",
     )
     .fetch_all(&db)
     .await
     .unwrap();
-    assert_eq!(leads, [("helenf".to_owned(), "portal".to_owned())]);
+    assert_eq!(
+        leads,
+        pairs(&[("handpicked", "portal"), ("helenf", "portal")])
+    );
+
+    // Said once, and kept in the activity log for the committee.
+    let report = sync_yaml(&db, yaml, None).await;
+    assert!(report.messages.is_empty(), "{:?}", report.messages);
+    let kept: Vec<(Option<Uuid>, Option<String>)> = sqlx::query_as(
+        "SELECT actor_id, committee FROM audit_log
+         WHERE action = 'role.sync' AND summary = 'Kept helenf as a lead in Events; governance no longer lists them as a head'",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(kept, [(None, Some("events".to_owned()))]);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn roles_removed_or_lowered_on_the_people_page_are_not_given_back(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let admin = UserSpec::new("govadmin").admin().create(&db).await;
+    let director = UserSpec::new("evanfost")
+        .director(Committee::Events)
+        .create(&db)
+        .await;
+    UserSpec::new("handpicked")
+        .lead(Committee::Events, true)
+        .create(&db)
+        .await;
+    let first = r#"
+committees:
+  events:
+    director: evanfost
+    roles:
+      head-of-logistics:
+        name: Head of Logistics
+        members: [helenf, sam]
+  design:
+    director: jeanchen
+    roles:
+      head-of-branding:
+        name: Head of Branding
+        members: [yelimk2]
+  finance:
+    director: findir
+"#;
+    let report = sync_yaml(&db, first, None).await;
+    assert_eq!((report.added, report.heads_added), (2, 3));
+
+    // A director removes a head and a lead they added by hand (PE-2). An admin removes a director, turns another into a lead, and moves a head to another committee.
+    for (andrew_id, committee) in [
+        ("helenf", Committee::Events),
+        ("handpicked", Committee::Events),
+    ] {
+        let id = assignment_id(&db, andrew_id, committee).await;
+        send_ok(
+            &app,
+            Req::delete(&format!("/api/people/assignments/{id}")).user(&director),
+        )
+        .await;
+    }
+    let findir = assignment_id(&db, "findir", Committee::Finance).await;
+    send_ok(
+        &app,
+        Req::delete(&format!("/api/people/assignments/{findir}")).user(&admin),
+    )
+    .await;
+    let jeanchen = assignment_id(&db, "jeanchen", Committee::Design).await;
+    send_ok(
+        &app,
+        Req::patch(&format!("/api/people/assignments/{jeanchen}"))
+            .user(&admin)
+            .json(json!({ "role": "lead" })),
+    )
+    .await;
+    let sam = assignment_id(&db, "sam", Committee::Events).await;
+    send_ok(
+        &app,
+        Req::patch(&format!("/api/people/assignments/{sam}"))
+            .user(&admin)
+            .json(json!({ "committee": "design" })),
+    )
+    .await;
+    assert_eq!(
+        opt_outs(&db).await,
+        pairs(&[
+            ("findir", "finance"),
+            ("handpicked", "events"),
+            ("helenf", "events"),
+            ("jeanchen", "design"),
+            ("sam", "events"),
+        ])
+    );
+
+    // The next sync leaves all of that alone and says why.
+    let report = sync_yaml(&db, first, None).await;
+    assert_eq!(
+        (
+            report.added,
+            report.updated,
+            report.unchanged,
+            report.heads_added,
+            report.heads_removed,
+            report.heads_unchanged
+        ),
+        (0, 0, 1, 0, 0, 1)
+    );
+    assert_eq!(
+        report.messages,
+        [
+            "Governance lists jeanchen as director of Design, but their role there was removed or changed on this page, so it was not given back. Make them director here if they should be.",
+            "Governance lists findir as director of Finance, but their role there was removed or changed on this page, so it was not given back. Make them director here if they should be.",
+            "Governance lists helenf as a head in Events, but their role there was removed or changed on this page, so it was not given back. Add them as a lead here if they should be one.",
+            "Governance lists sam as a head in Events, but their role there was removed or changed on this page, so it was not given back. Add them as a lead here if they should be one.",
+        ]
+    );
+    let synced: Vec<_> = roles(&db)
+        .await
+        .into_iter()
+        .map(|(andrew_id, role, committee, source, _, _)| (andrew_id, role, committee, source))
+        .collect();
+    let role = |andrew_id: &str, role: &str, committee: Option<&str>, source: &str| {
+        (
+            andrew_id.to_owned(),
+            role.to_owned(),
+            committee.map(str::to_owned),
+            source.to_owned(),
+        )
+    };
+    assert_eq!(
+        synced,
+        [
+            role("evanfost", "director", Some("events"), "portal"),
+            role("govadmin", "admin", None, "portal"),
+            role("jeanchen", "lead", Some("design"), "portal"),
+            role("sam", "lead", Some("design"), "portal"),
+            role("yelimk2", "lead", Some("design"), "governance"),
+        ]
+    );
+    // The opt-out of someone governance does not list is forgotten.
+    assert_eq!(
+        opt_outs(&db).await,
+        pairs(&[
+            ("findir", "finance"),
+            ("helenf", "events"),
+            ("jeanchen", "design"),
+            ("sam", "events"),
+        ])
+    );
+
+    // Once governance stops listing someone there, their opt-out goes, so a later listing counts again.
+    let second = r#"
+committees:
+  events:
+    director: evanfost
+    roles:
+      head-of-logistics:
+        members: [sam]
+  design:
+    director: jeanchen
+    roles:
+      head-of-branding:
+        members: [yelimk2]
+  finance:
+    director: otherfin
+"#;
+    let report = sync_yaml(&db, second, None).await;
+    assert_eq!((report.added, report.heads_added), (1, 0));
+    assert_eq!(
+        opt_outs(&db).await,
+        pairs(&[("jeanchen", "design"), ("sam", "events")])
+    );
+    let third = second.replace("members: [sam]", "members: [sam, helenf]");
+    let report = sync_yaml(&db, &third, None).await;
+    assert_eq!(report.heads_added, 1);
+    let helen: (String, String) = sqlx::query_as(
+        "SELECT r.role, r.source FROM role_assignments r JOIN users u ON u.id = r.user_id
+         WHERE u.andrew_id = 'helenf' AND r.committee = 'events'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(helen, ("lead".to_owned(), "governance".to_owned()));
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn promoting_a_lead_to_director_is_not_an_opt_out(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let admin = UserSpec::new("govadmin").admin().create(&db).await;
+    let yaml = r#"
+committees:
+  events:
+    roles:
+      head-of-logistics:
+        members: [helenf]
+"#;
+    sync_yaml(&db, yaml, None).await;
+    let helen = assignment_id(&db, "helenf", Committee::Events).await;
+    send_ok(
+        &app,
+        Req::patch(&format!("/api/people/assignments/{helen}"))
+            .user(&admin)
+            .json(json!({ "role": "director" })),
+    )
+    .await;
+    assert!(opt_outs(&db).await.is_empty());
+    let report = sync_yaml(&db, yaml, None).await;
+    assert_eq!(report.heads_unchanged, 1);
 }
 
 #[sqlx::test(migrations = "./migrations")]

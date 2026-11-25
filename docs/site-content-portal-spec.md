@@ -126,12 +126,13 @@ Built (2026-11-24). Roles are stored in the portal's database (`role_assignments
 | Source | Gives | When |
 | -- | -- | -- |
 | `PROJECT_ADMIN_GROUP` (`/projects/scottylabs-org/admins`) in the token's `groups` claim | Admin | At every sign-in. Governance fills the group with the UIA team leads and, because governance adds the Tech director to every team's leads, the Tech director. A token whose `groups` no longer has the group (an empty list counts) takes that admin role away again, unless it is the last admin. A token without the claim changes nothing |
-| Governance `data/committees.yaml` | Director for each committee's `director`; Lead for each head (`roles.*.members` and `teams.*.roles.*.members`) | At startup, every six hours, and when an admin presses Sync on People. A head who already has a role in the committee is left alone. A lead added by an earlier sync goes away when governance stops listing them, unless someone edited it on People, which makes it the portal's |
+| Governance `data/committees.yaml` | Director for each committee's `director`; Lead for each head (`roles.*.members` and `teams.*.roles.*.members`) | At startup, every six hours, and when an admin presses Sync on People. A head who already has a role in the committee is left alone. A lead added by an earlier sync goes away when governance stops listing them, unless someone edited it on People, which makes it the portal's; the sync then says once that governance no longer lists them. A role removed or changed on People is not given back (see below) |
 | The People page | Any role an admin or Director may give | When they change it |
 
 Notes:
 
 - Heads become leads who can write ticker announcements (which still need their Director's approval) and edit no projects until a Director adds them.
+- People has the last word. When a Director or admin removes someone's director or lead role there, moves it to another committee, or changes a director to a lead, the sync gives that person no role in that committee again for as long as governance keeps listing them there, and each sync says so. Once governance stops listing them there, a later listing counts again. To give the role back sooner, add it on People.
 - Tech is left out of the head sync: `committees.yaml` lists no Tech heads, because Tech's leads are the team leads in governance's team files. Tech leads are added on People.
 - The organization director in `committees.yaml` is never made an admin. Other exec members who should be admins are added on People.
 - Committee roles are not in the Keycloak token. Governance creates Keycloak groups only for tech teams and projects, so the token says who someone is and whether they lead UIA (or direct Tech), not who directs or heads a committee.

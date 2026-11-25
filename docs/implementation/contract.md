@@ -133,6 +133,8 @@ Authorization reads only `role_assignments`. Three things write to it:
 
 - **Admins from `PROJECT_ADMIN_GROUP`** (`/projects/scottylabs-org/admins`) in the token's `groups` claim, at every sign-in, with source `keycloak_group`. Governance fills that group with the UIA team leads, plus the Tech director because governance adds the Tech director to every team's leads. A `groups` list without the group, including an empty list, removes an admin role that came from the group (never the last admin). A token without the claim changes nothing. `PROJECT_GROUP` grants nothing.
 - **Directors and heads from governance's `data/committees.yaml`**, with source `governance`: each committee's `director` becomes its director, and the members of `committees.<c>.roles.*` and `committees.<c>.teams.*.roles.*` become leads of that committee (can post to the ticker, which still needs approval; no projects). Tech is left out of the head sync, since its leads live in governance's team files. The organization director is never made an admin.
+  - A head who already has a role in the committee is left alone. A governance lead whom governance stops listing is removed with their projects. Editing a lead on the People page makes it `portal`, so later syncs keep it; when governance stops listing such a lead, the sync says so once in `messages` and in the activity log ("Kept ... as a lead in ...").
+  - The People page has the last word. Removing a director or lead role there, moving it to another committee, or changing a director to a lead writes a row to `governance_opt_outs` in the same transaction, and the sync then gives that person no role in that committee (director or lead) while governance still lists them there; each run says so in `messages`. The row is deleted once governance lists the person in that committee neither as director nor as a head. To give the role back, add it on the People page.
 - **Everything else in the portal**: admins, directors and leads added on the People page, with source `portal`.
 
 Committee roles are not in the Keycloak token: governance creates Keycloak groups only for tech teams and projects. The portal does not read Grouper, which is generated from the same `committees.yaml` and syncs only to Google Groups.
@@ -330,6 +332,7 @@ Each builder owns the files of their track. Edit shared files only where this ta
 | Projects | `routes/projects.rs`, `seed/projects.rs`, `migrations/02*`; web: `src/lib/projects/`, `src/routes/(site)/projects/`, `src/routes/portal/projects/` |
 | Committees | `routes/committee_pages.rs`, `blocks.rs`, `richtext.rs`, `seed/committees.rs`, `migrations/03*`; web: `src/lib/committees/`, `src/routes/(site)/committees/`, `src/routes/portal/committees/` |
 | Overview | `routes/{overview,approvals}.rs`, `migrations/04*`; web: `src/routes/portal/overview` pieces, `src/routes/portal/people/`, `src/lib/portal/approvals/` |
+| Sign-in and governance | `auth/`, `routes/auth.rs`, `routes/auth/`, `routes/people/governance*`, `seed/people.rs`, `migrations/05*` |
 
 ## Changes
 
@@ -341,7 +344,9 @@ Record changes to this contract here, newest first, with the reason.
 
 - **Committee heads become leads**: the governance sync also adds a `lead` assignment (`can_post_ticker` true, no project editors, `appointed_by` null, source `governance`) for each head listed in `committees.yaml` who has no role in that committee, in the same transaction as the director sync. Existing director and lead rows are never changed. Leads with source `governance` whom governance no longer lists are removed with their project editors, and each removal is a sentence in `messages`. Tech is not part of the head sync. A committee missing from the file keeps its governance leads.
 
-- **Editing a governance lead keeps it**: `PATCH /api/people/assignments/:id` on a lead sets its source to `portal`, so later syncs leave it alone. Removing a governance lead on the People page does not stop the next sync from adding them again while governance lists them.
+- **Editing a governance lead keeps it**: `PATCH /api/people/assignments/:id` on a lead sets its source to `portal`, so later syncs leave it alone. When governance stops listing a head whose lead role the portal keeps, the sync says so once in `messages` and writes a `role.sync` audit entry ("Kept <name> as a lead in <committee>; governance no longer lists them as a head").
+
+- **Removals on the People page stick** (review fix): `DELETE /api/people/assignments/:id` on a director or lead, and a `PATCH` that moves a director or lead to another committee or role (except lead to director in the same committee), record an opt-out for the old committee. The sync skips opted-out people in that committee, for directors and heads alike, and says so in `messages` on every run while governance lists them. Opt-outs are forgotten once governance stops listing the person in that committee. Migration `0501_governance_sync.sql` adds `governance_opt_outs (user_id, committee, created_at)` and `governance_heads (committee, user_id)`, the heads listed at the last sync, which the "kept" message needs. The response shape is unchanged.
 
 - **`GovernanceSyncResponse`** gains `headsAdded`, `headsRemoved` and `headsUnchanged`. `added`, `updated` and `unchanged` still count directors only. `messages` lists skipped entries first, then removals.
 
