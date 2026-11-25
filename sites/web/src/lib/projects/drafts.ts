@@ -47,6 +47,18 @@ export function matchesRow(row: ProjectAdminSummary, q: string): boolean {
   return row.name.toLowerCase().includes(needle) || row.slug.includes(needle);
 }
 
+/** "7 projects" or "1 project". */
+export function projectCount(count: number): string {
+  return `${count.toString()} ${count === 1 ? "project" : "projects"}`;
+}
+
+/** What screen readers hear after the portal list's filters or search change. */
+export function filterAnnouncement(shown: number, total: number): string {
+  if (shown === 0) return "No projects match these filters.";
+  if (shown === total) return `Showing all ${projectCount(total)}.`;
+  return `Showing ${shown.toString()} of ${projectCount(total)}.`;
+}
+
 /** The first `max` characters of the description's text, cut at a word, like the server. */
 export function excerpt(html: string, max = EXCERPT_CHARS): string {
   const text = plainText(html).replaceAll(/\s+/gu, " ").trim();

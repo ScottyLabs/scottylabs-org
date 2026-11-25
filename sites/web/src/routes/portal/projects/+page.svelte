@@ -3,11 +3,12 @@
   // Drafts / Published / Archived filter and a row per project with Edit. "Add project" opens a
   // dialog that creates a draft and goes straight to its editor; `?add=1` (the overview's Add
   // project) opens it on arrival. Filters live in the address.
-  import { onMount, untrack } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import ExternalLink from "@lucide/svelte/icons/external-link";
   import GitBranch from "@lucide/svelte/icons/git-branch";
+  import Lock from "@lucide/svelte/icons/lock";
   import Plus from "@lucide/svelte/icons/plus";
   import Search from "@lucide/svelte/icons/search";
   import SquareKanban from "@lucide/svelte/icons/square-kanban";
@@ -39,8 +40,10 @@
   import {
     MAX_NAME_CHARS,
     type StateFilter,
+    filterAnnouncement,
     isStateFilter,
     matchesRow,
+    projectCount,
     stateLabel,
   } from "#lib/projects/drafts.ts";
 
@@ -85,6 +88,39 @@
       .toSorted((a, b) => b.count - a.count),
   );
   const filtered = $derived(committee !== null || stateFilter !== "all" || search.trim() !== "");
+  // Directors see every project but edit only their committee's.
+  const anyLocked = $derived(shown.some((row) => !row.canEdit));
+
+  // Screen readers hear how many projects are left once the filters or search settle, the way
+  // the table and the empty state show it.
+  const SETTLE_MS = 400;
+  let announced = $state("");
+  let announceTimer: ReturnType<typeof setTimeout> | undefined;
+  let announcedFilters: string | null = null;
+
+  $effect(() => {
+    const key = `${committee ?? ""}|${stateFilter}|${search.trim().toLowerCase()}`;
+    const total = rows?.length ?? null;
+    const count = shown.length;
+    if (total === null) return;
+    // The first list after loading is the page itself, which the shell already announced.
+    if (announcedFilters === null || announcedFilters === key) {
+      announcedFilters = key;
+      return;
+    }
+    announcedFilters = key;
+    clearTimeout(announceTimer);
+    announceTimer = setTimeout(() => (announced = filterAnnouncement(count, total)), SETTLE_MS);
+  });
+
+  onDestroy(() => {
+    clearTimeout(announceTimer);
+    clearTimeout(searchTimer);
+  });
+
+  function lockReason(row: ProjectAdminSummary): string {
+    return `Only the ${COMMITTEES[row.committee].name} director or an admin can edit ${row.name}.`;
+  }
 
   onMount(() => {
     void load();
@@ -197,7 +233,7 @@
 </PageHeader>
 
 <div class="toolbar">
-  <div class="toolbar__search">
+  <div class="toolbar__search p-fields-compact">
     <TextInput
       bind:value={search}
       icon={Search}
@@ -214,7 +250,8 @@
       aria-pressed={committee === null ? "true" : "false"}
       onclick={() => setParams({ committee: null })}
     >
-      All <span class="all-chip__count">{inScope.length}</span>
+      All <span class="all-chip__count" aria-hidden="true">{inScope.length}</span>
+      <span class="p-sr-only">, {projectCount(inScope.length)}</span>
     </button>
     {#each chips as chip (chip.slug)}
       <CommitteeChip
@@ -222,6 +259,7 @@
         selectable
         selected={committee === chip.slug}
         count={chip.count}
+        countLabel={projectCount(chip.count)}
         onclick={() => setParams({ committee: committee === chip.slug ? null : chip.slug })}
       />
     {/each}
@@ -234,6 +272,8 @@
     onchange={(value) => setParams({ state: value })}
   />
 </div>
+
+<p class="p-sr-only" aria-live="polite">{announced}</p>
 
 {#if loadError !== null}
   <Callout tone="error" title="We couldn&rsquo;t load the projects" role="alert">
@@ -344,14 +384,19 @@
               {#if row.updatedBy !== null}<span class="p-sr-only"> by {row.updatedBy.name}</span>{/if}
             </td>
             <td class="p-table__actions">
-              <Button
-                variant="outline"
-                size="sm"
-                href={`/portal/projects/${row.id}/`}
-                aria-label={`${row.canEdit ? "Edit" : "View"} ${row.name}`}
-              >
-                {row.canEdit ? "Edit" : "View"}
-              </Button>
+              {#if row.canEdit}
+                <Button variant="outline" size="sm" href={`/portal/projects/${row.id}/`} aria-label={`Edit ${row.name}`}>
+                  Edit
+                </Button>
+              {:else}
+                <span class="locked" title={lockReason(row)}>
+                  <Lock size={16} strokeWidth={2} aria-hidden="true" />
+                  <span class="p-sr-only">{lockReason(row)}</span>
+                  <Button variant="subtle" size="sm" href={`/portal/projects/${row.id}/`} aria-label={`View ${row.name}`}>
+                    View
+                  </Button>
+                </span>
+              {/if}
             </td>
           </tr>
         {/each}
@@ -360,6 +405,7 @@
   </div>
   <p class="p-table-footnote">
     Showing {shown.length} of {rows.length}.
+    {#if anyLocked}Only the director of a project&rsquo;s committee, or an admin, can edit it.{/if}
     {#if filtered}<button type="button" class="reset" onclick={clearFilters}>Clear filters</button>{/if}
   </p>
 {/if}
@@ -501,6 +547,12 @@
     & :global(.links__icon--off) {
       color: #c2c2c2;
     }
+  }
+  .locked {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    color: var(--p-text-secondary);
   }
   .reset {
     margin-left: 6px;

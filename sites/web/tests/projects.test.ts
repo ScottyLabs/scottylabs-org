@@ -10,8 +10,10 @@ import {
   draftCard,
   draftDetail,
   excerpt,
+  filterAnnouncement,
   isStateFilter,
   matchesRow,
+  projectCount,
   sameDoc,
   stateLabel,
 } from "../src/lib/projects/drafts.ts";
@@ -302,4 +304,13 @@ Deno.test("only dropped connections and server trouble retry a save by themselve
     assert.ok(!retriesOnItsOwn(failure(status)), `status ${status.toString()}`);
   }
   assert.ok(!retriesOnItsOwn(new Error("bug")));
+});
+
+Deno.test("the portal list says how many projects its filters leave", () => {
+  assert.equal(projectCount(1), "1 project");
+  assert.equal(projectCount(7), "7 projects");
+  assert.equal(filterAnnouncement(3, 15), "Showing 3 of 15 projects.");
+  assert.equal(filterAnnouncement(15, 15), "Showing all 15 projects.");
+  assert.equal(filterAnnouncement(1, 1), "Showing all 1 project.");
+  assert.equal(filterAnnouncement(0, 15), "No projects match these filters.");
 });
