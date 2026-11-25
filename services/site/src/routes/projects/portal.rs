@@ -912,6 +912,9 @@ async fn settings(
         }
     };
     let mut tx = state.db.begin().await?;
+    if input.featured == Some(true) {
+        wait_to_feature(&mut tx).await?;
+    }
     let project = lock(&mut tx, id).await?;
     let name = project.draft.name.clone();
     if let Some(slug) = new_slug.filter(|slug| *slug != project.slug) {
@@ -1000,7 +1003,15 @@ async fn change_slug(conn: &mut PgConnection, project: &ProjectRow, slug: &str) 
     Ok(())
 }
 
-/// One project is featured at a time; featuring one stops featuring the others.
+/// Two admins featuring different projects at once take turns; otherwise neither would see the other's choice to clear it. Held until the transaction ends, and taken before any project row is locked.
+async fn wait_to_feature(conn: &mut PgConnection) -> AppResult<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext('projects.featured'))")
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
+/// One project is featured at a time; featuring one stops featuring the others. Call `wait_to_feature` first. A unique index (migration 0201) backs this up.
 async fn set_featured(conn: &mut PgConnection, id: Uuid, featured: bool) -> AppResult<()> {
     if featured {
         sqlx::query("UPDATE projects SET featured = false WHERE featured AND id <> $1")

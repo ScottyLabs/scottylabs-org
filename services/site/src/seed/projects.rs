@@ -449,7 +449,7 @@ fn escape(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Inserts a published project unless its address is taken or was used before. Returns its id when inserted.
+/// Inserts a published project unless its address is taken or was used before. Returns its id when inserted. It is featured only while no other project is, since one is featured at a time.
 async fn insert_if_new(
     conn: &mut PgConnection,
     project: &SeedProject,
@@ -457,7 +457,8 @@ async fn insert_if_new(
     let doc = doc(project);
     let id: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO projects (id, slug, committee, state, draft, published, featured, published_at)
-         SELECT $1, $2, $3, 'published', $4, $4, $5, now()
+         SELECT $1, $2, $3, 'published', $4, $4,
+                $5 AND NOT EXISTS (SELECT 1 FROM projects WHERE featured), now()
          WHERE NOT EXISTS (SELECT 1 FROM project_slug_redirects WHERE old_slug = $2)
          ON CONFLICT (slug) DO NOTHING
          RETURNING id",

@@ -1118,6 +1118,50 @@ async fn admins_change_addresses_and_feature_one_project(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn featuring_two_projects_at_once_leaves_one_featured(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let admin = UserSpec::new("admin").admin().create(&db).await;
+    let other_admin = UserSpec::new("admin2").admin().create(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let maps = published(&db, Committee::Tech, "cmu-maps", "CMU Maps").await;
+    async fn feature(app: &axum::Router, user: &TestUser, id: Uuid) -> StatusCode {
+        let path = format!("/api/projects/{id}/settings");
+        testing::patch(app, &path, Some(user), json!({ "featured": true }))
+            .await
+            .0
+    }
+
+    for _ in 0..5 {
+        let (first, second) = tokio::join!(
+            feature(&app, &admin, nova),
+            feature(&app, &other_admin, maps)
+        );
+        assert_eq!((first, second), (StatusCode::OK, StatusCode::OK));
+        let featured: i64 = sqlx::query_scalar("SELECT count(*) FROM projects WHERE featured")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(featured, 1);
+        sqlx::query("UPDATE projects SET featured = false")
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+
+    // The database refuses a second featured project however it is written.
+    sqlx::query("UPDATE projects SET featured = true WHERE id = $1")
+        .bind(nova)
+        .execute(&db)
+        .await
+        .unwrap();
+    let second = sqlx::query("UPDATE projects SET featured = true WHERE id = $1")
+        .bind(maps)
+        .execute(&db)
+        .await;
+    assert!(second.is_err());
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn directors_choose_leads_of_their_committee_as_editors(db: PgPool) {
     let app = testing::app(db.clone()).await;
     let p = people(&db).await;
@@ -1279,6 +1323,22 @@ async fn the_seed_publishes_valid_projects_once(db: PgPool) {
             .await
             .unwrap();
     assert_eq!(summary, "Edited");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn the_seed_features_tartanhacks_only_when_nothing_else_is(db: PgPool) {
+    let mine = published(&db, Committee::Tech, "my-app", "My app").await;
+    sqlx::query("UPDATE projects SET featured = true WHERE id = $1")
+        .bind(mine)
+        .execute(&db)
+        .await
+        .unwrap();
+    crate::seed::run(&db, &testing::config()).await.unwrap();
+    let featured: Vec<String> = sqlx::query_scalar("SELECT slug FROM projects WHERE featured")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(featured, ["my-app"]);
 }
 
 #[sqlx::test(migrations = "./migrations")]
