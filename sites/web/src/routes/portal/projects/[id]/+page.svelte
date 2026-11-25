@@ -3,7 +3,7 @@
   // The draft saves itself a moment after each change. Admins and the owning committee's
   // directors publish; leads send it for approval. Visitors keep seeing the published version
   // until the draft is published.
-  import { onDestroy, onMount, untrack } from "svelte";
+  import { onDestroy, onMount, tick, untrack } from "svelte";
   import { beforeNavigate, goto } from "$app/navigation";
   import { page } from "$app/state";
   import Archive from "@lucide/svelte/icons/archive";
@@ -228,6 +228,12 @@
     }
   }
 
+  /** After an action whose control went away, start again from the page heading. */
+  async function focusHeading(): Promise<void> {
+    await tick();
+    document.querySelector<HTMLElement>("#portal-main h1")?.focus();
+  }
+
   async function discard(): Promise<void> {
     if (server === null) return;
     actionError = null;
@@ -238,6 +244,7 @@
       startEditing(response.project);
       discardOpen = false;
       toasts.success("Your changes are discarded. The draft matches the published page again.");
+      void focusHeading();
     } catch (error) {
       discardOpen = false;
       failed(error, "We couldn\u2019t discard the changes. Try again.");
@@ -256,6 +263,7 @@
       );
       server = response.project;
       archiveOpen = false;
+      void focusHeading();
       toasts.success(
         archived
           ? `${name} is archived. It no longer appears on the site.`
