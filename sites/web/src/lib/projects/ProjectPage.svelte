@@ -282,6 +282,8 @@
     padding-top: 4px;
   }
   .site-link {
+    /* The public site has no global border-box rule; without it the padding adds to the 48 px. */
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -306,6 +308,7 @@
     }
   }
   .repo-link {
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: 12px;

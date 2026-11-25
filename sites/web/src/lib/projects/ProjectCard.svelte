@@ -62,7 +62,6 @@
         />
       {:else}
         <span class="project-card__monogram" aria-hidden="true">{monogram}</span>
-        <span class="project-card__cover-name" aria-hidden="true">{project.name}</span>
       {/if}
     </div>
 
@@ -175,9 +174,6 @@
     font-weight: 600;
     line-height: 62px;
     letter-spacing: -0.025em;
-  }
-  .project-card__cover-name {
-    display: none;
   }
 
   .project-card__body {
@@ -305,7 +301,9 @@
     color: var(--p-text-tertiary);
   }
 
-  /* Phone (Figma 44:8364): a bordered card with a square picture and the committee by the name. */
+  /* Phone (Figma 44:8364): a bordered card with a small picture and the committee by the name.
+     The picture keeps the 4:3 cover and the monogram of spec P-2 and P-3, where the Figma frame
+     has a square with the name. */
   @container (max-width: 519px) {
     .project-card__frame {
       grid-template-columns: 96px minmax(0, 1fr);
@@ -317,7 +315,6 @@
     }
     .project-card__cover {
       align-self: start;
-      aspect-ratio: 1;
       border-radius: var(--p-radius);
 
       &::after {
@@ -325,18 +322,9 @@
       }
     }
     .project-card__monogram {
-      display: none;
-    }
-    .project-card__cover-name {
-      display: block;
-      overflow: hidden;
-      padding: 8px;
-      color: var(--p-text);
-      font-size: 0.75rem;
-      font-weight: 500;
-      line-height: 16px;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      padding: 0 8px 4px;
+      font-size: 32px;
+      line-height: 36px;
     }
     .project-card__body {
       grid-template-areas:
