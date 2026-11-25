@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use axum::Form;
 use axum::extract::State as MockState;
@@ -16,7 +16,6 @@ use openidconnect::{
     Audience, EndUserEmail, EndUserName, EndUserUsername, IdToken, IdTokenClaims, IssuerUrl,
     JsonWebKeyId, LocalizedClaim, PrivateSigningKey, StandardClaims, SubjectIdentifier,
 };
-use rsa::pkcs1::{EncodeRsaPrivateKey, LineEnding};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -385,18 +384,15 @@ struct Mock {
 
 type Shared = Arc<Mutex<Mock>>;
 
-/// A throwaway RSA key, made once per test run. It exists only in memory and signs nothing outside these tests. Making it takes seconds in a debug build, so [`keycloak_app`] makes it before the mock answers any request.
-fn test_key_pem() -> &'static str {
-    static PEM: OnceLock<String> = OnceLock::new();
-    PEM.get_or_init(|| {
-        let key = rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap();
-        key.to_pkcs1_pem(LineEnding::LF).unwrap().to_string()
-    })
-}
+/// A throwaway RSA key checked in for these tests only (the file says so above the key). It signs the mock's ID tokens and nothing trusts it.
+const TEST_SIGNING_KEY: &str = include_str!("test-signing-key.pem");
 
 fn signing_key() -> CoreRsaPrivateSigningKey {
-    CoreRsaPrivateSigningKey::from_pem(test_key_pem(), Some(JsonWebKeyId::new(SIGNING_KID.into())))
-        .unwrap()
+    CoreRsaPrivateSigningKey::from_pem(
+        TEST_SIGNING_KEY,
+        Some(JsonWebKeyId::new(SIGNING_KID.into())),
+    )
+    .unwrap()
 }
 
 async fn discovery(MockState(mock): MockState<Shared>) -> axum::Json<Value> {
@@ -498,7 +494,6 @@ async fn token(
 
 /// Starts the mock and returns an app configured to sign in through it.
 async fn keycloak_app(db: &PgPool, username: &str, groups: Option<Vec<&str>>) -> (Router, Shared) {
-    tokio::task::spawn_blocking(test_key_pem).await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let mock: Shared = Arc::new(Mutex::new(Mock {

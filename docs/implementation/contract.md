@@ -332,7 +332,7 @@ Each builder owns the files of their track. Edit shared files only where this ta
 | Projects | `routes/projects.rs`, `seed/projects.rs`, `migrations/02*`; web: `src/lib/projects/`, `src/routes/(site)/projects/`, `src/routes/portal/projects/` |
 | Committees | `routes/committee_pages.rs`, `blocks.rs`, `richtext.rs`, `seed/committees.rs`, `migrations/03*`; web: `src/lib/committees/`, `src/routes/(site)/committees/`, `src/routes/portal/committees/` |
 | Overview | `routes/{overview,approvals}.rs`, `migrations/04*`; web: `src/routes/portal/overview` pieces, `src/routes/portal/people/`, `src/lib/portal/approvals/` |
-| Sign-in and governance | `auth/`, `routes/auth.rs`, `routes/auth/`, `routes/people/governance*`, `seed/people.rs`, `migrations/05*` |
+| Sign-in and governance | `auth/`, `routes/auth.rs`, `routes/auth/`, `routes/people/governance*`, `seed/people.rs`, `migrations/05*`, `.gitleaks.toml` |
 
 ## Changes
 
@@ -356,7 +356,7 @@ Record changes to this contract here, newest first, with the reason.
 
 - **Local development**: the pitchfork `site` process now loads the dev profile's secrets and logs at `info,site=debug` (kennel's shell sets `RUST_LOG` for a crate named `scottylabs_org`, which hides this crate's logs; a `cargo run -p site` by hand needs `RUST_LOG=info,site=debug`). Open the portal at `http://localhost:5173`.
 
-- **Tests**: the mock Keycloak in `routes/auth/tests.rs` signs ID tokens with a throwaway RS256 key made at test time and serves a JWKS with an encryption key beside it, like the realm. `rsa` (already in the tree through openidconnect) is a dev-dependency for that.
+- **Tests**: the mock Keycloak in `routes/auth/tests.rs` signs ID tokens with a throwaway RS256 key checked in at `routes/auth/test-signing-key.pem` (the file says it is a test key) and serves a JWKS with an encryption key beside it, like the realm. No crate was added. `.gitleaks.toml` extends gitleaks' default rules and allows only that file, so the commit hook accepts it.
 
 - 2026-11-24, shared web components. Additive only. `Field` gives its label an id and `FieldContext` gains `labelId`, so controls that a `<label for>` cannot name (the contenteditable in `RichTextEditor`) use `aria-labelledby`. New shared pieces for the projects, committees and people tracks: `src/lib/editor/` (`RichTextEditor`, `RichText`, `sanitize`, `normalizeRichText`, `plainText`, `plainTextLength`; the client mirror of `richtext.rs`), `src/lib/media/` (`Img`, `ImageField`, `ImageListField`, `src`, `srcset`, `aspectRatio`, `uploadImage`), `PersonPicker` in the portal UI kit, `src/lib/projects/ProjectCard.svelte` (also exports `PROJECT_STATUS_LABELS`, `PROJECT_KIND_LABELS` and `projectPath`) and `src/lib/site/SelectionBox.svelte`. The projects track owns `src/lib/projects/` and may change the card; keep its props.
 

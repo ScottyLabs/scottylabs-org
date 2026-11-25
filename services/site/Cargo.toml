@@ -72,8 +72,6 @@ uuid = { version = "1", features = ["serde", "v4", "v7"] }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-# Already in the tree through openidconnect. The sign-in tests make an RSA key with it to sign ID tokens the way Keycloak does.
-rsa = { version = "0.9", features = ["getrandom"] }
 
 # Declared up front so parallel work does not edit this file; used by the platform, ticker,
 # projects and committees tracks. Remove this list once everything is merged.
