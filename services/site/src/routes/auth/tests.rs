@@ -135,7 +135,7 @@ async fn dev_login_signs_in_as_each_persona(db: PgPool) {
     for (andrew_id, can_use_portal) in [
         ("tkanz", true),
         ("evanfost", true),
-        ("anishp", true),
+        ("apallati", true),
         ("spchoksh", true),
         ("newmember", false),
     ] {

@@ -43,7 +43,8 @@ pub const PERSONAS: [Persona; 5] = [
         }),
     },
     Persona {
-        andrew_id: "anishp",
+        // The Tech director's Andrew ID in governance, so a governance sync in development finds this persona instead of adding a second Tech director.
+        andrew_id: "apallati",
         name: "Anish Pallati",
         label: "Director of Tech",
         role: Some(PersonaRole {
@@ -70,14 +71,33 @@ pub const PERSONAS: [Persona; 5] = [
     },
 ];
 
+/// Andrew IDs earlier seeds gave a persona, and the one it has now. Renamed in place, so a database seeded before keeps one Tech director and the persona keeps what it posted.
+const RENAMED_PERSONAS: [(&str, &str); 1] = [("anishp", "apallati")];
+
 pub fn persona(andrew_id: &str) -> Option<&'static Persona> {
     PERSONAS.iter().find(|p| p.andrew_id == andrew_id)
+}
+
+async fn rename_old_personas(conn: &mut PgConnection) -> anyhow::Result<()> {
+    for (old, new) in RENAMED_PERSONAS {
+        sqlx::query(
+            "UPDATE users SET andrew_id = $2
+             WHERE andrew_id = $1 AND keycloak_sub IS NULL
+               AND NOT EXISTS (SELECT 1 FROM users WHERE andrew_id = $2)",
+        )
+        .bind(old)
+        .bind(new)
+        .execute(&mut *conn)
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn run(conn: &mut PgConnection, config: &Config) -> anyhow::Result<()> {
     if !config.seed_demo {
         return Ok(());
     }
+    rename_old_personas(conn).await?;
     for persona in &PERSONAS {
         let inserted: Option<Uuid> = sqlx::query_scalar(
             "INSERT INTO users (id, andrew_id, name) VALUES ($1, $2, $3)
@@ -136,6 +156,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(roles, 3);
+        let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(users, 5);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn renames_the_old_tech_director_persona(db: PgPool) {
+        testing::ensure_committees(&db).await;
+        let old = testing::user(&db, "anishp", &[(Role::Director, Some(Committee::Tech))]).await;
+        testing::seed_personas(&db).await;
+        let tech_directors: Vec<(uuid::Uuid, String)> = sqlx::query_as(
+            "SELECT u.id, u.andrew_id FROM role_assignments r JOIN users u ON u.id = r.user_id
+             WHERE r.role = 'director' AND r.committee = 'tech'",
+        )
+        .fetch_all(&db)
+        .await
+        .unwrap();
+        assert_eq!(tech_directors, [(old.id, "apallati".to_owned())]);
         let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
             .fetch_one(&db)
             .await
