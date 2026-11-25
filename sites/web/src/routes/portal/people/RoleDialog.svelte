@@ -211,6 +211,12 @@
 
   const FIELD_KEYS = ["andrewId", "name", "role", "committee", "projectIds"];
 
+  // What the service said about the last person no longer applies once another is chosen.
+  function onPersonChange(): void {
+    failure = null;
+    if (errors.andrewId) errors = { ...errors, andrewId: "" };
+  }
+
   async function save(event: SubmitEvent) {
     event.preventDefault();
     if (saving || !check()) return;
@@ -248,7 +254,7 @@
   <form id={`role-form-${formId}`} class="role-form" novalidate onsubmit={save}>
     {#if mode?.kind === "add"}
       <Field label="Person" error={errors.andrewId}>
-        <PersonPicker bind:value={person} {exclude} disabled={saving} />
+        <PersonPicker bind:value={person} {exclude} disabled={saving} onchange={onPersonChange} />
       </Field>
     {/if}
 
