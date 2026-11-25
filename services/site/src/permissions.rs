@@ -85,6 +85,16 @@ pub fn ticker_manages(viewer: &Viewer) -> Vec<TickerSource> {
         .collect()
 }
 
+/// Open an announcement in the portal. Live, expired and ended ones are open to everyone in the portal; one waiting for approval (`waiting`) only to its author and those who manage its source.
+pub fn can_view_announcement(
+    viewer: &Viewer,
+    source: TickerSource,
+    created_by: Option<Uuid>,
+    waiting: bool,
+) -> bool {
+    !waiting || created_by == Some(viewer.user_id) || can_manage_ticker(viewer, source)
+}
+
 pub fn can_reorder_ticker(viewer: &Viewer) -> bool {
     is_admin(viewer) || !director_of(viewer).is_empty()
 }
@@ -202,6 +212,43 @@ pub fn can_manage_role(viewer: &Viewer, role: Role, committee: Option<Committee>
 
 pub fn can_sync_governance(viewer: &Viewer) -> bool {
     is_admin(viewer)
+}
+
+/// Which audit entries "Recent activity" shows. Entries name what they are about, so they follow the rules for opening it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActivityScope {
+    /// Admins see every entry.
+    pub everything: bool,
+    /// Committees whose entries the viewer sees in full: those whose ticker, page, projects and approvals they manage.
+    pub committees: Vec<Committee>,
+    /// Committees the viewer belongs to without managing them. Their entries about announcements show only while the viewer may open the announcement ([`can_view_announcement`]), and those about projects only for projects the viewer may open (`projects`); the rest show in full.
+    pub limited_committees: Vec<Committee>,
+    /// The projects the viewer may open ([`can_view_project`]): `None` for every project.
+    pub projects: Option<Vec<Uuid>>,
+}
+
+/// The viewer's own actions always show, whatever this says.
+pub fn activity_scope(viewer: &Viewer) -> ActivityScope {
+    let committees: Vec<Committee> = Committee::ALL
+        .iter()
+        .copied()
+        .filter(|c| can_approve_for(viewer, *c) && can_manage_ticker(viewer, (*c).into()))
+        .collect();
+    let mut limited_committees: Vec<Committee> = viewer
+        .roles
+        .iter()
+        .filter_map(|a| a.committee)
+        .filter(|c| !committees.contains(c))
+        .collect();
+    limited_committees.sort();
+    limited_committees.dedup();
+    let sees_every_project = is_admin(viewer) || !director_of(viewer).is_empty();
+    ActivityScope {
+        everything: is_admin(viewer),
+        committees,
+        limited_committees,
+        projects: (!sees_every_project).then(|| viewer.lead_projects.clone()),
+    }
 }
 
 /// Sent to the browser in `GET /api/me`. Mirrors `Permissions` in types.ts.
@@ -408,6 +455,58 @@ pub(crate) mod tests {
         assert!(can_view_project(&lead, nova));
         assert!(!can_view_project(&lead, other));
         assert!(!can_view_project(&member, other));
+    }
+
+    #[test]
+    fn waiting_announcements_are_for_their_author_and_managers() {
+        let lead = viewer(&[(Role::Lead, Some(Committee::Events), true)], vec![]);
+        let director = viewer(&[(Role::Director, Some(Committee::Events), true)], vec![]);
+        let other = Some(Uuid::now_v7());
+        let events = TickerSource::Events;
+        assert!(can_view_announcement(&lead, events, other, false));
+        assert!(!can_view_announcement(&lead, events, other, true));
+        assert!(can_view_announcement(
+            &lead,
+            events,
+            Some(lead.user_id),
+            true
+        ));
+        assert!(can_view_announcement(&director, events, other, true));
+        assert!(!can_view_announcement(
+            &director,
+            TickerSource::Tech,
+            other,
+            true
+        ));
+    }
+
+    #[test]
+    fn activity_follows_what_the_viewer_may_open() {
+        let nova = Uuid::now_v7();
+        let admin = activity_scope(&viewer(&[(Role::Admin, None, true)], vec![]));
+        assert!(admin.everything);
+        assert_eq!(admin.projects, None);
+
+        let lead = activity_scope(&viewer(
+            &[(Role::Lead, Some(Committee::Events), true)],
+            vec![nova],
+        ));
+        assert!(!lead.everything);
+        assert!(lead.committees.is_empty());
+        assert_eq!(lead.limited_committees, [Committee::Events]);
+        assert_eq!(lead.projects, Some(vec![nova]));
+
+        // A director sees their committee in full, every project, and only some of another committee they lead in.
+        let both = activity_scope(&viewer(
+            &[
+                (Role::Director, Some(Committee::Tech), true),
+                (Role::Lead, Some(Committee::Events), true),
+            ],
+            vec![],
+        ));
+        assert_eq!(both.committees, [Committee::Tech]);
+        assert_eq!(both.limited_committees, [Committee::Events]);
+        assert_eq!(both.projects, None);
     }
 
     #[test]

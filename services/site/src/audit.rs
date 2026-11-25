@@ -74,36 +74,68 @@ struct ActivityRow {
     actor_name: Option<String>,
 }
 
-/// The newest entries the viewer may see: everything for admins; otherwise entries about their committees and their own actions. `limit` is clamped to 1 through 50.
+/// The newest entries the viewer may see, newest first: everything for admins; otherwise their own actions, and entries about their committees that name only what they may open (see [`permissions::activity_scope`]). `limit` is clamped to 1 through 50.
 /// Entries link only to pages the viewer can open.
 pub async fn recent<'e>(
     db: impl PgExecutor<'e>,
     viewer: &Viewer,
     limit: i64,
 ) -> AppResult<Vec<ActivityEntry>> {
-    let mut committees: Vec<&'static str> = permissions::director_of(viewer)
-        .into_iter()
-        .chain(permissions::lead_of(viewer))
-        .map(Committee::slug)
+    let scope = permissions::activity_scope(viewer);
+    let slugs = |list: &[Committee]| list.iter().map(|c| c.slug()).collect::<Vec<_>>();
+    let projects: Vec<String> = scope
+        .projects
+        .iter()
+        .flatten()
+        .map(Uuid::to_string)
         .collect();
-    committees.sort_unstable();
-    committees.dedup();
+    // Each branch reads its own index and stops at `limit`, instead of one filter over the whole log.
+    // In committees the viewer only belongs to, an announcement shows while it is not waiting for approval or is the viewer's own (they manage no source there), and a project only when the viewer may open it.
     let rows = sqlx::query_as::<_, ActivityRow>(
-        "SELECT a.id, a.summary, a.created_at, a.subject_type, a.subject_id, a.committee,
+        "WITH picked AS (
+             (SELECT a.* FROM audit_log a WHERE $1
+              ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
+             UNION
+             (SELECT a.* FROM audit_log a WHERE a.actor_id = $3
+              ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
+             UNION
+             (SELECT a.* FROM audit_log a WHERE a.committee = ANY($2)
+              ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
+             UNION
+             (SELECT a.* FROM audit_log a
+              WHERE a.committee = ANY($4)
+                AND CASE a.subject_type
+                      WHEN 'announcement' THEN EXISTS (
+                          SELECT 1 FROM announcements n
+                          WHERE n.id = CASE WHEN a.subject_id ~* $8 THEN a.subject_id::uuid END
+                            AND (n.state NOT IN ('pending_approval', 'sent_back')
+                                 OR n.created_by = $3))
+                      WHEN 'project' THEN $5 OR a.subject_id = ANY($6)
+                      ELSE true
+                    END
+              ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
+         )
+         SELECT a.id, a.summary, a.created_at, a.subject_type, a.subject_id, a.committee,
                 u.id AS actor_id, u.andrew_id AS actor_andrew_id, u.name AS actor_name
-         FROM audit_log a LEFT JOIN users u ON u.id = a.actor_id
-         WHERE $1 OR a.committee = ANY($2) OR a.actor_id = $3
+         FROM picked a LEFT JOIN users u ON u.id = a.actor_id
          ORDER BY a.created_at DESC, a.id DESC
-         LIMIT $4",
+         LIMIT $7",
     )
-    .bind(permissions::is_admin(viewer))
-    .bind(&committees)
+    .bind(scope.everything)
+    .bind(slugs(&scope.committees))
     .bind(viewer.user_id)
+    .bind(slugs(&scope.limited_committees))
+    .bind(scope.projects.is_none())
+    .bind(&projects)
     .bind(limit.clamp(1, MAX_ACTIVITY))
+    .bind(UUID_PATTERN)
     .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(|row| row.into_entry(viewer)).collect())
 }
+
+/// A UUID in its usual text form, so `subject_id` is cast only when it is one.
+const UUID_PATTERN: &str = "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$";
 
 impl ActivityRow {
     fn into_entry(self, viewer: &Viewer) -> ActivityEntry {

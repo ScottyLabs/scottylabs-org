@@ -453,9 +453,7 @@ async fn list(
 
 /// Waiting announcements are private to their author and the people who manage the source.
 fn can_see(viewer: &Viewer, row: &Row) -> bool {
-    !row.is_waiting()
-        || row.created_by == Some(viewer.user_id)
-        || permissions::can_manage_ticker(viewer, row.committee)
+    permissions::can_view_announcement(viewer, row.committee, row.created_by, row.is_waiting())
 }
 
 async fn show(

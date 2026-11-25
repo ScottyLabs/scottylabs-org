@@ -159,6 +159,94 @@ mod tests {
         assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
     }
 
+    fn summaries(res: &testing::Res) -> Vec<String> {
+        res.json["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["summary"].as_str().unwrap().to_owned())
+            .collect()
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn entries_never_name_what_the_viewer_may_not_open(db: PgPool) {
+        let app = testing::app(db.clone()).await;
+        let director = UserSpec::new("evdir")
+            .director(Committee::Events)
+            .create(&db)
+            .await;
+        let sara = UserSpec::new("sara")
+            .lead(Committee::Events, true)
+            .create(&db)
+            .await;
+        let newcomer = UserSpec::new("newcomer")
+            .lead(Committee::Events, false)
+            .create(&db)
+            .await;
+
+        let expires = chrono::Utc::now() + chrono::TimeDelta::days(5);
+        let sent = Req::post("/api/announcements")
+            .user(&sara)
+            .json(serde_json::json!({
+                "kind": "event", "committee": "events",
+                "message": "Private draft about the surprise speaker", "expiresAt": expires,
+            }))
+            .send(&app)
+            .await;
+        assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.json);
+        let added = Req::post("/api/projects")
+            .user(&director)
+            .json(serde_json::json!({ "name": "Unannounced sponsor hackathon", "committee": "events" }))
+            .send(&app)
+            .await;
+        assert_eq!(added.status, StatusCode::CREATED, "{}", added.json);
+
+        let waiting = "Sent \u{201c}Private draft about the surprise speaker\u{201d} for approval";
+        let project = "Added the project Unannounced sponsor hackathon";
+        let seen = |res: &testing::Res, summary: &str| summaries(res).iter().any(|s| s == summary);
+
+        // Another lead of the committee sees neither, on the activity page or the overview.
+        let other = Req::get("/api/activity").user(&newcomer).send(&app).await;
+        assert!(
+            !seen(&other, waiting) && !seen(&other, project),
+            "{}",
+            other.json
+        );
+        let overview = Req::get("/api/overview").user(&newcomer).send(&app).await;
+        assert_eq!(overview.status, StatusCode::OK);
+        let overview_summaries: Vec<&str> = overview.json["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["summary"].as_str().unwrap())
+            .collect();
+        assert!(!overview_summaries.contains(&waiting) && !overview_summaries.contains(&project));
+
+        // The author sees their own submission and the director sees both.
+        let own = Req::get("/api/activity").user(&sara).send(&app).await;
+        assert!(seen(&own, waiting) && !seen(&own, project));
+        let full = Req::get("/api/activity").user(&director).send(&app).await;
+        assert!(seen(&full, waiting) && seen(&full, project));
+
+        // Once it is live, the announcement is for everyone to see.
+        let approval: uuid::Uuid =
+            sqlx::query_scalar("SELECT id FROM approvals WHERE status = 'waiting'")
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        let approved = Req::post(&format!("/api/approvals/{approval}/approve"))
+            .user(&director)
+            .send(&app)
+            .await;
+        assert_eq!(approved.status, StatusCode::OK, "{}", approved.json);
+        let other = Req::get("/api/activity").user(&newcomer).send(&app).await;
+        assert!(
+            seen(&other, waiting) && !seen(&other, project),
+            "{}",
+            other.json
+        );
+    }
+
     #[sqlx::test(migrations = "./migrations")]
     async fn links_only_to_pages_the_viewer_can_open(db: PgPool) {
         let app = testing::app(db.clone()).await;
@@ -205,12 +293,12 @@ mod tests {
                 .collect()
         };
 
+        // A project the lead cannot open is left out, not only its link.
         let lead_view = Req::get("/api/activity").user(&lead).send(&app).await;
         assert_eq!(
             links(&lead_view),
             [
-                serde_json::Value::Null,
-                format!("/portal/projects/{nova}/").into(),
+                serde_json::Value::from(format!("/portal/projects/{nova}/")),
                 serde_json::Value::Null,
             ]
         );
