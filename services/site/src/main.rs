@@ -37,6 +37,8 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let config = Arc::new(Config::from_env().context("loading configuration")?);
+    let (sign_in, media) = config.describe();
+    tracing::info!(sign_in, media, "configuration loaded");
     let db = db::connect(&config.database_url).await?;
     db::migrate(&db).await?;
     seed::run(&db, &config).await.context("seeding content")?;
