@@ -656,13 +656,15 @@ Exceptions: the person already has a role in another committee: shown with a mes
 
 All paths are under `https://scottylabs.org`. Authenticated routes use the session cookie and require a CSRF token on writes. Errors return JSON with `code` and `message`.
 
+This section summarizes the routes. `docs/implementation/contract.md` is the authority for paths, bodies, status codes and error codes; where the two differ, the contract wins.
+
 ### Public, cacheable
 
 | Method and path | Returns |
 | -- | -- |
 | GET `/api/health` | 200 when ready. Required by kennel |
 | GET `/api/public/ticker` | Live announcements in order |
-| GET `/api/public/projects` | Published projects, with `committee` and `q` filters |
+| GET `/api/public/projects` | Published projects, with a `committee` filter. The Projects page searches the list in the browser, so its `?q=` stays in the page address and the API takes no `q` |
 | GET `/api/public/projects/:slug` | One published project |
 | GET `/api/public/committees` | The seven committees with index content |
 | GET `/api/public/committees/:slug` | Published blocks for one committee page |
@@ -671,9 +673,11 @@ All paths are under `https://scottylabs.org`. Authenticated routes use the sessi
 
 | Method and path | Purpose |
 | -- | -- |
-| GET `/auth/login` | Starts the OIDC flow |
-| GET `/auth/callback` | Completes it and sets the session |
-| POST `/auth/logout` | Ends the session |
+| GET `/api/auth/config` | Which sign-in methods are on |
+| GET `/api/auth/login?returnTo=` | Starts the OIDC flow |
+| GET `/api/auth/callback` | Completes it and sets the session |
+| POST `/api/auth/dev-login` | Signs in as a seeded persona where dev sign-in is allowed |
+| POST `/api/auth/logout` | Ends the session |
 | GET `/api/me` | Current user, role, scope and permissions |
 
 ### Portal
@@ -681,16 +685,20 @@ All paths are under `https://scottylabs.org`. Authenticated routes use the sessi
 | Method and path | Who |
 | -- | -- |
 | GET `/api/overview` | Any role |
-| GET, POST `/api/announcements`; PATCH, DELETE `/api/announcements/:id` | Admin, Director, permitted Lead |
+| GET, POST `/api/announcements`; GET, PATCH, DELETE `/api/announcements/:id` | Admin, Director, permitted Lead |
 | POST `/api/announcements/:id/extend`, `/end`, `/repost`; PUT `/api/announcements/order` | Admin, Director |
-| GET `/api/committee-pages`; GET, PUT `/api/committee-pages/:slug/draft` | Admin, that committee's Director |
-| POST `/api/committee-pages/:slug/publish` | Admin, that committee's Director |
-| GET, POST `/api/projects`; GET, PATCH `/api/projects/:id` | By scope |
-| POST `/api/projects/:id/publish`, `/archive` | Admin, Director; Lead creates an approval |
+| GET `/api/committee-pages`; GET `/api/committee-pages/:slug` | Any role, read only unless they may edit |
+| POST, DELETE `/api/committee-pages/:slug/lock`; PUT `/api/committee-pages/:slug/draft`; GET `/api/committee-pages/:slug/changes` | Admin, that committee's Director |
+| POST `/api/committee-pages/:slug/publish`, `/discard` | Admin, that committee's Director |
+| GET, POST `/api/projects`; GET `/api/projects/:id` | By scope |
+| PUT `/api/projects/:id/draft` | Editors of the project |
+| POST `/api/projects/:id/publish`, `/archive`, `/unarchive`, `/discard` | Admin, Director; a Lead's publish creates an approval |
+| PATCH `/api/projects/:id/settings`; PUT `/api/projects/:id/editors` | Admin (settings); Admin and the owning Director (editors) |
 | POST `/api/media` (multipart) | Any role |
-| GET `/api/approvals`; POST `/api/approvals/:id/approve`, `/send-back` | Admin, Director |
-| GET `/api/people`; POST `/api/people`; PATCH, DELETE `/api/people/:id` | Admin; Director for own leads |
-| GET `/api/people/search?q=` | Admin, Director. Searches the portal's own `users` table |
+| GET `/api/approvals`; POST `/api/approvals/:id/approve`, `/send-back` | Admin, Director; Leads list their own with `mine=true` |
+| GET, POST `/api/people`; GET `/api/people/search?q=` | Admin; Director for own leads. Search reads the portal's own `users` table |
+| PATCH, DELETE `/api/people/assignments/:id` | Admin; Director for own leads |
+| POST `/api/people/sync-governance` | Admin |
 | GET `/api/activity` | By scope |
 
 Authorization is enforced in the service on every route. The interface hiding a button is never the only check.
