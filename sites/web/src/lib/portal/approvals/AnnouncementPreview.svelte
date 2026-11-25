@@ -1,44 +1,18 @@
-<script lang="ts" module>
-  import Calendar from "@lucide/svelte/icons/calendar";
-  import Megaphone from "@lucide/svelte/icons/megaphone";
-  import Rocket from "@lucide/svelte/icons/rocket";
-  import Trophy from "@lucide/svelte/icons/trophy";
-  import type { AnnouncementKind } from "../../api/types.ts";
-  import type { IconComponent } from "../ui/types.ts";
-
-  // The same icon for each kind as the home page ticker.
-  const KIND_ICONS: Readonly<Record<AnnouncementKind, IconComponent>> = {
-    event: Calendar,
-    project_update: Rocket,
-    milestone: Trophy,
-    club_news: Megaphone,
-  };
-</script>
-
 <script lang="ts">
-  // An announcement at real size after the dog mark, as the home page ticker shows it (spec AP-2).
-  // It mirrors the ticker's item; once the ticker components are merged this can use them.
-  import ArrowUpRight from "@lucide/svelte/icons/arrow-up-right";
+  // An announcement at real size after the dog mark, drawn by the home page ticker's own item
+  // (spec AP-2). The facts under it give the type, committee and link in words.
   import type { AnnouncementInput } from "../../api/types.ts";
-  import CommitteeChip from "../ui/CommitteeChip.svelte";
+  import TickerItem from "../../ticker/TickerItem.svelte";
   import DogMark from "../ui/DogMark.svelte";
 
   let { announcement }: { announcement: AnnouncementInput } = $props();
-
-  const Icon = $derived(KIND_ICONS[announcement.kind]);
 </script>
 
 <div class="announcement-preview">
   <p class="p-sr-only">As it will appear on the ticker: {announcement.message}</p>
-  <!-- The facts under the preview give the type and committee in words. -->
-  <div class="announcement-preview__run" aria-hidden="true">
+  <div class="announcement-preview__run" aria-hidden="true" inert>
     <DogMark variant="gradient" width={29} />
-    <span class="announcement-preview__item">
-      <Icon size={16} strokeWidth={1.75} />
-      <span class="announcement-preview__message">{announcement.message}</span>
-      <CommitteeChip committee={announcement.committee} />
-      {#if announcement.linkUrl}<ArrowUpRight size={14} strokeWidth={2} />{/if}
-    </span>
+    <TickerItem class="announcement-preview__item" {announcement} focusable={false} />
   </div>
 </div>
 
@@ -63,27 +37,17 @@
   .announcement-preview__run > :global(.dog-mark) {
     flex: none;
   }
-  .announcement-preview__item {
-    box-sizing: border-box;
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
+  /* The ticker keeps an item on one line and scrolls it; here a long message wraps instead, so the
+     approver reads all of it. */
+  .announcement-preview__run > :global(.announcement-preview__item) {
+    flex: 0 1 auto;
     min-width: 0;
+    height: auto;
     min-height: 36px;
-    padding: 7px 12px;
-    color: var(--p-text);
-    font-family: var(--p-font);
-    font-size: 0.9375rem;
-    font-weight: 500;
-    line-height: 22px;
-
-    & > :global(svg) {
-      flex: none;
-    }
+    white-space: normal;
   }
-  /* The ticker keeps it on one line; here a long message wraps so the approver reads all of it. */
-  .announcement-preview__message {
-    min-width: 0;
+  .announcement-preview__run :global(.announcement-preview__item .ticker-item__message) {
+    overflow: visible;
     overflow-wrap: anywhere;
   }
 </style>
