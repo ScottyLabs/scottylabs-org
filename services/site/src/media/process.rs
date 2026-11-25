@@ -14,7 +14,11 @@ use image::{DynamicImage, ImageDecoder, ImageError, ImageFormat, ImageReader, Li
 pub const MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 /// Largest width or height decoded.
 pub const MAX_DIMENSION: u32 = 12_000;
+/// Most pixels decoded, such as 8000 by 5000. A small, highly compressed file can describe a far larger image, which would take seconds and gigabytes to decode and resize; no page needs one.
+pub const MAX_PIXELS: u64 = 40_000_000;
 const MAX_DECODE_ALLOC: u64 = 512 * 1024 * 1024;
+/// Resampling with a filter first builds a floating point copy of (source width x new height) pixels, 16 bytes each. Past this size the cheaper box filter is used.
+const RESAMPLE_BUDGET_BYTES: u64 = 160 * 1024 * 1024;
 /// Widths made for every upload, never wider than the original.
 pub const WIDTHS: [u32; 3] = [480, 960, 1920];
 const JPEG_QUALITY: u8 = 82;
@@ -88,39 +92,50 @@ pub fn target_widths(original: u32) -> Vec<u32> {
 
 pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
     let format = sniff(bytes).ok_or(ProcessError::Unsupported)?;
-    let image = decode(bytes, format)?;
-    let widths = target_widths(image.width());
+    let mut current = decode(bytes, format)?;
+    let widths = target_widths(current.width());
 
-    // Resize from the widest down, each step from the previous one, which is much faster than resizing the original every time and looks the same.
-    let mut resized = Vec::with_capacity(widths.len());
-    let mut current = image;
+    // Resize from the widest down, each step from the previous one, which is much faster than resizing the original every time and looks the same. Each version is encoded as soon as it exists, so only one is held at a time.
+    let mut output = None;
+    let mut variants = Vec::with_capacity(widths.len());
     for width in widths.iter().rev() {
         if current.width() != *width {
-            let height = scaled_height(current.width(), current.height(), *width);
-            current = current.resize_exact(*width, height, FilterType::CatmullRom);
+            current = shrink(&current, *width);
         }
-        resized.push(current.clone());
+        // The widest version decides the format for all of them.
+        let format = *output.get_or_insert_with(|| {
+            if has_transparency(&current) {
+                OutputFormat::Png
+            } else {
+                OutputFormat::Jpeg
+            }
+        });
+        variants.push(Variant {
+            width: current.width(),
+            height: current.height(),
+            bytes: encode(&current, format)?,
+        });
     }
-    resized.reverse();
-
-    let output = match resized.last() {
-        Some(widest) if has_transparency(widest) => OutputFormat::Png,
-        _ => OutputFormat::Jpeg,
-    };
-    let variants = resized
-        .iter()
-        .map(|image| {
-            Ok(Variant {
-                width: image.width(),
-                height: image.height(),
-                bytes: encode(image, output)?,
-            })
-        })
-        .collect::<Result<Vec<_>, ProcessError>>()?;
+    variants.reverse();
     Ok(Processed {
-        format: output,
+        format: output.unwrap_or(OutputFormat::Jpeg),
         variants,
     })
+}
+
+/// `image` scaled down to `width`, keeping its proportions.
+fn shrink(image: &DynamicImage, width: u32) -> DynamicImage {
+    let height = scaled_height(image.width(), image.height(), width);
+    // Most of a large original is first averaged down to twice the size with the fast integer box filter, which looks the same at that ratio and needs no floating point copy of the original.
+    let halfway = (image.width() > 2 * width).then(|| image.thumbnail_exact(2 * width, 2 * height));
+    let source = halfway.as_ref().unwrap_or(image);
+    let resample_bytes = u64::from(source.width()) * u64::from(height) * 16;
+    if resample_bytes > RESAMPLE_BUDGET_BYTES {
+        // Very tall images: the filter's copy would be too large.
+        source.thumbnail_exact(width, height)
+    } else {
+        source.resize_exact(width, height, FilterType::CatmullRom)
+    }
 }
 
 fn decode(bytes: &[u8], format: ImageFormat) -> Result<DynamicImage, ProcessError> {
@@ -131,6 +146,11 @@ fn decode(bytes: &[u8], format: ImageFormat) -> Result<DynamicImage, ProcessErro
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
     reader.limits(limits);
     let mut decoder = reader.into_decoder().map_err(decode_error)?;
+    // Checked from the header, before any pixel is decoded.
+    let (width, height) = decoder.dimensions();
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(ProcessError::TooLarge);
+    }
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
     let mut image = DynamicImage::from_decoder(decoder).map_err(decode_error)?;
     image.apply_orientation(orientation);
@@ -273,6 +293,77 @@ pub(crate) mod tests {
         let mut broken = jpeg(50, 50);
         broken.truncate(40);
         assert!(matches!(process(&broken), Err(ProcessError::Unreadable(_))));
+    }
+
+    /// A PNG that claims to be `width` by `height` but holds a single row of data. Its pixels are never needed: the size alone must stop it.
+    fn png_header_only(width: u32, height: u32) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = u32::MAX;
+            for byte in bytes {
+                crc ^= u32::from(*byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 == 1 {
+                        (crc >> 1) ^ 0xEDB8_8320
+                    } else {
+                        crc >> 1
+                    };
+                }
+            }
+            !crc
+        }
+        fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+            out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+            let mut body = kind.to_vec();
+            body.extend_from_slice(data);
+            out.extend_from_slice(&body);
+            out.extend_from_slice(&crc32(&body).to_be_bytes());
+        }
+        let mut header = Vec::new();
+        header.extend_from_slice(&width.to_be_bytes());
+        header.extend_from_slice(&height.to_be_bytes());
+        // 8-bit grayscale, no interlacing.
+        header.extend_from_slice(&[8, 0, 0, 0, 0]);
+        let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+        chunk(&mut out, b"IHDR", &header);
+        // A stored zlib block of one empty row.
+        chunk(
+            &mut out,
+            b"IDAT",
+            &[
+                0x78, 0x01, 0x01, 0x01, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x01, 0x00, 0x01,
+            ],
+        );
+        chunk(&mut out, b"IEND", &[]);
+        out
+    }
+
+    #[test]
+    fn small_files_that_decode_to_huge_images_are_refused_from_the_header() {
+        let started = std::time::Instant::now();
+        for (width, height) in [(12_000, 12_000), (8_000, 5_001), (MAX_DIMENSION, 3_334)] {
+            let bomb = png_header_only(width, height);
+            assert!(bomb.len() < 100);
+            assert!(
+                matches!(process(&bomb), Err(ProcessError::TooLarge)),
+                "{width}x{height}"
+            );
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        // At the budget the header passes and decoding the missing rows fails instead.
+        assert!(matches!(
+            process(&png_header_only(8_000, 5_000)),
+            Err(ProcessError::Unreadable(_))
+        ));
+    }
+
+    #[test]
+    fn wide_and_tall_images_shrink_to_every_width() {
+        let wide = process(&png(4_000, 100, 255)).unwrap();
+        let sizes: Vec<(u32, u32)> = wide.variants.iter().map(|v| (v.width, v.height)).collect();
+        assert_eq!(sizes, [(480, 12), (960, 24), (1920, 48)]);
+        // Too tall for the filter's floating point copy, so the box filter does it.
+        let tall = shrink(&DynamicImage::new_rgb8(1_921, 5_500), 1_920);
+        assert_eq!((tall.width(), tall.height()), (1_920, 5_497));
     }
 
     #[test]
