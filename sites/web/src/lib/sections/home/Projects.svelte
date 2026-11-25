@@ -3,10 +3,13 @@
   import type { Attachment } from "svelte/attachments";
   import { getAllImageLinksInAssetDirectory } from "#lib/utils/files.ts";
   import externalLinkIcon from "#lib/assets/icons/go-to-icon.svg";
+  import { projectPath } from "#lib/projects/labels.ts";
 
+  // Each one also has a page on the Projects page, under its slug.
   const featuredProjects = [
     {
       name: "CMU Courses",
+      slug: "cmu-courses",
       assetFolder: "cmu-courses",
       description: `CMU Courses is a course browser built by and for CMU students.
           Bringing together course information, schedules and FCE data, it makes
@@ -16,6 +19,7 @@
     },
     {
       name: "CMU Eats",
+      slug: "cmu-eats",
       assetFolder: "cmu-eats",
       description:
         "CMUEats is your one-stop-shop for finding out what campus dining locations are open right now.",
@@ -23,6 +27,7 @@
     },
     {
       name: "CMU Maps",
+      slug: "cmu-maps",
       assetFolder: "cmu-maps",
       description: "Providing indoor maps and navigation for the CMU campus.",
       link: "https://cmumaps.com/",
@@ -276,6 +281,9 @@
             {featuredProjects[panel.index].description}
           </span>
           <div class="panel__details__footer">
+            <a href={projectPath(featuredProjects[panel.index].slug)}>
+              About {featuredProjects[panel.index].name}
+            </a>
             <a href={featuredProjects[panel.index].link} target="_blank">
               <img src={externalLinkIcon} alt="" />
               Visit
