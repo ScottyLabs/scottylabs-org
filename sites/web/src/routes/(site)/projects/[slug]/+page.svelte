@@ -62,7 +62,7 @@
     try {
       const response = await get<PublicProjectResponse>(`/public/projects/${current}`, { signal });
       if (response.redirectTo !== null && MOVED_TO.test(response.redirectTo)) {
-        await goto(`${response.redirectTo}${page.url.hash}`, { replaceState: true });
+        await goto(`${response.redirectTo}${page.url.hash}`, { replace: true });
         return;
       }
       if (response.project === null) {
