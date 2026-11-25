@@ -117,7 +117,9 @@
   <section class="section" aria-labelledby="photos-heading">
     <div class="section__intro">
       <h2 class="section__heading" id="photos-heading">Photos and video</h2>
-      <p class="section__text">Up to {MAX_PHOTOS} photos. The first one is the cover and needs a description.</p>
+      <p class="section__text">
+        Up to {MAX_PHOTOS} photos. The first one is the cover: at least 1,200 pixels wide, with a description.
+      </p>
     </div>
     <ImageListField
       bind:value={doc.media}

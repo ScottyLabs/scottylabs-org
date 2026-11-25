@@ -7,8 +7,10 @@ export { default as Img } from "./Img.svelte";
 export {
   MAX_MEDIA_WIDTH,
   MEDIA_WIDTHS,
+  MIN_COVER_WIDTH,
   SEED_WIDTHS,
   aspectRatio,
+  coverWidthProblem,
   isSeedPhoto,
   isUploaded,
   seedVariantPath,

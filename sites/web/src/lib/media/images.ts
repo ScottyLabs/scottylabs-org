@@ -43,6 +43,19 @@ export function isUploaded(path: string): boolean {
   return UPLOADED.test(path);
 }
 
+/** The narrowest upload the service publishes as a cover (spec section 12). */
+export const MIN_COVER_WIDTH = 1200;
+
+/**
+ * Why an image cannot be a cover, in the service's words (`ImageRef::cover_problem`): an upload
+ * narrower than MIN_COVER_WIDTH. Photos bundled with the site are exempt; some are 1000 px wide.
+ */
+export function coverWidthProblem(image: SizedImage): string | null {
+  const width = image.width;
+  if (!isUploaded(image.src) || width === null || width >= MIN_COVER_WIDTH) return null;
+  return `Use a cover photo at least ${MIN_COVER_WIDTH.toLocaleString("en-US")} pixels wide. This one is ${width.toString()} pixels wide.`;
+}
+
 /** The widths stored for an upload: the standard ones below its width, plus its own width. */
 export function storedWidths(image: SizedImage): number[] {
   const original = image.width;

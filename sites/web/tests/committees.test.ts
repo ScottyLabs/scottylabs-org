@@ -6,7 +6,7 @@
 /* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access */
 
 import assert from "node:assert/strict";
-import type { Block, BlockWidth, CommitteePageDoc } from "../src/lib/api/types.ts";
+import type { Block, BlockWidth, CommitteePageDoc, ImageRef } from "../src/lib/api/types.ts";
 import {
   BLOCK_LABELS,
   blockName,
@@ -298,6 +298,42 @@ Deno.test("publishing needs a link to one video, not a channel", () => {
   assert.equal(
     problems[0]?.message,
     "Use a link to one YouTube or Vimeo video, not a channel or playlist.",
+  );
+});
+
+function withCover(image: ImageRef): Block {
+  return { id: "cover", type: "cover", width: 12, props: { tagline: "", image } };
+}
+
+function upload(width: number | null, alt = "Students at work"): ImageRef {
+  return {
+    src: "/media/0190e0a4-7c1b-7d2e-9f00-000000000001",
+    alt,
+    width,
+    height: width === null ? null : Math.round(width * 0.6),
+  };
+}
+
+Deno.test("an uploaded cover must be at least 1,200 pixels wide to publish", () => {
+  // Wide enough, or of unknown size, or bundled with the site: nothing to fix.
+  assert.deepEqual(publishProblems(doc([withCover(upload(1200)), stats()])), []);
+  assert.deepEqual(publishProblems(doc([withCover(upload(1920)), stats()])), []);
+  assert.deepEqual(publishProblems(doc([withCover(upload(null)), stats()])), []);
+  assert.deepEqual(publishProblems(doc([cover(), stats()])), []);
+
+  const narrow = publishProblems(doc([withCover(upload(960)), stats()]));
+  assert.deepEqual(
+    narrow.map((problem) => `${problem.blockId}:${problem.field}`),
+    ["cover:image"],
+  );
+  assert.equal(
+    narrow[0]?.message,
+    "Use a cover photo at least 1,200 pixels wide. This one is 960 pixels wide.",
+  );
+  // A narrow cover without a description needs both fixed, the width first, as the service lists them.
+  assert.deepEqual(
+    publishProblems(doc([withCover(upload(1199, " ")), stats()])).map((problem) => problem.field),
+    ["image", "image.alt"],
   );
 });
 

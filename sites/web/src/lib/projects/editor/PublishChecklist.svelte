@@ -5,6 +5,7 @@
   import CircleDashed from "@lucide/svelte/icons/circle-dashed";
   import Info from "@lucide/svelte/icons/info";
   import type { PersonRef, ProjectChecklist } from "../../api/types.ts";
+  import { MIN_COVER_WIDTH } from "../../media/images.ts";
   import { MAX_SUMMARY_CHARS } from "../drafts.ts";
 
   let {
@@ -19,6 +20,12 @@
 
   const items = $derived([
     { done: checklist.cover, required: true, label: "Cover photo added" },
+    // The service counts no cover as wide enough; the item is done only once a wide one is there.
+    {
+      done: checklist.cover && checklist.coverWide,
+      required: true,
+      label: `Cover photo at least ${MIN_COVER_WIDTH.toLocaleString("en-US")} pixels wide`,
+    },
     { done: checklist.altText, required: true, label: "Cover photo described" },
     {
       done: checklist.summary,

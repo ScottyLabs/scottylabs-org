@@ -1,8 +1,9 @@
-// What must be fixed before a page can be published, checked in the browser so the publish dialog can list it. The service checks the same rules (blocks::check_for_publishing).
+// What must be fixed before a page can be published, checked in the browser so the publish dialog can list it. The service checks the same rules (blocks::check_for_publishing), among them an uploaded cover at least 1,200 pixels wide.
 
 import type { Block, CommitteePageDoc, ImageRef } from "../../api/types.ts";
 import { blockName } from "../blocks.ts";
 import { LIMITS } from "../limits.ts";
+import { coverWidthProblem } from "../../media/images.ts";
 import { videoEmbed } from "../../media/video.ts";
 
 export interface PublishProblem {
@@ -25,12 +26,18 @@ function blockProblems(block: Block, index: number): PublishProblem[] {
     message,
   });
   switch (block.type) {
-    case "cover":
-      if (block.props.image === null)
-        return [problem("image", "Add a cover picture in the page settings.")];
-      return needsAlt(block.props.image)
-        ? [problem("image.alt", "Describe the cover picture for people using screen readers.")]
-        : [];
+    case "cover": {
+      const image = block.props.image;
+      if (image === null) return [problem("image", "Add a cover picture in the page settings.")];
+      const list: PublishProblem[] = [];
+      const narrow = coverWidthProblem(image);
+      if (narrow !== null) list.push(problem("image", narrow));
+      if (needsAlt(image))
+        list.push(
+          problem("image.alt", "Describe the cover picture for people using screen readers."),
+        );
+      return list;
+    }
     case "image":
       if (block.props.image === null)
         return [problem("image", `Choose a photo for ${name} ${index}, or remove the block.`)];
