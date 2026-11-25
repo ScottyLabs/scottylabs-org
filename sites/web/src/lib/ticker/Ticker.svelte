@@ -237,7 +237,20 @@
     if (!(event.relatedTarget instanceof Node) || !windowEl?.contains(event.relatedTarget)) focused = false;
   }
 
+  /** Stopped by the person or by the open list; the button then offers Play (Figma 93:6600). */
+  const held = $derived(userPaused || listOpen);
+  /** The list was holding the strip when the button was pressed; pressing outside it closes it. */
+  let heldByList = false;
+
   function togglePause() {
+    const byList = heldByList || (listOpen && !userPaused);
+    heldByList = false;
+    if (byList) {
+      // Play while only the list holds the strip: close the list and the strip moves again.
+      const list = document.getElementById(listId);
+      if (list?.matches(":popover-open") === true) list.hidePopover();
+      return;
+    }
     userPaused = !userPaused;
     writePaused(userPaused);
   }
@@ -287,7 +300,8 @@
           <div class="ticker__set" aria-hidden="true">
             {#each items as item (item.id)}<div class="ticker__entry">{@render entry(item, false)}</div>{/each}
           </div>
-          <ul class="ticker__set" bind:this={setEl}>
+          <!-- role="list": Safari drops list semantics from lists styled without bullets. -->
+          <ul class="ticker__set" role="list" bind:this={setEl}>
             {#each items as item (item.id)}<li class="ticker__entry">{@render entry(item, true)}</li>{/each}
           </ul>
           {#each { length: copiesAfter }, copy (copy)}
@@ -297,7 +311,7 @@
           {/each}
         </div>
       {:else if mode === "stepper"}
-        <ul class="ticker__steps">
+        <ul class="ticker__steps" role="list">
           {#each items as item, index (item.id)}
             <li class={["ticker__step", index === current && "ticker__step--current"]} onfocusin={() => (step = index)}>
               <TickerItem announcement={item} />
@@ -305,7 +319,7 @@
           {/each}
         </ul>
       {:else}
-        <ul class="ticker__steps">
+        <ul class="ticker__steps" role="list">
           <li class="ticker__step ticker__step--current"><TickerItem announcement={items[0]} /></li>
         </ul>
       {/if}
@@ -322,11 +336,12 @@
           <button
             type="button"
             class="ticker__button ticker__button--icon"
-            aria-label={userPaused ? "Play announcements" : "Pause announcements"}
-            title={userPaused ? "Play" : "Pause"}
+            aria-label={held ? "Play announcements" : "Pause announcements"}
+            title={held ? "Play" : "Pause"}
+            onpointerdown={() => (heldByList = listOpen && !userPaused)}
             onclick={togglePause}
           >
-            {#if userPaused}<Play size={14} strokeWidth={2} aria-hidden="true" />{:else}<Pause size={14} strokeWidth={2} aria-hidden="true" />{/if}
+            {#if held}<Play size={14} strokeWidth={2} aria-hidden="true" />{:else}<Pause size={14} strokeWidth={2} aria-hidden="true" />{/if}
           </button>
         </div>
       {:else if mode === "stepper"}
@@ -532,19 +547,20 @@
       --edge: 20px;
     }
   }
-  /* Phones keep the pause button and drop the label. The scrolling text reads in full there, so
-     the list is offered only where an announcement stands still. */
+  /* Phones keep "All N" and the pause button and drop the label (T-7, T-12). */
   @media (max-width: 600px) {
     .ticker {
       --edge: 20px;
       --still-left: var(--edge);
       --left-cap: 32px;
-      --right-cap: 80px;
+      --right-cap: 148px;
       --fade: 28px;
     }
-    .ticker__label,
-    .ticker--marquee .ticker__button--all {
+    .ticker__label {
       display: none;
+    }
+    .ticker__controls {
+      gap: 6px;
     }
     /* Standing still on a phone, the controls leave little room: the message takes two lines and
        the committee is left to the list (screen readers still hear it). */

@@ -72,7 +72,7 @@
     <h2 id={headingId} class="ticker-list__title" tabindex="-1" bind:this={heading}>Announcements</h2>
     <span class="ticker-list__count">{items.length} live now</span>
   </div>
-  <ul class="ticker-list__items">
+  <ul class="ticker-list__items" role="list">
     {#each items as item (item.id)}
       {@const Icon = kindIcon(item.kind)}
       {@const host = linkHost(item.linkUrl)}
