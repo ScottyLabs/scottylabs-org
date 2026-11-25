@@ -83,6 +83,16 @@
     server?.state === "published" ? (upToDate ? "Published" : "Publish changes") : "Publish",
   );
   const saveLabel = $derived(describeSave());
+  // Only saves made on this visit are announced, not the time of the last one before it.
+  let savedHere = $state(false);
+  const saveAnnouncement = $derived.by(() => {
+    if (saver === null) return "";
+    if (saver.status === "invalid" || (saver.status === "failed" && saver.retrying)) return saveLabel?.text ?? "";
+    return saver.status === "saved" && savedHere ? "Saved" : "";
+  });
+  $effect(() => {
+    if (saver !== null && (saver.status === "pending" || saver.status === "saving")) savedHere = true;
+  });
 
   const menuItems = $derived.by((): MenuItem[] => {
     if (server === null) return [];
@@ -157,6 +167,7 @@
   /** Shows the server's draft in the form and saves changes to it from here on. */
   function startEditing(project: Project): void {
     saver?.destroy();
+    savedHere = false;
     server = project;
     doc = structuredClone(project.draft);
     saver = project.canEdit
@@ -360,10 +371,9 @@
       {#if saveLabel !== null}
         <span class={["save", `save--${saveLabel.tone}`]}>{saveLabel.text}</span>
       {/if}
-      <!-- A save that stopped for good is announced by its message below. -->
-      <span class="p-sr-only" aria-live="polite">
-        {saver?.status === "invalid" || (saver?.status === "failed" && saver.retrying) ? saveLabel?.text : ""}
-      </span>
+      <!-- A save that stopped for good is announced by its message below. "Saving" stays quiet;
+           each finished save says "Saved" once, since the text empties while the next one runs. -->
+      <span class="p-sr-only" aria-live="polite">{saveAnnouncement}</span>
       <span class="header__desktop">
         <Button variant="outline" size="lg" icon={Eye} loading={busy === "preview"} onclick={() => void preview()}>
           Preview page
