@@ -284,7 +284,7 @@ For a request outside `/api` and `/media`, with `STATIC_DIR` set:
 1. Reject paths with `..` or NUL. Decode percent-encoding once.
 1. Serve the file if it exists. A directory with `index.html` and no trailing slash redirects (308) to the slash form.
 1. Otherwise serve `200.html`:
-   - `/projects/<slug>/`: inject the project's name, summary and cover as `<title>`, the meta description and Open Graph tags. Status 404 when no published project has that slug.
+   - `/projects/<slug>/`: inject the project's name, summary and cover as `<title>`, the meta description and Open Graph tags, each marked `data-sl-injected`. The app removes the marked tags before any page writes its head (`src/lib/site/head.ts`, called from the root layout), so crawlers that run no scripts read them and visitors never get two descriptions. Status 404 when no published project has that slug.
    - `/portal/` and below: status 200, `Cache-Control: no-store`.
    - Anything else: status 404 (SvelteKit renders its error page).
 
@@ -295,22 +295,39 @@ Headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: 
 - JSON bodies at most 256 KB, uploads 6 MB.
 - Per IP: sign-in and dev login 20 a minute; writes 120 a minute; uploads 30 a minute.
 
-## Ownership of files during the build
+## Ownership of files
 
-Each builder owns the files of their track. Edit shared files only where this table allows.
+Each area keeps the files below; change another area's files only together with its owner, and record shared changes here. Rust paths are under `services/site/src/`, web paths under `sites/web/`.
 
-| Track | Owns |
+| Area | Files |
 | -- | -- |
-| Scaffold | `flake.nix`, `Cargo.toml`, `secretspec.toml`, `services/site/src/{main,state,error,db,config}.rs`, `services/site/src/routes/mod.rs`, migration `0001`, `sites/web/src/lib/api/types.ts`, this file |
-| Platform | `auth/`, `permissions.rs`, `audit.rs`, `ratelimit.rs`, `static_files.rs`, `media/`, `routes/{auth,me,people,media,activity}.rs`, `seed/{mod,people}.rs`; web: `src/lib/api/client.ts`, `src/lib/portal/`, `src/routes/portal/{+layout*,+page*,sign-in,no-access}`, the `(site)` group move, header nav |
-| Ticker | `routes/announcements.rs`, `seed/ticker.rs`, `migrations/01*`; web: `src/lib/ticker/`, `src/routes/portal/ticker/`, the home hero strip |
-| Projects | `routes/projects.rs`, `seed/projects.rs`, `migrations/02*`; web: `src/lib/projects/`, `src/routes/(site)/projects/`, `src/routes/portal/projects/` |
-| Committees | `routes/committee_pages.rs`, `blocks.rs`, `richtext.rs`, `seed/committees.rs`, `migrations/03*`; web: `src/lib/committees/`, `src/routes/(site)/committees/`, `src/routes/portal/committees/` |
-| Overview | `routes/{overview,approvals}.rs`, `migrations/04*`; web: `src/routes/portal/overview` pieces, `src/routes/portal/people/`, `src/lib/portal/approvals/` |
+| Scaffold | `flake.nix`, `Cargo.toml`, `services/site/Cargo.toml`, `secretspec.toml`, `{main,state,error,db,config,models,approvals_core}.rs`, `routes/mod.rs`, migration `0001_init.sql`, `src/lib/api/types.ts`, this file |
+| Platform | `auth/`, `permissions.rs`, `audit.rs`, `ratelimit.rs`, `json.rs`, `testing.rs`, `static_files.rs` and `static_files/`, `media/`, `routes/{auth,me,people,media,activity}.rs` and `routes/{auth,people}/`, `seed/{mod,people}.rs`; web: `src/lib/api/client.ts`, `src/lib/portal/` (except `approvals/` and `overview/`), `src/lib/site/`, `src/routes/+layout.*`, `src/routes/+error.svelte`, `src/routes/(site)/+layout.svelte`, `src/routes/portal/{+layout.*,+error.svelte,sign-in,no-access}`, `src/lib/sections/home/Header.svelte`, `vite.config.ts` |
+| Shared components | `src/lib/editor/`, `src/lib/media/`, `src/lib/portal/ui/PersonPicker.svelte`, `src/lib/site/SelectionBox.svelte`; `src/lib/projects/ProjectCard.svelte` belongs to Projects |
+| Ticker | `routes/announcements.rs` and `routes/announcements/`, `seed/ticker.rs`; web: `src/lib/ticker/`, `src/routes/portal/ticker/`, the strip in `src/lib/sections/home/Hero.svelte` |
+| Projects | `routes/projects/`, `seed/projects.rs`, migrations `02*`; web: `src/lib/projects/`, `src/routes/(site)/projects/`, `src/routes/portal/projects/`, the project links in `src/lib/sections/home/Projects.svelte` |
+| Committees | `routes/committee_pages/`, `blocks.rs`, `richtext.rs`, `seed/committees.rs`, migrations `03*`; web: `src/lib/committees/`, `src/routes/(site)/committees/`, `src/routes/portal/committees/` |
+| Overview | `routes/overview.rs` and `routes/overview/`, `routes/approvals.rs` and `routes/approvals/`; web: `src/routes/portal/+page.svelte`, `src/lib/portal/overview/`, `src/lib/portal/approvals/`, `src/routes/portal/people/` |
 
 ## Changes
 
 Record changes to this contract here, newest first, with the reason.
+
+### 2026-11-24, integration
+
+The merged tracks wired together. No shape in `types.ts` changed.
+
+- **Committee pages list the Projects page's cards.** `GET /api/public/committees/:slug` and the editor's `projects` come from `routes::projects::public::published_cards(db, Some(committee))`, so a committee page shows exactly the cards `GET /api/public/projects?committee=` returns: the published version's committee, featured first, then by name. The committees module no longer has its own project query or `ProjectCard`.
+
+- **Approvals run through the real hooks.** `routes/approvals/tests.rs` has no ignored tests; it also covers approving a project (published from the snapshot, one `project.approve` entry) and sending one back (the note in the lead's `mine=true` list, one `project.send_back` entry).
+
+- **Head tags.** The project tags `static_files.rs` injects carry `data-sl-injected` and the root layout removes them as the app starts (see "Static serving"). The injected title is now `<Name> - ScottyLabs`, the same as the page sets. Committee pages and the Committees index return `{ ownDescription: true }`, so they have one description.
+
+- **Web wiring.** `/portal/projects/?add=1` opens the Add project dialog for people who may add projects and then drops the flag with `goto(..., { replace: true, reset: false })`; for others it only drops the flag. The review dialog draws announcements with `#lib/ticker/TickerItem.svelte` (wrapping long messages so the approver reads all of them) instead of a copy. The home page's three project panels link to their project pages. The temporary prerender 404 handler in `vite.config.ts` is gone; the build prerenders `/projects/`, `/committees/` and the seven committee pages.
+
+- **Rust clean-up.** `cargo clippy -p site --all-targets -- -D warnings` passes. Removed as dead: `AppError::forbidden`, `Problems::is_empty`, `permissions::leads`, and `ApprovalRow.submitted_by` and `created_at` (tests read `submitted_by` from the table). `AppError::AuthNotConfigured` stays, allowed, because `auth_not_configured` is one of the contract's error codes. `text_enum!` allows `ALL` once, since only some enums list their variants. The `[package.metadata.cargo-machete]` list is gone (`cargo machete` finds nothing unused), and `tower`, used only by tests, is a dev-dependency only. The "mixing target features will cause an ABI mismatch" warnings come from the dev toolchain (Cranelift for this crate, LLVM for `std` and `zune-jpeg`), not from the code.
+
+- **Test databases.** `#[sqlx::test]` names a test's database after the test alone, and the local Postgres server is shared by every worktree, so the same test running in two processes at once (two worktrees, or a commit hook beside a manual run) drops and recreates the database under the other run whenever that run holds no connection. `routes::media::tests::uploads_a_jpeg_and_serves_each_width`, which decodes images for seconds, failed this way. It now uses `testing::IsolatedDb`, a migrated database named for the run and dropped when it goes out of scope; use it with `#[tokio::test]` for any test that spends seconds away from the database.
 
 - 2026-11-24, projects review fixes. Additive only.
 
