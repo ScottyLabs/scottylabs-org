@@ -2,8 +2,6 @@
 //   <li data-sortable-item><span {@attach sortableHandle({ index: () => i, onmove })}>...</span></li>
 // Moving an item re-inserts its element, which ends pointer capture, so the drag listens on the window instead.
 
-import type { Attachment } from "svelte/attachments";
-
 export interface SortableOptions {
   /** The item's current position. */
   index: () => number;
@@ -19,7 +17,8 @@ function middle(element: Element): number {
   return rect.top + rect.height / 2;
 }
 
-export function sortableHandle(options: SortableOptions): Attachment<HTMLElement> {
+/** An attachment for the handle. Typed as a plain function so tests can load it without Svelte. */
+export function sortableHandle(options: SortableOptions): (handle: HTMLElement) => () => void {
   return (handle) => {
     let current = -1;
     let started = -1;

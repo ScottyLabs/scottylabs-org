@@ -1,5 +1,7 @@
-// Tests for committee pages: the grid layout, block rules, undo history, video links, the service's field errors, publish checks and where a dragged block lands.
+/// <reference lib="dom" />
+// Tests for committee pages: the grid layout, block rules, undo history, video links, the service's field errors, publish checks, where a dragged block lands, when the editor asks for the edit lock and how handles report moves.
 // Run from sites/web with `deno test tests/`.
+// The DOM library reference types the browser code under test; the tests stand in for the DOM where they need it.
 // The type-aware linter cannot see Deno's globals or node:assert's types, so calls on them read as untyped here.
 /* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access */
 
@@ -15,7 +17,10 @@ import {
   widthHint,
 } from "../src/lib/committees/blocks.ts";
 import { dropLineAt } from "../src/lib/committees/editor/drop.ts";
+import { HEARTBEAT_MS, LOCK_MS, LockClock } from "../src/lib/committees/editor/lock-clock.ts";
+import { altTextField, altTextFieldInList } from "../src/lib/committees/editor/photo-undo.ts";
 import { publishProblems } from "../src/lib/committees/editor/publish-checks.ts";
+import { sortableHandle } from "../src/lib/committees/editor/sortable.ts";
 import { problemCount, problemsFor } from "../src/lib/committees/errors.ts";
 import { History } from "../src/lib/committees/history.ts";
 import {
@@ -24,7 +29,9 @@ import {
   layoutRows,
   moveBlock,
   moveSentence,
+  placeInSlot,
   rowNeighbours,
+  slotWidth,
   widestFitting,
 } from "../src/lib/committees/layout.ts";
 import { cleanChannel, oneLine } from "../src/lib/committees/limits.ts";
@@ -296,6 +303,167 @@ Deno.test("publishing needs alt text, a cover picture and blocks that are filled
     problems[1]?.message,
     "Describe the photo in Image 1 for people using screen readers.",
   );
+});
+
+function videoBlock(url: string): Block {
+  return { id: "video", type: "video", width: 6, props: { url, title: "Channel", poster: null } };
+}
+
+Deno.test("publishing needs a link to one video, not a channel", () => {
+  assert.deepEqual(publishProblems(doc([cover(), videoBlock("https://youtu.be/dQw4w9WgXcQ")])), []);
+  const problems = publishProblems(
+    doc([cover(), videoBlock("https://www.youtube.com/@scottylabs")]),
+  );
+  assert.deepEqual(
+    problems.map((problem) => `${problem.blockId}:${problem.field}`),
+    ["video:url"],
+  );
+  assert.equal(
+    problems[0]?.message,
+    "Use a link to one YouTube or Vimeo video, not a channel or playlist.",
+  );
+});
+
+Deno.test("a block dropped in free columns fills them", () => {
+  // Rows: cover; What we do (12); Work sessions (4) with 8 free; Image (12).
+  const photo: Block = {
+    id: "photo",
+    type: "image",
+    width: 12,
+    props: { image: null, caption: "" },
+  };
+  const blocks = [cover(), text("what", 12, "What we do"), sessions(), photo];
+  const [slot] = freeSlots(blocks);
+  assert.ok(slot !== undefined);
+  assert.equal(slotWidth("image", slot), 8);
+  assert.equal(slotWidth("work_sessions", slot), 6);
+  assert.equal(slotWidth("cover", slot), null);
+  // The image moves up beside Work sessions and takes the 8 free columns.
+  const moved = placeInSlot(blocks, "photo", slot);
+  assert.deepEqual(
+    moved?.map((block) => `${block.id}:${block.width}`),
+    ["cover:12", "what:12", "sessions:4", "photo:8"],
+  );
+  assert.deepEqual(
+    layoutRows(moved ?? []).map((row) => row.blocks.map((placed) => placed.block.id)),
+    [["cover"], ["what"], ["sessions", "photo"]],
+  );
+  // A block from earlier on the page lands after Work sessions too.
+  assert.deepEqual(ids(placeInSlot(blocks, "what", slot) ?? []), [
+    "cover",
+    "sessions",
+    "what",
+    "photo",
+  ]);
+  // Not the cover, not a block already in that row, and not a block too wide for the space.
+  assert.equal(placeInSlot(blocks, "cover", slot), null);
+  assert.equal(placeInSlot(blocks, "sessions", slot), null);
+  assert.equal(
+    placeInSlot([cover(), text("what", 12), sessions(), stats()], "stats", { ...slot, columns: 4 }),
+    null,
+  );
+});
+
+Deno.test("the editor keeps the edit lock only while the person is working", () => {
+  const start = 1_000_000;
+  const clock = new LockClock(start);
+  assert.equal(clock.due, true, "asks for the lock when the editor opens");
+  clock.claimed(start);
+  assert.equal(clock.due, false, "an idle editor does not refresh the lock");
+  assert.equal(clock.touch(start + 30_000), false);
+  assert.equal(clock.due, true, "a click or a key press since the last request refreshes it");
+  clock.claimed(start + HEARTBEAT_MS);
+  assert.equal(clock.due, false);
+  // Back after the lock lapsed: ask again straight away.
+  assert.equal(clock.touch(start + HEARTBEAT_MS + LOCK_MS), true);
+  clock.claimed(start + HEARTBEAT_MS + LOCK_MS);
+  assert.equal(clock.touch(start + HEARTBEAT_MS + LOCK_MS + 1000), false);
+});
+
+Deno.test("typing alt text is one undo step, choosing a photo is its own", () => {
+  const a = { src: "/media/a", alt: "", width: 10, height: 10 };
+  const b = { src: "/media/b", alt: "", width: 10, height: 10 };
+  assert.equal(altTextField("image", a, { ...a, alt: "S" }), "image.alt");
+  assert.equal(altTextField("image", a, b), null);
+  assert.equal(altTextField("image", null, a), null);
+  assert.equal(altTextField("image", a, null), null);
+  assert.equal(altTextFieldInList("images", [a, b], [a, { ...b, alt: "S" }]), "images.1.alt");
+  assert.equal(altTextFieldInList("images", [a, b], [b, a]), null);
+  assert.equal(altTextFieldInList("images", [a], [a, b]), null);
+  assert.equal(altTextFieldInList("images", [a, b], [a, b]), null);
+});
+
+/** Stands in for browser calls the tests do not need. */
+function ignore(): void {
+  // Nothing to do.
+}
+
+/** A pointer event at a height on the page. */
+function pointer(clientY: number) {
+  return { button: 0, pointerId: 1, clientY, preventDefault: ignore };
+}
+
+/** A list of three rows with a drag handle on the first, laid out 40 px apart, and a stand-in window. */
+function sortableList(onend: (moved: boolean) => void) {
+  const listeners = new Map<string, (event: unknown) => void>();
+  const fakeWindow = {
+    addEventListener: (type: string, listener: (event: unknown) => void) =>
+      listeners.set(type, listener),
+    removeEventListener: (type: string) => listeners.delete(type),
+  };
+  const rows = [0, 1, 2].map((index) => ({
+    getBoundingClientRect: () => ({ top: index * 40, height: 40 }),
+  }));
+  const list = { querySelectorAll: () => rows };
+  let press: ((event: unknown) => void) | undefined;
+  const handle = {
+    closest: () => ({ parentElement: list }),
+    addEventListener: (_type: string, listener: (event: unknown) => void) => (press = listener),
+    removeEventListener: ignore,
+  };
+  let index = 0;
+  const detach = sortableHandle({
+    index: () => index,
+    onmove: (_from, to) => {
+      index = to;
+    },
+    onend,
+    // oxlint-disable-next-line typescript/no-unsafe-type-assertion -- Deno has no DOM, so a stand-in plays the handle.
+  })(handle as unknown as HTMLElement);
+  return {
+    fakeWindow,
+    press: (clientY: number) => press?.(pointer(clientY)),
+    drag: (clientY: number) => listeners.get("pointermove")?.(pointer(clientY)),
+    release: (clientY: number) => listeners.get("pointerup")?.(pointer(clientY)),
+    detach,
+  };
+}
+
+Deno.test("a drag handle reports a move only when the item moved", () => {
+  const ends: boolean[] = [];
+  const previous: unknown = Reflect.get(globalThis, "window");
+  const list = sortableList((moved) => {
+    ends.push(moved);
+  });
+  Reflect.set(globalThis, "window", list.fakeWindow);
+  try {
+    // A click on the handle.
+    list.press(20);
+    list.release(20);
+    // A drag past the middle of the next row.
+    list.press(20);
+    list.drag(70);
+    list.release(70);
+    // Down and back up again.
+    list.press(60);
+    list.drag(10);
+    list.drag(70);
+    list.release(70);
+  } finally {
+    list.detach();
+    Reflect.set(globalThis, "window", previous);
+  }
+  assert.deepEqual(ends, [false, true, false]);
 });
 
 Deno.test("a dragged block lands before the nearest edge", () => {
