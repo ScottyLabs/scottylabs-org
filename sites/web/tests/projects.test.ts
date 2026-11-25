@@ -238,7 +238,8 @@ Deno.test("typing on keeps what the service found until it answers again", () =>
   const none: RemoteSearch = { key: "zephyrine tiles", status: "done", ids: new Set() };
   assert.equal(remoteMatches(none, "zephyrine tiles").size, 0);
 
-  // Only what the service alone found is carried: the cards' own matches narrow at once. For "ca", CMU Maps (campus) and Café finder match on their cards and Nova deep in its description.
+  // Only what the service alone found is carried: the cards' own matches narrow at once. For "ca",
+  // CMU Maps (campus) and the cafe finder match on their cards, Nova deep in its description.
   const ca: RemoteSearch = {
     key: "ca",
     status: "done",
