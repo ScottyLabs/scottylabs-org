@@ -3,12 +3,13 @@
   // bar, the block library and outline on the left, the page in the middle and settings on the
   // right. On phones it becomes a list of blocks. Keyboard: Cmd or Ctrl+Z undoes, Shift with it
   // (or Ctrl+Y) redoes, Escape clears the selection, Alt with the arrows moves a block.
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, tick } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import { isApiError } from "../../api/client.ts";
   import type { Block, CommitteePageEditorResponse } from "../../api/types.ts";
   import { getPortalSession, getToasts } from "../../portal/index.ts";
   import { Button, Callout, Dialog, lockScroll } from "../../portal/ui/index.ts";
+  import { focusIsLost } from "../../portal/ui/focus.ts";
   import { discardChanges, loadEditor, releaseLockOnExit } from "../api.ts";
   import { MAX_BLOCKS, blockName } from "../blocks.ts";
   import { moveSentence } from "../layout.ts";
@@ -46,6 +47,7 @@
   let notice = $state<UndoNotice | null>(null);
   let noticeCount = 0;
   let checking = $state(false);
+  let root: HTMLElement | undefined = $state();
 
   onMount(() => {
     const unlock = lockScroll();
@@ -68,11 +70,20 @@
   }
 
   function onremove(block: Block) {
-    if (editor.remove(block.id)) onremoved(block);
+    const index = editor.doc.blocks.findIndex((candidate) => candidate.id === block.id);
+    if (editor.remove(block.id)) void onremoved(block, index);
   }
 
-  function onremoved(block: Block) {
+  async function onremoved(block: Block, index: number) {
     notify(`${blockName(block)} removed`);
+    // The button that removed the block went with it. Keyboard and screen reader users carry on
+    // from the block now in its place in the outline (on phones, its card), or the one before it
+    // when the removed block was last, instead of the top of the document.
+    await tick();
+    if (!focusIsLost(undefined)) return;
+    const targets = [...(root?.querySelectorAll<HTMLElement>(".outline__button, .mobile__toggle") ?? [])];
+    // The cover cannot be removed, so there is always one to go to.
+    targets[Math.min(index, targets.length - 1)]?.focus();
   }
 
   function undoFromNotice() {
@@ -212,7 +223,7 @@
   {/if}
 {/snippet}
 
-<div class="editor" {@attach inertOutside}>
+<div class="editor p-fields-compact" bind:this={root} {@attach inertOutside}>
   {#if phone.current}
     {@render notices()}
     <MobileEditor {editor} {saveText} onpreview={openPreview} onpublish={openPublish} {onremove} {onmoved} />
@@ -242,7 +253,7 @@
         {#if editor.readOnlyReason !== null || editor.saveState === "conflict" || editor.saveState === "invalid"}
           <div class="editor__notice">{@render notices()}</div>
         {/if}
-        <Canvas {editor} {device} {showGrid} bind:drag {onmoved} {onremoved} />
+        <Canvas {editor} {device} {showGrid} bind:drag {onmoved} onremoved={(block, index) => void onremoved(block, index)} />
       </div>
       <aside class="editor__right" aria-label="Settings">
         <SettingsPanel {editor} {device} {onremove} />

@@ -18,7 +18,7 @@
     class: className,
   }: {
     value: string;
-    as?: "p" | "h2" | "h3" | "span" | "div" | "blockquote" | "figcaption";
+    as?: "p" | "h2" | "h3" | "h4" | "span" | "div" | "blockquote" | "figcaption";
     /** In the page editor, where empty fields show their placeholder. */
     editor?: boolean;
     /** Takes typing. Only for the selected block. */

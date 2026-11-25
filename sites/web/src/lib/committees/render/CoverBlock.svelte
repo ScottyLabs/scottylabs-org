@@ -9,7 +9,7 @@
   import { directorFor } from "../director.ts";
   import { LIMITS } from "../limits.ts";
   import { JOIN_URL, SLACK_URL } from "../links.ts";
-  import type { CommitteeInfo } from "./types.ts";
+  import { type CommitteeInfo, headingTag } from "./types.ts";
 
   let {
     props,
@@ -51,7 +51,7 @@
   <div class="cover__title-row">
     <div class="cover__title">
       <p class="cb-inspector">[committee="{committee.slug}"]</p>
-      <h1 class="cover__name">{committee.name}</h1>
+      <svelte:element this={headingTag(1, editor)} class="cover__name">{committee.name}</svelte:element>
       <EditableText
         class="cover__tagline"
         value={props.tagline}

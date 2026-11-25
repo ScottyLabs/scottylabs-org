@@ -1,27 +1,33 @@
 <script lang="ts">
   // A heading with paragraphs of restricted rich text. In the editor the body is edited in place
-  // with the inline rich text editor and its format bar.
+  // with the inline rich text editor and its format bar, which the editor canvas passes in as
+  // `textEditor`, so public committee pages never load the editor's code.
   import type { BlockByType } from "../../api/types.ts";
-  import { RichText, RichTextEditor } from "../../editor/index.ts";
+  import RichText from "../../editor/RichText.svelte";
+  import type RichTextEditor from "../../editor/RichTextEditor.svelte";
   import EditableText from "../EditableText.svelte";
   import { LIMITS } from "../limits.ts";
+  import { headingTag } from "./types.ts";
 
   let {
     props,
     editor,
     editable,
+    textEditor: TextEditor,
     onchange,
   }: {
     props: BlockByType["text"];
     editor: boolean;
     editable: boolean;
+    /** The inline rich text editor, from the editor canvas. */
+    textEditor?: typeof RichTextEditor;
     onchange: (props: BlockByType["text"]) => void;
   } = $props();
 </script>
 
 <section class="text">
   <EditableText
-    as="h2"
+    as={headingTag(2, editor)}
     class="cb-heading"
     value={props.heading}
     {editor}
@@ -31,8 +37,8 @@
     maxLength={LIMITS.heading}
     onchange={(heading) => onchange({ ...props, heading })}
   />
-  {#if editable}
-    <RichTextEditor
+  {#if editable && TextEditor !== undefined}
+    <TextEditor
       class="text__body text__body--editing"
       variant="inline"
       label={props.heading === "" ? "Text" : `Text under ${props.heading}`}

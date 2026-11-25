@@ -5,6 +5,7 @@
   import EditableText from "../EditableText.svelte";
   import { LIMITS } from "../limits.ts";
   import { isExternal } from "../links.ts";
+  import { headingTag } from "./types.ts";
 
   let {
     props,
@@ -29,7 +30,7 @@
 <section class="cta">
   <div class="cta__copy">
     <EditableText
-      as="h2"
+      as={headingTag(2, editor)}
       class="cta__heading"
       value={props.heading}
       {editor}

@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-// Tests for committee pages: the grid layout, block rules, undo history, the service's field errors, publish checks, where a dragged block lands, when the editor asks for the edit lock and how handles report moves.
+// Tests for committee pages: the grid layout, block rules, heading levels, undo history, the service's field errors, publish checks, where a dragged block lands, when the editor asks for the edit lock and how handles report moves.
 // Run from sites/web with `deno test tests/`.
 // The DOM library reference types the browser code under test; the tests stand in for the DOM where they need it.
 // The type-aware linter cannot see Deno's globals or node:assert's types, so calls on them read as untyped here.
@@ -35,6 +35,7 @@ import {
   widestFitting,
 } from "../src/lib/committees/layout.ts";
 import { cleanChannel, oneLine } from "../src/lib/committees/limits.ts";
+import { headingTag } from "../src/lib/committees/render/types.ts";
 
 function cover(): Block {
   return {
@@ -474,4 +475,14 @@ Deno.test("a dragged block lands before the nearest edge", () => {
 Deno.test("plain text stays on one line and channels lose their #", () => {
   assert.equal(oneLine("a\nb\r\nc"), "a b c");
   assert.equal(cleanChannel("  ##Tech-Maps "), "tech-maps");
+});
+
+Deno.test("the page's headings sit one level lower on the editor canvas", () => {
+  assert.equal(headingTag(1, false), "h1");
+  assert.equal(headingTag(2, false), "h2");
+  assert.equal(headingTag(3, false), "h3");
+  // The editor's own title is the h1, so the cover is an h2 there.
+  assert.equal(headingTag(1, true), "h2");
+  assert.equal(headingTag(2, true), "h3");
+  assert.equal(headingTag(3, true), "h4");
 });

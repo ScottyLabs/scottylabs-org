@@ -5,6 +5,7 @@
   import slackMark from "../../assets/icons/socials/slack.svg";
   import EditableText from "../EditableText.svelte";
   import { LIMITS } from "../limits.ts";
+  import { headingTag } from "./types.ts";
 
   let {
     props,
@@ -33,7 +34,7 @@
 <section class={["teams", expanded && "teams--expanded"]}>
   <div class="teams__heading">
     <EditableText
-      as="h2"
+      as={headingTag(2, editor)}
       class="cb-heading"
       value={props.heading}
       {editor}
@@ -59,7 +60,7 @@
       {#each props.teams as team, index (index)}
         <li class={["teams__card", index >= PHONE_LIMIT && "teams__card--more"]}>
           <EditableText
-            as="h3"
+            as={headingTag(3, editor)}
             class="teams__name"
             value={team.name}
             {editor}

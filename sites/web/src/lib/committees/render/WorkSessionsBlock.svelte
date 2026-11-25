@@ -2,12 +2,13 @@
   // When and where the committee meets, from the page settings, with a link to CMU Maps.
   import type { CommitteeSettings } from "../../api/types.ts";
   import MapPin from "@lucide/svelte/icons/map-pin";
+  import { headingTag } from "./types.ts";
 
   let { settings, editor }: { settings: CommitteeSettings; editor: boolean } = $props();
 </script>
 
 <section class="sessions">
-  <h2 class="sessions__label">Work sessions</h2>
+  <svelte:element this={headingTag(2, editor)} class="sessions__label">Work sessions</svelte:element>
   <p class="sessions__time">
     {#if settings.meetingTime !== ""}{settings.meetingTime}{:else if editor}<span class="cb-placeholder">Set the meeting time in the page settings</span>{/if}
   </p>

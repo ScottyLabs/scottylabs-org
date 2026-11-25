@@ -12,6 +12,7 @@
   import Plus from "@lucide/svelte/icons/plus";
   import Trash from "@lucide/svelte/icons/trash";
   import type { Block, BlockWidth } from "../../api/types.ts";
+  import RichTextEditor from "../../editor/RichTextEditor.svelte";
   import { Menu, type MenuItem } from "../../portal/ui/index.ts";
   import SelectionBox from "../../site/SelectionBox.svelte";
   import BlockRenderer, { type BlockFrame } from "../BlockRenderer.svelte";
@@ -35,7 +36,8 @@
     /** What is being dragged, shared with the block library. */
     drag?: EditorDrag | null;
     onmoved: (id: string) => void;
-    onremoved: (block: Block) => void;
+    /** After a block was removed; `index` is where it was. */
+    onremoved: (block: Block, index: number) => void;
   } = $props();
 
   let sheet: HTMLElement | undefined = $state();
@@ -164,7 +166,8 @@
   // Selecting and the toolbar
 
   function remove(block: Block) {
-    if (editor.remove(block.id)) onremoved(block);
+    const index = editor.doc.blocks.findIndex((candidate) => candidate.id === block.id);
+    if (editor.remove(block.id)) onremoved(block, index);
   }
 
   function move(block: Block, step: -1 | 1) {
@@ -280,7 +283,8 @@
   </Menu>
 {/snippet}
 
-<div class={["canvas", `canvas--${device}`]}>
+<!-- A landmark, so the page's own headings read as grouped under it. -->
+<div class={["canvas", `canvas--${device}`]} role="region" aria-label="Page canvas">
   <div
     bind:this={sheet}
     class="canvas__sheet"
@@ -307,6 +311,7 @@
       onblockchange={(block) => editor.updateBlock(block, `text:${block.id}`)}
       {frame}
       freeSlot={editor.writable && device === "desktop" ? freeSlot : undefined}
+      textEditor={RichTextEditor}
     />
     {#if line}
       <span

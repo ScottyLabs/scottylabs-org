@@ -5,7 +5,7 @@
   import EditableText from "../EditableText.svelte";
   import { LIMITS } from "../limits.ts";
   import { committeeProjectsPath } from "../links.ts";
-  import type { CommitteeInfo } from "./types.ts";
+  import { type CommitteeInfo, headingTag } from "./types.ts";
 
   let {
     props,
@@ -28,7 +28,7 @@
   <section class="projects">
     <div class="projects__heading">
       <EditableText
-        as="h2"
+        as={headingTag(2, editor)}
         class="cb-heading"
         value={props.heading}
         {editor}
