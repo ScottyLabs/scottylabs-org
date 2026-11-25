@@ -1,0 +1,7 @@
+# gitleaks' default rules, with one file left out.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "A throwaway RSA key that signs the mock Keycloak's ID tokens in the sign-in tests. Nothing trusts it."
+paths = ['''^services/site/src/routes/auth/test-signing-key\.pem$''']

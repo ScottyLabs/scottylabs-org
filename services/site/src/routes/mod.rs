@@ -24,6 +24,7 @@ use crate::state::AppState;
 pub use announcements::{
     apply_approval as apply_announcement_approval, apply_send_back as apply_announcement_send_back,
 };
+pub use people::spawn_governance_sync;
 pub use projects::{
     apply_approval as apply_project_approval, apply_send_back as apply_project_send_back,
 };

@@ -91,7 +91,7 @@ async fn setup(db: &PgPool) -> Setup {
         .director(Committee::Events)
         .create(db)
         .await;
-    let tech_director = UserSpec::new("anishp")
+    let tech_director = UserSpec::new("apallati")
         .name("Anish Pallati")
         .director(Committee::Tech)
         .create(db)

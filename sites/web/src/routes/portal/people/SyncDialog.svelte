@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Confirms reading the directors from the governance repository and applying them.
+  // Confirms reading the directors and heads from the governance repository and applying them.
   import { isApiError, post } from "#lib/api/client.ts";
   import type { GovernanceSyncResponse } from "#lib/api/types.ts";
   import { Button, Callout, Dialog } from "#lib/portal/ui/index.ts";
@@ -34,13 +34,13 @@
 
 <Dialog
   bind:open
-  title="Sync directors from governance?"
-  description="This reads data/committees.yaml in the governance repository and makes each director listed there the director of their committee. A director it no longer lists is removed."
+  title="Sync directors and heads from governance?"
+  description="This reads data/committees.yaml in the governance repository. Each director listed there becomes director of their committee, and each head becomes a lead who can write ticker announcements. Leads governance no longer lists are removed unless they were edited here. People you removed or changed here are not added back."
   dismissible={!syncing}
 >
   {#if failure !== null}<Callout tone="error" role="alert" title={failure} />{/if}
   {#snippet footer()}
     <Button variant="outline" disabled={syncing} onclick={() => (open = false)}>Cancel</Button>
-    <Button loading={syncing} onclick={() => void sync()}>Sync directors</Button>
+    <Button loading={syncing} onclick={() => void sync()}>Sync directors and heads</Button>
   {/snippet}
 </Dialog>

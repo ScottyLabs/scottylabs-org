@@ -157,7 +157,7 @@
 
   function synced(result: GovernanceSyncResponse) {
     toasts.success(
-      `Synced directors: ${result.added} added, ${result.updated} updated, ${result.unchanged} unchanged.`,
+      `Synced from governance: ${result.added} directors added, ${result.updated} changed, ${result.headsAdded} heads made leads, ${result.headsRemoved} leads removed.`,
     );
     syncMessages = result.messages;
     void loadPeople();
@@ -188,7 +188,7 @@
     {#snippet actions()}
       {#if isAdmin}
         <Button variant="outline" size="lg" icon={RefreshCw} onclick={() => (syncOpen = true)}>
-          Sync directors
+          Sync directors and heads
         </Button>
         <Button size="lg" icon={Plus} onclick={() => openRole({ kind: "add", committees: "any" })}>
           Add person

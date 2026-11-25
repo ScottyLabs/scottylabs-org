@@ -179,7 +179,7 @@ async fn committee_pages_show_the_same_cards_as_the_projects_page(db: PgPool) {
     assert!(lists[0].iter().any(|slug| slug == "cmu-maps"));
     assert!(lists[1].iter().all(|slug| slug != "cmu-maps"));
     // The editor previews the same cards.
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let tech = editor(&app, &anish, "tech").await;
     let (_, list) = testing::get(&app, "/api/public/projects?committee=tech", None).await;
     assert_eq!(tech["projects"], list["projects"]);
@@ -203,7 +203,7 @@ async fn the_portal_list_says_who_can_edit_what(db: PgPool) {
             .all(|p| p["canEdit"] == true && p["status"] == "published")
     );
     let tech = &pages[2];
-    assert_eq!(tech["directors"][0]["andrewId"], "anishp");
+    assert_eq!(tech["directors"][0]["andrewId"], "apallati");
     assert_eq!(tech["cover"]["src"], "/seed/photos/c10.jpg");
 
     let (_, body) = testing::get(&app, "/api/committee-pages", Some(&evan)).await;
@@ -241,7 +241,7 @@ async fn only_admins_and_the_committees_director_can_write(db: PgPool) {
     let app = setup(&db).await;
     let evan = testing::persona(&db, "evanfost").await;
     let sara = testing::persona(&db, "spchoksh").await;
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let page = editor(&app, &anish, "tech").await;
     let doc = &page["draft"];
 
@@ -280,7 +280,7 @@ async fn only_admins_and_the_committees_director_can_write(db: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn one_person_edits_at_a_time(db: PgPool) {
     let app = setup(&db).await;
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let thomas = testing::persona(&db, "tkanz").await;
 
     let (status, lock) = testing::post(
@@ -292,7 +292,7 @@ async fn one_person_edits_at_a_time(db: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(lock["mine"], true);
-    assert_eq!(lock["holder"]["andrewId"], "anishp");
+    assert_eq!(lock["holder"]["andrewId"], "apallati");
     let since = lock["since"].clone();
 
     // Refreshing keeps the start time.
@@ -338,7 +338,7 @@ async fn one_person_edits_at_a_time(db: PgPool) {
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(
         editor(&app, &thomas, "tech").await["lock"]["holder"]["andrewId"],
-        "anishp"
+        "apallati"
     );
     let (status, _) = testing::delete(&app, "/api/committee-pages/tech/lock", Some(&anish)).await;
     assert_eq!(status, StatusCode::NO_CONTENT);
@@ -366,13 +366,13 @@ async fn one_person_edits_at_a_time(db: PgPool) {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(lock["holder"]["andrewId"], "anishp");
+    assert_eq!(lock["holder"]["andrewId"], "apallati");
 }
 
 #[sqlx::test(migrations = "./migrations")]
 async fn saves_need_the_latest_version_and_a_valid_page(db: PgPool) {
     let app = setup(&db).await;
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let page = editor(&app, &anish, "tech").await;
     assert_eq!(page["status"], "published");
     let moved = stats_first(&page["draft"]);
@@ -440,7 +440,7 @@ async fn saves_need_the_latest_version_and_a_valid_page(db: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn uploaded_photos_take_their_stored_size(db: PgPool) {
     let app = setup(&db).await;
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let media = Uuid::now_v7();
     sqlx::query(
         "INSERT INTO media (id, content_type, width, height, variants, bytes, storage)
@@ -464,7 +464,7 @@ async fn uploaded_photos_take_their_stored_size(db: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn publishing_shows_the_changes_and_makes_them_public(db: PgPool) {
     let app = setup(&db).await;
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let page = editor(&app, &anish, "tech").await;
 
     let (_, body) = testing::get(&app, "/api/committee-pages/tech/changes", Some(&anish)).await;
@@ -541,7 +541,7 @@ async fn publishing_needs_alt_text_and_a_cover_photo(db: PgPool) {
 #[sqlx::test(migrations = "./migrations")]
 async fn discarding_brings_back_the_published_version(db: PgPool) {
     let app = setup(&db).await;
-    let anish = testing::persona(&db, "anishp").await;
+    let anish = testing::persona(&db, "apallati").await;
     let page = editor(&app, &anish, "tech").await;
     let (_, saved) = save(
         &app,

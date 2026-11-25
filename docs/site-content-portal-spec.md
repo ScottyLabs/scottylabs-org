@@ -121,28 +121,33 @@ These started as assumptions in the first draft. Thomas confirmed all six.
 
 ### Where roles come from
 
-Two sources exist today and the portal should use both rather than invent a third:
+Built (2026-11-24). Roles are stored in the portal's database (`role_assignments`, section 7), keyed by the user's Keycloak subject and Andrew ID, and that table is the only thing permissions read. Three sources write to it:
 
-- **Keycloak groups in the sign-in token.** Governance puts each user's groups in a `groups` claim. For this project the relevant ones are `/projects/scottylabs-org` (project members) and `/projects/scottylabs-org/admins` (the UIA team leads). See section 5.
-- **`data/committees.yaml` in the governance repository.** It names the organization Director and each committee's Director and heads. This is the source of truth for who directs which committee. Those committee groups are synced to Google Groups by Grouper. I did not find them emitted as Keycloak groups, so they are not in the token today.
+| Source | Gives | When |
+| -- | -- | -- |
+| `PROJECT_ADMIN_GROUP` (`/projects/scottylabs-org/admins`) in the token's `groups` claim | Admin | At every sign-in. Governance fills the group with the UIA team leads and, because governance adds the Tech director to every team's leads, the Tech director. A token whose `groups` no longer has the group (an empty list counts) takes that admin role away again, unless it is the last admin. A token without the claim changes nothing |
+| Governance `data/committees.yaml` | Director for each committee's `director`; Lead for each head (`roles.*.members` and `teams.*.roles.*.members`) | At startup, every six hours, and when an admin presses Sync on People. A head who already has a role in the committee is left alone. A lead added by an earlier sync goes away when governance stops listing them, unless someone edited it on People, which makes it the portal's; the sync then says once that governance no longer lists them. A role removed or changed on People is not given back (see below) |
+| The People page | Any role an admin or Director may give | When they change it |
 
-Recommended approach:
+Notes:
 
-1. Roles are stored in the portal's database (`role_assignments`, section 7), keyed by the user's Keycloak subject and Andrew ID.
-1. **Bootstrap:** anyone whose token contains `PROJECT_ADMIN_GROUP` is an Admin on first sign-in. That makes the UIA leads the first admins with no manual step.
-1. **Directors:** seeded from governance `data/committees.yaml` by a small import run at deploy time or on demand from the People page. An admin can also set them by hand.
-1. **Leads:** appointed in the portal by Directors and admins.
-1. Later, if exec wants roles visible to other ScottyLabs tools, governance can emit committee groups to Keycloak and the portal can read them from the token instead. That is a governance change and is not required for launch.
+- Heads become leads who can write ticker announcements (which still need their Director's approval) and edit no projects until a Director adds them.
+- People has the last word. When a Director or admin removes someone's director or lead role there, moves it to another committee, or changes a director to a lead, the sync gives that person no role in that committee again for as long as governance keeps listing them there, and each sync says so. Once governance stops listing them there, a later listing counts again. To give the role back sooner, add it on People.
+- Tech is left out of the head sync: `committees.yaml` lists no Tech heads, because Tech's leads are the team leads in governance's team files. Tech leads are added on People.
+- The organization director in `committees.yaml` is never made an admin. Other exec members who should be admins are added on People.
+- Committee roles are not in the Keycloak token. Governance creates Keycloak groups only for tech teams and projects, so the token says who someone is and whether they lead UIA (or direct Tech), not who directs or heads a committee.
+- The portal does not read Grouper. Grouper's committee groups are generated from the same `committees.yaml` and sync only to Google Groups.
+- Later, if exec wants committee roles visible to other ScottyLabs tools, governance can create `/committees/<slug>/director` and `/committees/<slug>/heads` groups in Keycloak, and the portal can read them from the token the way it reads the admin group. That is a governance change and is not required for launch.
 
 ## 5. Sign-in with OIDC: what exists and how to turn it on
 
-This section records what was verified in the kennel and governance sources on 2026-11-24.
+This section records what was verified in the kennel, governance and Ricochet sources and against the live Keycloak on 2026-11-24, and what was built.
 
 ### What is already there
 
 - **Identity provider:** Keycloak at `idp.scottylabs.org`, realm `scottylabs`.
 
-- **The switch is in governance, not in this repository.** Each repository lists its features in its team file. `scottylabs-org` is registered in `data/teams/uia.yaml` under the "ScottyLabs Website" project with these features today:
+- **The switch is in governance, not in this repository.** Each repository lists its features in its team file. `scottylabs-org` is registered in `data/teams/uia.yaml` under the "ScottyLabs Website" project with these features before this project:
 
   ```yaml
   - name: scottylabs-org
@@ -152,11 +157,13 @@ This section records what was verified in the kennel and governance sources on 2
       cdn: {}
   ```
 
-- **The feature to add is `oidc_client`.** When enabled, governance:
+- **The feature is `oidc_client`, now enabled (step 1).** Governance:
 
   - creates three Keycloak clients: `scottylabs-org` for prod, `scottylabs-org-staging` shared by staging and previews, and `scottylabs-org-dev` for local development;
   - writes these secrets to OpenBao for each profile: `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OAUTH_RELAY_URL`, `PROJECT_GROUP`, `PROJECT_ADMIN_GROUP`;
-  - adds the user's group memberships to the token as a `groups` claim in full-path form, for example `/projects/scottylabs-org`.
+  - adds the user's group memberships to the token as a `groups` claim in full-path form, for example `/projects/scottylabs-org`. The claim is in the ID token, the access token and userinfo, and lists every realm group the user is in directly.
+
+- **Tokens.** Keycloak signs ID tokens with RS256 and names the key with `kid`; its key set also holds an RSA encryption key, which verifiers skip. The ID token's audience is the client id alone. Keycloak adds `iss` to every redirect (RFC 9207). The realm also offers a `microprofile-jwt` scope whose mapper writes realm roles into a claim also named `groups`, so the portal asks only for `openid email profile`.
 
 - **Redirects go through a relay called Ricochet.** Prod, staging and previews share `https://oauth.scottylabs.org/oauth2/callback`. Local development uses `http://localhost:8090/oauth2/callback`, which kennel runs for you when the flake option below is on.
 
@@ -166,7 +173,7 @@ This section records what was verified in the kennel and governance sources on 2
 
 ### Step 1: enable the feature in governance
 
-This is open as [governance pull request #611](https://git.cmu.dev/ScottyLabs/governance/pulls/611), which changes `data/teams/uia.yaml` to:
+Done. [Governance pull request #611](https://git.cmu.dev/ScottyLabs/governance/pulls/611) is merged and applied: the three clients exist in Keycloak and the secrets are in OpenBao. It changed `data/teams/uia.yaml` to:
 
 ```yaml
 - name: scottylabs-org
@@ -190,22 +197,13 @@ The team file is owned by the UIA leads through CODEOWNERS, so the pull request 
 
 ### Step 2: declare the secrets in this repository
 
-Add to `secretspec.toml`:
-
-```toml
-[profiles.default]
-OIDC_CLIENT_ID = { description = "Keycloak client id", required = true }
-OIDC_CLIENT_SECRET = { description = "Keycloak client secret", required = true }
-KEYCLOAK_URL = { description = "Keycloak base URL", required = true }
-KEYCLOAK_REALM = { description = "Keycloak realm", required = true }
-OAUTH_RELAY_URL = { description = "OAuth relay callback for this environment", required = true }
-PROJECT_GROUP = { description = "Keycloak group path for project members", required = true }
-PROJECT_ADMIN_GROUP = { description = "Keycloak group path for project admins", required = true }
-```
+Done. `secretspec.toml` declares the seven variables in `[profiles.default]` with `required = false`, so a developer without an OpenBao login still gets a working shell with dev sign-in. Sign-in through Keycloak turns on only when all seven are present.
 
 Do not add `APP_URL`. Kennel sets it for deployed services and the flake option sets it locally.
 
 ### Step 3: turn on the local relay and a database in `flake.nix`
+
+Done. The settings that matter for sign-in:
 
 ```nix
 scottylabs = {
@@ -219,27 +217,40 @@ scottylabs = {
 };
 ```
 
-`scottylabs.ricochet.enable` only affects local development: it runs the relay on `127.0.0.1:8090` and exports `APP_URL`. Governance already seeds the dev profile's `OAUTH_RELAY_URL` to match.
+`scottylabs.ricochet.enable` only affects local development: it runs the relay as the pitchfork process `ricochet` on `127.0.0.1:8090` and exports `APP_URL`. Governance already seeds the dev profile's `OAUTH_RELAY_URL` to match.
+
+Kennel starts pitchfork processes without the dev shell's secrets, so the `site` process loads the dev profile's secrets itself with `secretspec export`, the way the shell does, before `cargo run -p site`. Without an OpenBao token it starts anyway, with dev sign-in only. Log in once per machine with `nix run git+https://git.cmu.dev/ScottyLabs/kennel#login`.
+
+Open the portal at `http://localhost:5173`, not `http://127.0.0.1:5173`. Sign-in comes back to `APP_URL`, and the sign-in cookie from another host name would not be sent, so the sign-in would end as expired.
 
 ### Step 4: add a backend service
 
-The site is deployed as a static site (`sites.web`). An authorization-code flow with a client secret needs a server, so this project adds a kennel service. See section 6.
+Done. An authorization-code flow with a client secret needs a server, so the site is now the kennel service `site`. See section 6.
+
+### The Ricochet contract
+
+Verified in Ricochet's source (the version kennel pins) and against `oauth.scottylabs.org`:
+
+- Ricochet reads only `state`. It must be base64url without padding of a JSON object with `return_to`, the absolute URL to send the browser to; other fields, such as the portal's `csrf`, are ignored. Anything else gets a 400 and no redirect.
+- It forwards the browser (302) to `return_to` with every provider parameter unchanged and in order: `code`, `state`, `iss`, `session_state`, `error`, `error_description` and any others. It does not touch PKCE, cookies or the code. Only `GET` (query response mode) is handled.
+- `return_to` must be https on an allowed host. The production relay allows `scottylabs.org` and every `*.scottylabs.net` deployment host (previews and branches); it refuses `www.scottylabs.org`. The development relay runs with `RICOCHET_DEV=1`, which also allows http to a loopback host.
+- The portal's callback is `<APP_URL>/api/auth/callback`.
 
 ### Sign-in sequence
 
 1. The user opens the portal and chooses "Continue with ScottyLabs".
-1. The service creates a PKCE verifier and state, stores them in a short-lived signed cookie, and redirects to Keycloak's authorization endpoint, found through `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration`, with `redirect_uri = OAUTH_RELAY_URL`.
-1. Keycloak authenticates the user. People already signed in see the account chooser only.
-1. Keycloak redirects to the relay, which forwards the browser back to the service at `APP_URL`.
-1. The service exchanges the code for tokens, validates the ID token (issuer, audience, signature, nonce), and reads `sub`, name, email, preferred username and `groups`.
-1. The service upserts the user, resolves their role (section 4), creates a session and sets an `HttpOnly`, `Secure`, `SameSite=Lax` cookie.
-1. Users with no role land on the no-access screen. Everyone else lands on Overview.
+1. The service creates a PKCE (S256) verifier, a nonce and a random `csrf`, and stores them with the page to return to in the `auth_attempts` table for ten minutes. It sets a ten-minute `HttpOnly`, `SameSite=Lax` cookie holding the `csrf` (`__Host-sl_signin` on https, `sl_signin` on http), which ties the sign-in to this browser. It redirects to Keycloak's authorization endpoint, found through `${KEYCLOAK_URL}/realms/${KEYCLOAK_REALM}/.well-known/openid-configuration`, with `redirect_uri = OAUTH_RELAY_URL`, scopes `openid email profile`, and `state` as described above.
+1. Keycloak authenticates the user, through the CMU identity provider. People already signed in see the account chooser only.
+1. Keycloak redirects to the relay, which forwards the browser back to the service at `APP_URL` with Keycloak's parameters.
+1. The service checks `iss` when present, requires the sign-in cookie to match the `state`, uses up the stored attempt, exchanges the code for tokens, validates the ID token (RS256 signature, issuer, audience, expiry, nonce), and reads `sub`, name, email, preferred username and `groups`.
+1. The service upserts the user, applies the admin group (section 4), creates a session and sets an `HttpOnly`, `SameSite=Lax` session cookie, `Secure` on https.
+1. Users with no role land on the no-access screen. Everyone else lands on the page they asked for, or Overview. A failure lands on the sign-in page with `cancelled`, `expired` or `failed`, and the service logs why.
 
-### To confirm before coding
+### Still open
 
-- The exact contract between the app and Ricochet (which parameter carries the return URL, and what the app's own callback path must be). Read the Ricochet README; the kennel docs only state that the relay returns to `APP_URL`.
-- Which profiles the `cdn` secrets are written to. The docs say prod only, so previews and local development need either the local `garage` resource or a fallback to disk.
-- Whether sign-out should also end the Keycloak session (RP-initiated logout) or only the portal session. This document assumes portal session only, with a link to sign out everywhere.
+- Which profiles the `cdn` secrets are written to. The docs say prod only, so previews and local development use the local `garage` resource, or Postgres when no bucket is configured.
+- Whether sign-out should also end the Keycloak session (RP-initiated logout) or only the portal session. The portal signs out of its own session only.
+- That `preferred_username` is the bare Andrew ID can only be confirmed by a real sign-in. If it is not, the callback ends with `failed` and the log says the name is not an Andrew ID.
 
 ## 6. Architecture
 

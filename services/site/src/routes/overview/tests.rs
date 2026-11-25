@@ -90,7 +90,7 @@ async fn world(db: &PgPool) -> World {
         .director(Committee::Events)
         .create(db)
         .await;
-    let tech_director = UserSpec::new("anishp")
+    let tech_director = UserSpec::new("apallati")
         .name("Anish Pallati")
         .director(Committee::Tech)
         .create(db)

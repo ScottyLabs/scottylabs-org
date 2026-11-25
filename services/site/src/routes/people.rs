@@ -1,8 +1,10 @@
-//! People and roles: listing, searching, adding and changing role assignments, and syncing directors from governance.
+//! People and roles: listing, searching, adding and changing role assignments, and syncing directors and heads from governance.
 //!
-//! Who may change what is decided by `crate::permissions`. On top of it: nobody removes their own admin role, the last admin stays, a lead's projects belong to the lead's committee, a person has at most one role per committee, and only admins give someone a second committee.
+//! Who may change what is decided by `crate::permissions`. On top of it: nobody removes their own admin role, the last admin stays, a lead's projects belong to the lead's committee, a person has at most one role per committee, and only admins give someone a second committee. Removing a director or lead role here, moving it to another committee or turning a director into a lead stops the governance sync from giving it back (see `governance::opt_out`).
 
 mod governance;
+
+pub use governance::spawn_sync as spawn_governance_sync;
 
 use axum::extract::{Path, RawQuery, State};
 use axum::http::header::CACHE_CONTROL;
@@ -764,12 +766,24 @@ async fn update_assignment(
         if let (Role::Lead, Some(old)) = (current.role, current.committee) {
             clear_lead_projects(&mut tx, current.user_id, old).await?;
         }
+        // Without this, the governance sync would give back the role just moved or lowered.
+        if let Some(old) = current.committee
+            && !(role == Role::Director && committee == Some(old))
+        {
+            governance::opt_out(&mut tx, current.user_id, old).await?;
+        }
     } else {
-        sqlx::query("UPDATE role_assignments SET can_post_ticker = $2 WHERE id = $1")
-            .bind(id)
-            .bind(can_post_ticker)
-            .execute(&mut *tx)
-            .await?;
+        // A lead edited here is the portal's from now on, so a governance sync no longer removes it.
+        sqlx::query(
+            "UPDATE role_assignments
+             SET can_post_ticker = $2,
+                 source = CASE WHEN role = 'lead' THEN 'portal' ELSE source END
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(can_post_ticker)
+        .execute(&mut *tx)
+        .await?;
     }
     if let (Some(ids), Some(c)) = (&projects, committee) {
         set_lead_projects(&mut tx, current.user_id, c, ids, viewer.user_id).await?;
@@ -819,6 +833,10 @@ async fn remove_assignment(
         .await?;
     if let (Role::Lead, Some(committee)) = (current.role, current.committee) {
         clear_lead_projects(&mut tx, current.user_id, committee).await?;
+    }
+    // Without this, the governance sync would give the role back while governance lists them.
+    if let Some(committee) = current.committee {
+        governance::opt_out(&mut tx, current.user_id, committee).await?;
     }
     let shown = display_name(&current.name, &current.andrew_id);
     record(

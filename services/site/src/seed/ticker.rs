@@ -53,7 +53,7 @@ const DEMO: [Sample; 4] = [
         message: "CMU Maps now has room-level directions.",
         link_url: Some("https://cmumaps.com/"),
         days_left: 9,
-        posted_by: Some("anishp"),
+        posted_by: Some("apallati"),
     },
     Sample {
         kind: "event",
@@ -193,6 +193,19 @@ mod tests {
             .fetch_all(db)
             .await
             .unwrap()
+    }
+
+    #[test]
+    fn samples_are_credited_to_personas() {
+        let samples = std::iter::once(&COLLEGECART)
+            .chain(DEMO.iter())
+            .chain(std::iter::once(&PENDING));
+        for andrew_id in samples.filter_map(|sample| sample.posted_by) {
+            assert!(
+                crate::seed::people::persona(andrew_id).is_some(),
+                "{andrew_id} is not a persona"
+            );
+        }
     }
 
     #[sqlx::test(migrations = "./migrations")]

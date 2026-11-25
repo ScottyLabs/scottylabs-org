@@ -42,6 +42,12 @@ async fn main() -> anyhow::Result<()> {
     seed::run(&db, &config).await.context("seeding content")?;
 
     let state = AppState::new(db, config.clone()).await?;
+    if config.governance_sync {
+        // In the background, after seeding, so a slow or failing governance fetch never delays startup.
+        routes::spawn_governance_sync(state.clone());
+    } else {
+        tracing::info!("governance sync is off; set GOVERNANCE_SYNC=1 to turn it on");
+    }
     let app = routes::router(state);
 
     let listener = tokio::net::TcpListener::bind(&config.bind_addr)

@@ -10,10 +10,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{Duration, Utc};
 use openidconnect::core::{
     CoreGenderClaim, CoreHmacKey, CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm,
+    CoreRsaPrivateSigningKey,
 };
 use openidconnect::{
     Audience, EndUserEmail, EndUserName, EndUserUsername, IdToken, IdTokenClaims, IssuerUrl,
-    LocalizedClaim, StandardClaims, SubjectIdentifier,
+    JsonWebKeyId, LocalizedClaim, PrivateSigningKey, StandardClaims, SubjectIdentifier,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -135,7 +136,7 @@ async fn dev_login_signs_in_as_each_persona(db: PgPool) {
     for (andrew_id, can_use_portal) in [
         ("tkanz", true),
         ("evanfost", true),
-        ("anishp", true),
+        ("apallati", true),
         ("spchoksh", true),
         ("newmember", false),
     ] {
@@ -359,6 +360,16 @@ const CLIENT_ID: &str = "scottylabs-org-dev";
 const CLIENT_SECRET: &str = "test-client-secret-for-hmac";
 const RELAY: &str = "http://localhost:8090/oauth2/callback";
 const ADMIN_GROUP: &str = "/projects/scottylabs-org/admins";
+const SIGNING_KID: &str = "test-signing-key";
+
+/// How the mock signs ID tokens. Keycloak uses RS256 with a `kid`.
+#[derive(Clone, Copy, Default)]
+enum Signing {
+    #[default]
+    Rs256,
+    /// HS256 keyed by the client secret, which the site must refuse.
+    Hs256,
+}
 
 #[derive(Default)]
 struct Mock {
@@ -368,9 +379,21 @@ struct Mock {
     subject: String,
     username: String,
     groups: Option<Vec<String>>,
+    signing: Signing,
 }
 
 type Shared = Arc<Mutex<Mock>>;
+
+/// A throwaway RSA key checked in for these tests only (the file says so above the key). It signs the mock's ID tokens and nothing trusts it.
+const TEST_SIGNING_KEY: &str = include_str!("test-signing-key.pem");
+
+fn signing_key() -> CoreRsaPrivateSigningKey {
+    CoreRsaPrivateSigningKey::from_pem(
+        TEST_SIGNING_KEY,
+        Some(JsonWebKeyId::new(SIGNING_KID.into())),
+    )
+    .unwrap()
+}
 
 async fn discovery(MockState(mock): MockState<Shared>) -> axum::Json<Value> {
     let issuer = mock.lock().unwrap().issuer.clone();
@@ -381,12 +404,21 @@ async fn discovery(MockState(mock): MockState<Shared>) -> axum::Json<Value> {
         "jwks_uri": format!("{issuer}/protocol/openid-connect/certs"),
         "response_types_supported": ["code"],
         "subject_types_supported": ["public"],
-        "id_token_signing_alg_values_supported": ["HS256"],
+        // Keycloak lists HMAC algorithms as well; the site accepts only RS256.
+        "id_token_signing_alg_values_supported": ["RS256", "HS256"],
+        "authorization_response_iss_parameter_supported": true,
     }))
 }
 
+/// Like Keycloak's: the RS256 signing key, plus an RSA key for encryption that verifiers must skip.
 async fn jwks() -> axum::Json<Value> {
-    axum::Json(json!({ "keys": [] }))
+    let mut signing = serde_json::to_value(signing_key().as_verification_key()).unwrap();
+    signing["alg"] = json!("RS256");
+    let mut encryption = signing.clone();
+    encryption["kid"] = json!("test-encryption-key");
+    encryption["use"] = json!("enc");
+    encryption["alg"] = json!("RSA-OAEP-256");
+    axum::Json(json!({ "keys": [encryption, signing] }))
 }
 
 async fn token(
@@ -403,7 +435,7 @@ async fn token(
     {
         return (
             StatusCode::BAD_REQUEST,
-            axum::Json(json!({ "error": "invalid_grant" })),
+            axum::Json(json!({ "error": "invalid_grant", "error_description": "Code not valid" })),
         )
             .into_response();
     }
@@ -428,18 +460,28 @@ async fn token(
         },
     )
     .set_nonce(mock.nonce.clone().map(openidconnect::Nonce::new));
-    let id_token = IdToken::<
+    type SiteIdToken = IdToken<
         GroupClaims,
         CoreGenderClaim,
         CoreJweContentEncryptionAlgorithm,
         CoreJwsSigningAlgorithm,
-    >::new(
-        claims,
-        &CoreHmacKey::new(CLIENT_SECRET),
-        CoreJwsSigningAlgorithm::HmacSha256,
-        None,
-        None,
-    )
+    >;
+    let id_token = match mock.signing {
+        Signing::Rs256 => SiteIdToken::new(
+            claims,
+            &signing_key(),
+            CoreJwsSigningAlgorithm::RsaSsaPkcs1V15Sha256,
+            None,
+            None,
+        ),
+        Signing::Hs256 => SiteIdToken::new(
+            claims,
+            &CoreHmacKey::new(CLIENT_SECRET),
+            CoreJwsSigningAlgorithm::HmacSha256,
+            None,
+            None,
+        ),
+    }
     .unwrap();
     axum::Json(json!({
         "access_token": "mock-access-token",
@@ -504,17 +546,19 @@ async fn start_login(app: &Router, mock: &Shared, return_to: &str) -> Started {
     .send(app)
     .await;
     assert_eq!(res.status, StatusCode::FOUND, "{}", res.text());
-    let location = url::Url::parse(res.header("location").unwrap()).unwrap();
+    let location = url::Url::parse(res.header("location").unwrap())
+        .unwrap_or_else(|_| panic!("login went to {:?}", res.header("location")));
     let params: HashMap<String, String> = location.query_pairs().into_owned().collect();
     assert!(location.path().ends_with("/protocol/openid-connect/auth"));
     assert_eq!(params["response_type"], "code");
     assert_eq!(params["client_id"], CLIENT_ID);
     assert_eq!(params["redirect_uri"], RELAY);
     assert_eq!(params["code_challenge_method"], "S256");
-    let scopes: Vec<&str> = params["scope"].split(' ').collect();
-    for scope in ["openid", "email", "profile"] {
-        assert!(scopes.contains(&scope), "{scope}");
-    }
+    // Exactly these: microprofile-jwt would overwrite the groups claim.
+    let mut scopes: Vec<&str> = params["scope"].split(' ').collect();
+    scopes.sort_unstable();
+    assert_eq!(scopes, ["email", "openid", "profile"]);
+    assert!(!params["nonce"].is_empty());
     let relay = decode_state(&params["state"]).unwrap();
     assert_eq!(relay.return_to, "http://localhost:5173/api/auth/callback");
 
@@ -537,13 +581,25 @@ fn urlencode(text: &str) -> String {
 }
 
 async fn finish_login(app: &Router, started: &Started, code: &str) -> Res {
+    callback_with(app, started, &format!("code={code}")).await
+}
+
+/// The callback as Ricochet forwards it: `state` plus whatever Keycloak sent.
+async fn callback_with(app: &Router, started: &Started, params: &str) -> Res {
     Req::get(&format!(
-        "/api/auth/callback?code={code}&state={}",
+        "/api/auth/callback?state={}&{params}",
         started.state
     ))
     .header("cookie", &started.attempt_cookie)
     .send(app)
     .await
+}
+
+async fn session_count(db: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM sessions")
+        .fetch_one(db)
+        .await
+        .unwrap()
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -661,6 +717,22 @@ async fn keycloak_admins_who_leave_the_group_lose_that_role(db: PgPool) {
         .await;
     assert_eq!(me.json["permissions"]["isAdmin"], false);
 
+    // Keycloak sends an empty list for someone in no group at all: that also means they left.
+    sqlx::query("INSERT INTO role_assignments (id, user_id, role, source) SELECT $1, id, 'admin', 'keycloak_group' FROM users WHERE andrew_id = 'kcformer'")
+        .bind(uuid::Uuid::now_v7())
+        .execute(&db)
+        .await
+        .unwrap();
+    mock.lock().unwrap().groups = Some(Vec::new());
+    let started = start_login(&app, &mock, "/portal/").await;
+    let res = finish_login(&app, &started, "good-code").await;
+    let me = Req::get("/api/me")
+        .header("cookie", &session_cookie_from(&res))
+        .send(&app)
+        .await;
+    assert_eq!(me.json["permissions"]["isAdmin"], false);
+    assert_eq!(me.json["roles"], json!([]));
+
     // A token without any groups claim changes nothing.
     sqlx::query("INSERT INTO role_assignments (id, user_id, role, source) SELECT $1, id, 'admin', 'keycloak_group' FROM users WHERE andrew_id = 'kcformer'")
         .bind(uuid::Uuid::now_v7())
@@ -752,11 +824,123 @@ async fn keycloak_failures_return_to_sign_in_with_a_reason(db: PgPool) {
     );
 
     // Nobody was signed in by any of that.
-    let sessions: i64 = sqlx::query_scalar("SELECT count(*) FROM sessions")
+    assert_eq!(session_count(&db).await, 0);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn keycloak_callbacks_must_name_the_right_issuer(db: PgPool) {
+    let (app, mock) = keycloak_app(&db, "kciss", None).await;
+    let issuer = mock.lock().unwrap().issuer.clone();
+
+    // Ricochet forwards every parameter Keycloak sends, including iss and session_state.
+    let started = start_login(&app, &mock, "/portal/ticker/").await;
+    let res = callback_with(
+        &app,
+        &started,
+        &format!(
+            "session_state=abc-123&iss={}&code=good-code",
+            urlencode(&issuer)
+        ),
+    )
+    .await;
+    assert_eq!(res.header("location"), Some("/portal/ticker/"));
+    assert_eq!(session_count(&db).await, 1);
+
+    // Another issuer: refused, and the attempt is used up so it cannot be retried.
+    let started = start_login(&app, &mock, "/portal/").await;
+    let res = callback_with(
+        &app,
+        &started,
+        &format!(
+            "iss={}&code=good-code",
+            urlencode("https://idp.example.com/realms/scottylabs")
+        ),
+    )
+    .await;
+    assert_eq!(
+        res.header("location"),
+        Some("/portal/sign-in/?error=failed")
+    );
+    let retry = callback_with(
+        &app,
+        &started,
+        &format!("iss={}&code=good-code", urlencode(&issuer)),
+    )
+    .await;
+    assert_eq!(
+        retry.header("location"),
+        Some("/portal/sign-in/?error=expired")
+    );
+
+    // The issuer must match exactly, not just start the same way.
+    let started = start_login(&app, &mock, "/portal/").await;
+    let res = callback_with(
+        &app,
+        &started,
+        &format!("iss={}&code=good-code", urlencode(&format!("{issuer}/"))),
+    )
+    .await;
+    assert_eq!(
+        res.header("location"),
+        Some("/portal/sign-in/?error=failed")
+    );
+    assert_eq!(session_count(&db).await, 1);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn keycloak_errors_use_up_the_attempt(db: PgPool) {
+    let (app, mock) = keycloak_app(&db, "kcerror", None).await;
+    let issuer = mock.lock().unwrap().issuer.clone();
+    let started = start_login(&app, &mock, "/portal/").await;
+    let res = callback_with(
+        &app,
+        &started,
+        &format!(
+            "error=invalid_request&error_description={}&iss={}",
+            urlencode("Missing parameter: code_challenge_method"),
+            urlencode(&issuer)
+        ),
+    )
+    .await;
+    assert_eq!(
+        res.header("location"),
+        Some("/portal/sign-in/?error=failed")
+    );
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM auth_attempts")
         .fetch_one(&db)
         .await
         .unwrap();
-    assert_eq!(sessions, 0);
+    assert_eq!(left, 0);
+    assert_eq!(
+        finish_login(&app, &started, "good-code")
+            .await
+            .header("location"),
+        Some("/portal/sign-in/?error=expired")
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn keycloak_tokens_signed_with_the_client_secret_are_refused(db: PgPool) {
+    let (app, mock) = keycloak_app(&db, "kchmac", Some(vec![ADMIN_GROUP])).await;
+    mock.lock().unwrap().signing = Signing::Hs256;
+    let started = start_login(&app, &mock, "/portal/").await;
+    let res = finish_login(&app, &started, "good-code").await;
+    assert_eq!(
+        res.header("location"),
+        Some("/portal/sign-in/?error=failed")
+    );
+    assert_eq!(session_count(&db).await, 0);
+    let users: i64 = sqlx::query_scalar("SELECT count(*) FROM users")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(users, 0);
+
+    // The same sign-in signed with RS256 goes through.
+    mock.lock().unwrap().signing = Signing::Rs256;
+    let started = start_login(&app, &mock, "/portal/").await;
+    let res = finish_login(&app, &started, "good-code").await;
+    assert_eq!(res.header("location"), Some("/portal/"));
 }
 
 #[sqlx::test(migrations = "./migrations")]
