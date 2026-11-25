@@ -192,7 +192,7 @@ async fn sent_back(conn: &mut PgConnection, scope: &Scope) -> AppResult<Vec<Atte
            AND NOT EXISTS (
                SELECT 1 FROM approvals newer
                WHERE newer.subject_type = a.subject_type AND newer.subject_id = a.subject_id
-                 AND newer.created_at > a.created_at)
+                 AND (newer.created_at, newer.id) > (a.created_at, a.id))
            AND CASE a.subject_type
                  WHEN 'announcement' THEN EXISTS (
                      SELECT 1 FROM announcements n WHERE n.id = a.subject_id AND n.state = 'sent_back')

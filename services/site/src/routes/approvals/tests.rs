@@ -193,22 +193,6 @@ fn notes_are_trimmed_and_bounded() {
     assert!(check_note(Some("bell\u{7}"), true).is_err());
 }
 
-#[test]
-fn summaries_name_the_submitter_and_subject() {
-    assert_eq!(
-        decision_summary(Decision::Approve, Some("Sara Chokshi"), None),
-        "Approved Sara Chokshi\u{2019}s announcement"
-    );
-    assert_eq!(
-        decision_summary(Decision::SendBack, Some("Sara Chokshi"), Some("Nova")),
-        "Sent Sara Chokshi\u{2019}s changes to Nova back"
-    );
-    assert_eq!(
-        decision_summary(Decision::Approve, None, Some("Nova")),
-        "Approved a lead\u{2019}s changes to Nova"
-    );
-}
-
 #[sqlx::test(migrations = "./migrations")]
 async fn approvers_see_waiting_submissions_for_their_committees(db: PgPool) {
     let s = setup(&db).await;
@@ -268,15 +252,7 @@ async fn leads_see_only_their_own_submissions(db: PgPool) {
     assert_eq!(ids(&res), [s.announcement_approval.to_string()]);
     assert_eq!(res.json["approvals"][0]["canDecide"], false);
 
-    sqlx::query(
-        "UPDATE approvals SET status = 'sent_back', note = 'Add the date.', decided_by = $2, decided_at = now()
-         WHERE id = $1",
-    )
-    .bind(s.announcement_approval)
-    .bind(s.events_director.id)
-    .execute(&db)
-    .await
-    .unwrap();
+    send_back_directly(&db, s.announcement_approval, &s.events_director).await;
     assert!(ids(&list(&s.app, &s.sara, "?mine=true").await).is_empty());
     let res = list(&s.app, &s.sara, "?mine=true&status=decided").await;
     assert_eq!(ids(&res), [s.announcement_approval.to_string()]);
@@ -291,6 +267,59 @@ async fn leads_see_only_their_own_submissions(db: PgPool) {
 
     let res = list(&s.app, &s.sara, "?status=all").await;
     assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+async fn send_back_directly(db: &PgPool, approval: Uuid, director: &TestUser) {
+    sqlx::query(
+        "UPDATE approvals SET status = 'sent_back', note = 'Add the date.', decided_by = $2, decided_at = now()
+         WHERE id = $1",
+    )
+    .bind(approval)
+    .bind(director.id)
+    .execute(db)
+    .await
+    .unwrap();
+}
+
+/// A lead who fixed and resent something sees only the new submission, not the old sent back one with its Edit button; approvers keep the whole history.
+#[sqlx::test(migrations = "./migrations")]
+async fn a_leads_list_keeps_only_the_latest_submission_of_each_subject(db: PgPool) {
+    let s = setup(&db).await;
+    send_back_directly(&db, s.announcement_approval, &s.events_director).await;
+    let mut conn = db.acquire().await.unwrap();
+    let resent = approvals_core::submit(
+        &mut conn,
+        SubjectType::Announcement,
+        s.announcement,
+        Committee::Events,
+        s.sara.id,
+        &announcement_snapshot(Committee::Events, "Volunteer sign-ups are open now."),
+    )
+    .await
+    .unwrap()
+    .id;
+    drop(conn);
+
+    let res = list(&s.app, &s.sara, "?mine=true").await;
+    assert_eq!(ids(&res), [resent.to_string()]);
+    let res = list(&s.app, &s.sara, "?mine=true&status=decided").await;
+    assert!(ids(&res).is_empty(), "{:?}", ids(&res));
+    let res = list(&s.app, &s.events_director, "?status=decided").await;
+    assert_eq!(ids(&res), [s.announcement_approval.to_string()]);
+
+    // A sent back announcement the lead then deleted has nothing left to edit.
+    let (gone, gone_approval) =
+        pending_announcement(&db, &s.sara, Committee::Events, "Bring a friend.").await;
+    send_back_directly(&db, gone_approval, &s.events_director).await;
+    let res = list(&s.app, &s.sara, "?mine=true&status=decided").await;
+    assert_eq!(ids(&res), [gone_approval.to_string()]);
+    sqlx::query("DELETE FROM announcements WHERE id = $1")
+        .bind(gone)
+        .execute(&db)
+        .await
+        .unwrap();
+    let res = list(&s.app, &s.sara, "?mine=true&status=decided").await;
+    assert!(ids(&res).is_empty(), "{:?}", ids(&res));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -446,10 +475,12 @@ async fn approving_publishes_the_announcement(db: PgPool) {
         .await
         .unwrap();
     assert_eq!(state, "live");
+    // The ticker's hook records the decision; this module adds no second entry.
+    let summaries = testing::audit_summaries(&db).await;
+    assert_eq!(summaries.len(), 1, "{summaries:?}");
     assert!(
-        testing::audit_summaries(&db)
-            .await
-            .contains(&"Approved Sara Chokshi\u{2019}s announcement".to_owned())
+        summaries[0].contains("Volunteer sign-ups are open."),
+        "{summaries:?}"
     );
 }
 
@@ -474,4 +505,6 @@ async fn sending_back_returns_the_announcement_with_the_note(db: PgPool) {
         .await
         .unwrap();
     assert_eq!(state, "sent_back");
+    let summaries = testing::audit_summaries(&db).await;
+    assert_eq!(summaries.len(), 1, "{summaries:?}");
 }

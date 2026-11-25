@@ -1,6 +1,6 @@
 //! Approvals: what leads submitted, for directors and admins to approve or send back. See "Approvals" in docs/implementation/contract.md.
 //!
-//! A decision locks the approval, checks `permissions::can_approve_for`, and calls the subject's hook (`routes::apply_announcement_approval` and the others) in the same transaction, so the subject and the approval change together or not at all.
+//! A decision locks the approval, checks `permissions::can_approve_for`, and calls the subject's hook (`routes::apply_announcement_approval` and the others) in the same transaction, so the subject and the approval change together or not at all. The hooks record the decision in the audit log against the subject, so this module records nothing itself and Recent activity shows each decision once.
 
 use axum::extract::{FromRequest, Path, RawQuery, Request, State};
 use axum::http::header::CONTENT_TYPE;
@@ -12,7 +12,6 @@ use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use crate::approvals_core::{self, ApprovalRow, ApprovalStatus, SubjectType};
-use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
 use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
@@ -305,10 +304,24 @@ async fn list(
         ),
     };
     let submitter = query.mine.then_some(viewer.user_id);
+    // A lead's own list keeps only the latest submission of each subject that still exists, as
+    // Needs attention does, so a resubmitted announcement is not also listed as sent back.
     let rows = sqlx::query_as::<_, ApprovalListRow>(&format!(
         "{SELECT_APPROVALS}
          WHERE a.status = ANY($1)
-           AND CASE WHEN $2::uuid IS NULL THEN a.committee = ANY($3) ELSE a.submitted_by = $2 END
+           AND CASE WHEN $2::uuid IS NULL THEN a.committee = ANY($3)
+                    ELSE a.submitted_by = $2
+                         AND NOT EXISTS (
+                             SELECT 1 FROM approvals newer
+                             WHERE newer.subject_type = a.subject_type
+                               AND newer.subject_id = a.subject_id
+                               AND (newer.created_at, newer.id) > (a.created_at, a.id))
+                         AND CASE a.subject_type
+                               WHEN 'announcement' THEN EXISTS (
+                                   SELECT 1 FROM announcements n WHERE n.id = a.subject_id)
+                               ELSE EXISTS (SELECT 1 FROM projects p WHERE p.id = a.subject_id)
+                             END
+               END
          ORDER BY {order}
          LIMIT $4"
     ))
@@ -383,13 +396,6 @@ impl Decision {
             Self::SendBack => ApprovalStatus::SentBack,
         }
     }
-
-    fn action(self) -> &'static str {
-        match self {
-            Self::Approve => "approval.approve",
-            Self::SendBack => "approval.send_back",
-        }
-    }
 }
 
 /// Approving takes an optional `{ "note" }`, so a request without a body is fine.
@@ -454,7 +460,6 @@ async fn decide(
     .bind(viewer.user_id)
     .execute(&mut *tx)
     .await?;
-    record(&mut tx, viewer, &approval, decision).await?;
     let dto = load_one(&mut tx, viewer, id).await?;
     tx.commit().await?;
     Ok(dto)
@@ -493,56 +498,6 @@ async fn apply_to_subject(
             crate::routes::apply_project_send_back(conn, approval, viewer).await
         }
     }
-}
-
-/// "Approved Sara Chokshi's announcement", "Sent Sara Chokshi's changes to Nova back".
-fn decision_summary(decision: Decision, submitter: Option<&str>, project: Option<&str>) -> String {
-    let owner = submitter.map_or_else(
-        || "a lead\u{2019}s".to_owned(),
-        |name| format!("{name}\u{2019}s"),
-    );
-    let what = match project {
-        Some(name) => format!("{owner} changes to {name}"),
-        None => format!("{owner} announcement"),
-    };
-    match decision {
-        Decision::Approve => format!("Approved {what}"),
-        Decision::SendBack => format!("Sent {what} back"),
-    }
-}
-
-async fn record(
-    conn: &mut PgConnection,
-    viewer: &Viewer,
-    approval: &ApprovalRow,
-    decision: Decision,
-) -> AppResult<()> {
-    let submitter: Option<(String, String)> =
-        sqlx::query_as("SELECT andrew_id, name FROM users WHERE id = $1")
-            .bind(approval.submitted_by)
-            .fetch_optional(&mut *conn)
-            .await?;
-    let submitter =
-        submitter.map(|(andrew_id, name)| PersonRef::new(Uuid::nil(), andrew_id, name).name);
-    let (subject_type, project) = match approval.subject_type {
-        SubjectType::Announcement => (subject::ANNOUNCEMENT, None),
-        SubjectType::Project => (
-            subject::PROJECT,
-            Some(approval.snapshot["name"].as_str().unwrap_or("a project")),
-        ),
-    };
-    audit::record(
-        conn,
-        audit::Entry {
-            actor: Some(viewer.user_id),
-            action: decision.action(),
-            subject_type,
-            subject_id: Some(approval.subject_id.to_string()),
-            committee: Some(approval.committee),
-            summary: decision_summary(decision, submitter.as_deref(), project),
-        },
-    )
-    .await
 }
 
 #[cfg(test)]
