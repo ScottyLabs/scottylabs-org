@@ -331,6 +331,9 @@ pub fn check_line(raw: &str, min: usize, max: usize, label: &str) -> Result<Stri
     if value.contains(['\n', '\r']) {
         return Err(format!("Keep {label} on one line."));
     }
+    if value.chars().any(is_hidden_control) {
+        return Err(format!("Remove the special characters from {label}."));
+    }
     let count = value.chars().count();
     if count < min {
         return Err(if min == 1 {
@@ -343,6 +346,15 @@ pub fn check_line(raw: &str, min: usize, max: usize, label: &str) -> Result<Stri
         return Err(format!("Keep {label} to {max} characters or fewer."));
     }
     Ok(value)
+}
+
+/// Characters a one-line field refuses besides line breaks: control characters such as NUL and tab, the Unicode line and paragraph separators, and the bidirectional embeddings, overrides and isolates, which can make text read backwards or spoof what it says.
+fn is_hidden_control(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 #[cfg(test)]
@@ -430,6 +442,23 @@ mod tests {
         assert_eq!(check_line("  hi  ", 1, 10, "a name").unwrap(), "hi");
         assert!(check_line("", 1, 10, "a name").is_err());
         assert!(check_line("a\nb", 1, 10, "a name").is_err());
+        for hidden in ["\0", "\t", "\u{7}", "\u{2028}", "\u{202E}", "\u{2067}"] {
+            assert_eq!(
+                check_line(&format!("a{hidden}b"), 1, 10, "the message"),
+                Err("Remove the special characters from the message.".to_owned()),
+                "{hidden:?}"
+            );
+        }
+        // Letters from any script, emoji sequences and directional marks stay.
+        assert!(
+            check_line(
+                "Caf\u{e9} \u{1F469}\u{200D}\u{1F4BB} \u{5E9}\u{200F}",
+                1,
+                20,
+                "a name"
+            )
+            .is_ok()
+        );
         assert!(check_line(&"x".repeat(11), 1, 10, "a name").is_err());
     }
 }

@@ -15,6 +15,7 @@ use uuid::Uuid;
 use super::doc::{ProjectDoc, ProjectKind, ProjectStatus, check_slug};
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, ImageRef};
+use crate::routes::common::query_param;
 use crate::state::AppState;
 
 const PUBLIC_CACHE: &str = "public, max-age=60, stale-while-revalidate=600";
@@ -195,12 +196,4 @@ async fn project_page(state: &AppState, raw_slug: &str) -> AppResult<Response> {
         .into_response()),
         None => Err(not_found()),
     }
-}
-
-/// One query parameter, trimmed, or `None` when missing or empty.
-pub fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
-    url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }

@@ -14,7 +14,6 @@ use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use super::doc::{self, Checklist, ProjectDoc, ProjectState, Purpose};
-use super::public::query_param;
 use crate::approvals_core::{self, ApprovalStatus, SubjectType};
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
@@ -22,7 +21,7 @@ use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, ImageRef, PersonRef, check_line};
 use crate::permissions::{self, ProjectAccess};
-use crate::routes::common::blocking;
+use crate::routes::common::{self, blocking, query_param};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -77,7 +76,7 @@ pub(super) async fn lock(conn: &mut PgConnection, id: Uuid) -> AppResult<Project
 
 /// Project ids come from the path; anything that is not one is a project we don't have.
 fn parse_id(raw: &str) -> AppResult<Uuid> {
-    Uuid::parse_str(raw).map_err(|_| AppError::not_found("project"))
+    common::parse_id(raw, "project")
 }
 
 #[derive(FromRow)]

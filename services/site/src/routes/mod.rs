@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
         .merge(approvals::router())
         .layer(DefaultBodyLimit::max(JSON_BODY_LIMIT))
         .merge(media::upload_router())
+        .method_not_allowed_fallback(api_method_not_allowed)
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -80,4 +81,9 @@ async fn health(State(state): State<AppState>) -> Result<&'static str, StatusCod
 
 async fn api_not_found() -> AppError {
     AppError::NotFound("There is no API endpoint at that address.".into())
+}
+
+/// The route exists but not for this method. axum adds the `Allow` header.
+async fn api_method_not_allowed() -> AppError {
+    AppError::MethodNotAllowed
 }

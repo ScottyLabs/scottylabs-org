@@ -43,6 +43,7 @@ export interface ApiErrorBody {
       | "forbidden"
       | "not_found"
       | "conflict"
+      | "method_not_allowed"
       | "payload_too_large"
       | "unsupported_media_type"
       | "rate_limited"

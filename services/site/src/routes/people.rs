@@ -24,6 +24,7 @@ use crate::error::{AppError, AppResult, Problems};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, PersonRef, Role, check_line};
 use crate::permissions::{self, PeopleScope};
+use crate::routes::common::{self, query_param};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -105,13 +106,6 @@ fn no_store(mut response: Response) -> Response {
         .headers_mut()
         .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
-}
-
-fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
-    url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -696,7 +690,7 @@ async fn lock_assignment(conn: &mut PgConnection, id: Uuid) -> AppResult<Assignm
 }
 
 fn parse_id(raw: &str) -> AppResult<Uuid> {
-    Uuid::parse_str(raw).map_err(|_| AppError::not_found("role"))
+    common::parse_id(raw, "role")
 }
 
 async fn update_assignment(

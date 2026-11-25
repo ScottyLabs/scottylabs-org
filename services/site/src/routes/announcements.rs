@@ -26,6 +26,7 @@ use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, PersonRef, TickerSource};
 use crate::permissions::{self, Posting};
+use crate::routes::common;
 use crate::state::AppState;
 
 use model::{
@@ -450,6 +451,11 @@ async fn list(
     Ok(no_store(Json(body).into_response()))
 }
 
+/// Announcement ids come from the path; anything that is not one is an announcement we don't have.
+fn parse_id(raw: &str) -> AppResult<Uuid> {
+    common::parse_id(raw, "announcement")
+}
+
 /// Waiting announcements are private to their author and the people who manage the source.
 fn can_see(viewer: &Viewer, row: &Row) -> bool {
     permissions::can_view_announcement(viewer, row.committee, row.created_by, row.is_waiting())
@@ -458,8 +464,9 @@ fn can_see(viewer: &Viewer, row: &Row) -> bool {
 async fn show(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let mut conn = state.db.acquire().await?;
     let row = find(&mut conn, id, false)
         .await?
@@ -698,9 +705,10 @@ fn may_use_source(viewer: &Viewer, row: &Row, source: TickerSource) -> bool {
 async fn update(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
     JsonBody(patch): JsonBody<AnnouncementPatch>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let row = lock(&mut tx, id).await?;
@@ -795,9 +803,10 @@ struct ExtendInput {
 async fn extend(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
     JsonBody(input): JsonBody<ExtendInput>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     if !(1..=MAX_EXTEND_DAYS).contains(&input.days) {
         return Err(AppError::field(
             "days",
@@ -858,8 +867,9 @@ async fn set_expiry(
 async fn end(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let row = lock(&mut tx, id).await?;
@@ -900,9 +910,10 @@ struct RepostInput {
 async fn repost(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
     JsonBody(input): JsonBody<RepostInput>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let original = find(&mut tx, id, false)
@@ -989,8 +1000,9 @@ async fn reorder(
 async fn remove(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
+    let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
     let row = lock(&mut tx, id).await?;
     if !can_see(&viewer, &row) {

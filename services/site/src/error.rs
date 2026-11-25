@@ -23,6 +23,8 @@ pub enum AppError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("That address doesn't accept this kind of request.")]
+    MethodNotAllowed,
     #[error("{0}")]
     PayloadTooLarge(String),
     #[error("{0}")]
@@ -60,6 +62,7 @@ impl AppError {
             Self::Forbidden(_) => "forbidden",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
+            Self::MethodNotAllowed => "method_not_allowed",
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::RateLimited => "rate_limited",
@@ -76,6 +79,7 @@ impl AppError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
