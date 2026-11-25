@@ -140,6 +140,7 @@
   }
 
   function onkeydown(event: KeyboardEvent) {
+    editor.noteActivity();
     if (previewing || publishOpen || discardOpen) return;
     const mod = event.metaKey || event.ctrlKey;
     const key = event.key.toLowerCase();
@@ -177,7 +178,7 @@
   const firstProblem = $derived(Object.keys(editor.problems.blocks)[0] ?? null);
 </script>
 
-<svelte:window {onkeydown} {onbeforeunload} {onpagehide} />
+<svelte:window {onkeydown} {onbeforeunload} {onpagehide} onpointerdown={() => editor.noteActivity()} />
 
 {#snippet notices()}
   {#if editor.readOnlyReason !== null && editor.canEdit}

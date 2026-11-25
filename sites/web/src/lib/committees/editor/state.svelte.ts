@@ -19,13 +19,12 @@ import { History } from "../history.ts";
 import { type FreeSlot, moveBlock, placeInSlot } from "../layout.ts";
 import type { CommitteeInfo } from "../render/types.ts";
 import { loadEditor, releaseLock, saveDraft, takeLock } from "../api.ts";
+import { HEARTBEAT_MS, LockClock } from "./lock-clock.ts";
 
 /** Saved within this long after the last change, and never later than MAX_WAIT_MS after the first. */
 const SAVE_DELAY_MS = 700;
 const MAX_WAIT_MS = 1800;
 const RETRY_MS = 5000;
-/** The lock lasts five minutes; refreshing every minute keeps it while the editor is open. */
-export const HEARTBEAT_MS = 60_000;
 
 export type SaveState = "saved" | "unsaved" | "saving" | "offline" | "invalid" | "conflict";
 
@@ -59,6 +58,7 @@ export class PageEditor {
   #timer: ReturnType<typeof setTimeout> | null = null;
   #firstPendingAt: number | null = null;
   #heartbeat: ReturnType<typeof setInterval> | null = null;
+  #lockClock = new LockClock(Date.now());
   #destroyed = false;
 
   constructor(response: CommitteePageEditorResponse) {
@@ -219,6 +219,8 @@ export class PageEditor {
   // Saving
 
   #markChanged(): void {
+    // The save that follows refreshes the lock, so a change needs no request of its own.
+    this.#lockClock.touch(Date.now());
     this.#revision += 1;
     if (this.saveState !== "conflict")
       this.saveState = this.#saving === null ? "unsaved" : "saving";
@@ -273,6 +275,7 @@ export class PageEditor {
     this.#firstPendingAt = null;
     try {
       const saved = await saveDraft(this.slug, doc, this.version);
+      this.#lockClock.claimed(Date.now());
       this.version = saved.draftVersion;
       this.status = saved.status;
       this.savedAt = saved.savedAt;
@@ -321,22 +324,41 @@ export class PageEditor {
   // -------------------------------------------------------------------------
   // The edit lock
 
-  /** Takes the lock and keeps it with a heartbeat. Leaves the page read only when someone else holds it. */
+  /**
+   * Takes the lock and keeps it with a heartbeat while the person is working, so an editor left
+   * open does not hold the page forever. Leaves the page read only when someone else holds it.
+   */
   async start(): Promise<void> {
     if (!this.canEdit) return;
     await this.#claim();
-    this.#heartbeat ??= setInterval(() => void this.#claim(), HEARTBEAT_MS);
+    this.#heartbeat ??= setInterval(() => {
+      if (this.#lockClock.due) void this.#claim();
+    }, HEARTBEAT_MS);
   }
 
-  async #claim(): Promise<void> {
+  /**
+   * Call when the person clicks or types in the editor. Back from a break long enough for the lock
+   * to lapse, it asks for the lock again and picks up anything saved in the meantime.
+   */
+  noteActivity(): void {
+    if (this.#lockClock.touch(Date.now()) && this.canEdit && !this.#destroyed) {
+      void this.#claim(true);
+    }
+  }
+
+  async #claim(afterLapse = false): Promise<void> {
     if (this.#destroyed) return;
+    this.#lockClock.claimed(Date.now());
     try {
       const lock = await takeLock(this.slug);
-      // Someone else was editing: start from what they saved.
       if (this.readOnlyReason !== null) {
+        // Someone else was editing: start from what they saved.
         await this.refresh();
         this.readOnlyReason = null;
         this.saveState = "saved";
+      } else if (afterLapse) {
+        // Someone may have edited while the lock was free.
+        await this.#catchUp();
       }
       this.lock = lock;
     } catch (error) {
@@ -357,6 +379,13 @@ export class PageEditor {
   async refresh(): Promise<void> {
     const latest = await loadEditor(this.slug);
     if (this.hasPendingChanges && this.writable) return;
+    this.#apply(latest);
+  }
+
+  /** Like `refresh`, but keeps the history when nobody saved a newer draft. */
+  async #catchUp(): Promise<void> {
+    const latest = await loadEditor(this.slug);
+    if (latest.draftVersion === this.version || this.hasPendingChanges) return;
     this.#apply(latest);
   }
 

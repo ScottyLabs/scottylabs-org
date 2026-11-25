@@ -1,6 +1,6 @@
 //! Committee pages: what visitors see under /committees/ and the portal's page editor. See "Committee pages" in docs/implementation/contract.md.
 //!
-//! Each committee has one row in `committee_pages` with a draft and the published version, both a [`CommitteePageDoc`]. Editors work on the draft while holding a five minute edit lock, which the editor refreshes every minute; saves carry the draft version they started from so two tabs cannot overwrite each other.
+//! Each committee has one row in `committee_pages` with a draft and the published version, both a [`CommitteePageDoc`]. Editors work on the draft while holding a five minute edit lock, which the editor refreshes every minute while the person is working, so a page left open frees up; saves carry the draft version they started from so two tabs cannot overwrite each other.
 
 mod editor;
 mod public;
