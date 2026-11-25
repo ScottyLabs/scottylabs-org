@@ -11,10 +11,7 @@ import type {
 import { committeeName, committeeNames } from "../committees.ts";
 import { formatRelative, formatShortDate, formatTime, partOfDay } from "../dates.ts";
 
-/**
- * Where to add a project: the projects list, whose "Add project" dialog `?add=1` asks it to open
- * (contract Changes). Without that, the list is still where the Add project button is.
- */
+/** Where to add a project: the projects list, which opens its "Add project" dialog for `?add=1`. */
 export const NEW_PROJECT_HREF = "/portal/projects/?add=1";
 
 export interface CardAction {

@@ -1,8 +1,9 @@
 <script lang="ts">
   // Projects in the portal (Figma 107:5109; spec PR-1): search, committee chips with counts, the
   // Drafts / Published / Archived filter and a row per project with Edit. "Add project" opens a
-  // dialog that creates a draft and goes straight to its editor. Filters live in the address.
-  import { onMount } from "svelte";
+  // dialog that creates a draft and goes straight to its editor; `?add=1` (the overview's Add
+  // project) opens it on arrival. Filters live in the address.
+  import { onMount, untrack } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import ExternalLink from "@lucide/svelte/icons/external-link";
@@ -143,6 +144,16 @@
     addError = null;
     adding = true;
   }
+
+  // `?add=1` opens the dialog for people who may add projects, then leaves the address, so going
+  // back or reloading does not open it again.
+  $effect(() => {
+    if (!page.url.searchParams.has("add") || permissions === null) return;
+    untrack(() => {
+      if (addableCommittees.length > 0) openAdd();
+      setParams({ add: null });
+    });
+  });
 
   async function create(event: SubmitEvent): Promise<void> {
     event.preventDefault();
