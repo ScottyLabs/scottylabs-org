@@ -289,7 +289,8 @@ pub fn check_button_url(raw: &str) -> Result<String, String> {
 
 /// A path on this site, such as `/sponsors/`. `//host` and backslashes are refused because browsers read them as links to other sites.
 fn check_site_path(path: &str) -> Result<String, String> {
-    const ERROR: &str = "Enter a path on this site starting with one /, such as /sponsors/";
+    const ERROR: &str =
+        "Enter a path on this site that starts with a single /, such as /sponsors/.";
     let suspicious = path.starts_with("//")
         || path.contains('\\')
         || path.chars().any(|c| c.is_whitespace() || c.is_control());
@@ -412,6 +413,10 @@ mod tests {
         for bad in ["//evil.example", "/\\evil.example", "/a b", "/x\u{0}"] {
             assert!(check_button_url(bad).is_err(), "{bad:?} should be rejected");
         }
+        assert_eq!(
+            check_button_url("/\\evil").unwrap_err(),
+            "Enter a path on this site that starts with a single /, such as /sponsors/."
+        );
         assert!(check_video_url("https://www.youtube.com/watch?v=abc").is_ok());
         assert!(check_video_url("https://youtu.be/abc").is_ok());
         assert!(check_video_url("https://vimeo.com/123").is_ok());
