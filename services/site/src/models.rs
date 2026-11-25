@@ -234,7 +234,20 @@ impl ImageRef {
             .strip_prefix("/media/")
             .and_then(|id| Uuid::parse_str(id).ok())
     }
+
+    /// Why this image cannot be a cover, which pages show up to 1200 pixels wide: an upload narrower than [`MIN_COVER_WIDTH`]. Bundled `/seed/` images are exempt; some are 1000 pixels wide. Call it after the stored size replaced the one the browser sent.
+    pub fn cover_problem(&self) -> Option<String> {
+        let width = self.width?;
+        (self.media_id().is_some() && width < MIN_COVER_WIDTH).then(|| {
+            format!(
+                "Use a cover photo at least 1,200 pixels wide. This one is {width} pixels wide."
+            )
+        })
+    }
 }
+
+/// Narrowest upload accepted as a cover, from spec section 12.
+pub const MIN_COVER_WIDTH: u32 = 1200;
 
 fn is_local_image_src(src: &str) -> bool {
     if let Some(id) = src.strip_prefix("/media/") {

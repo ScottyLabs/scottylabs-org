@@ -567,6 +567,41 @@ async fn publishing_needs_alt_text_and_a_cover_photo(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn uploaded_covers_must_be_wide_enough_to_publish(db: PgPool) {
+    let app = setup(&db).await;
+    let evan = testing::persona(&db, "evanfost").await;
+    let narrow = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO media (id, content_type, width, height, variants, bytes, storage)
+         VALUES ($1, 'image/jpeg', 600, 400, '{480,600}', 1000, 'database')",
+    )
+    .bind(narrow)
+    .execute(&db)
+    .await
+    .unwrap();
+    let page = editor(&app, &evan, "events").await;
+    let mut doc = page["draft"].clone();
+    doc["blocks"][0]["props"]["image"] =
+        json!({ "src": format!("/media/{narrow}"), "alt": "Hackers at work" });
+    let (status, saved) = save(&app, &evan, "events", &doc, &page["draftVersion"]).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, body) = testing::post(
+        &app,
+        "/api/committee-pages/events/publish",
+        Some(&evan),
+        json!({ "draftVersion": saved["draftVersion"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"]["blocks.0.image"],
+        "Use a cover photo at least 1,200 pixels wide. This one is 600 pixels wide."
+    );
+    let (_, public) = testing::get(&app, "/api/public/committees/events", None).await;
+    assert_ne!(public["committee"]["cover"]["width"], 600);
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn discarding_brings_back_the_published_version(db: PgPool) {
     let app = setup(&db).await;
     let anish = testing::persona(&db, "apallati").await;

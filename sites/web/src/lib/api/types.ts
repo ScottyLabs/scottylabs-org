@@ -369,6 +369,8 @@ export interface ProjectListResponse {
 
 export interface ProjectChecklist {
   cover: boolean;
+  /** The cover is at least 1,200 pixels wide (bundled /seed/ images always pass, and so does no cover). Publishing needs it. */
+  coverWide: boolean;
   summary: boolean;
   description: boolean;
   links: boolean;

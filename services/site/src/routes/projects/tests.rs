@@ -464,7 +464,8 @@ async fn opening_a_project_follows_the_view_rules(db: PgPool) {
     assert_eq!(
         project["checklist"],
         json!({
-            "cover": true, "summary": true, "description": true, "links": false, "altText": true
+            "cover": true, "coverWide": true, "summary": true, "description": true,
+            "links": false, "altText": true
         })
     );
 
@@ -767,6 +768,34 @@ async fn publishing_needs_a_described_cover_and_a_summary(db: PgPool) {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body["error"]["fields"]["media.0.alt"].is_string());
     assert_eq!(body["error"]["fields"].as_object().unwrap().len(), 1);
+
+    // An uploaded cover must be at least 1,200 pixels wide; bundled images are exempt.
+    let narrow = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO media (id, content_type, width, height, variants, bytes, storage)
+         VALUES ($1, 'image/jpeg', 600, 400, '{480,600}', 1000, 'database')",
+    )
+    .bind(narrow)
+    .execute(&db)
+    .await
+    .unwrap();
+    let small = with(
+        &draft,
+        json!({ "summary": "Support for builders", "media": [{ "src": format!("/media/{narrow}"), "alt": "Five members" }] }),
+    );
+    let (status, body) = save(&app, &p.director, id, small).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "drafts may hold a small photo: {body}"
+    );
+    assert_eq!(body["project"]["checklist"]["coverWide"], false);
+    let (status, body) = act(&app, &p.director, id, "publish").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body["error"]["fields"]["media.0"],
+        "Use a cover photo at least 1,200 pixels wide. This one is 600 pixels wide."
+    );
 
     let ready = with(
         &draft,

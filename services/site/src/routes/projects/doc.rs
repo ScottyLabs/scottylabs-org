@@ -102,11 +102,13 @@ impl ProjectDoc {
 }
 
 /// What is still missing before publishing. Mirrors `ProjectChecklist` in types.ts.
-/// Publishing needs `cover`, `summary` and `alt_text`; a description and links are recommended.
+/// Publishing needs `cover`, `cover_wide`, `summary` and `alt_text`; a description and links are recommended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Checklist {
     pub cover: bool,
+    /// The cover is at least 1,200 pixels wide, or a bundled image, or there is no cover yet.
+    pub cover_wide: bool,
     pub summary: bool,
     pub description: bool,
     pub links: bool,
@@ -118,6 +120,9 @@ impl Checklist {
         let summary = doc.summary.trim().chars().count();
         Self {
             cover: doc.cover().is_some(),
+            cover_wide: doc
+                .cover()
+                .is_none_or(|cover| cover.cover_problem().is_none()),
             summary: (1..=MAX_SUMMARY_CHARS).contains(&summary),
             description: !richtext::plain_text(&doc.description).is_empty(),
             links: doc.site_url.is_some() || doc.repo_url.is_some(),
@@ -354,18 +359,24 @@ async fn size_uploads(
     Ok(())
 }
 
-/// The extra rules for publishing: a cover with alt text, and a summary.
+/// The extra rules for publishing: a cover at least 1,200 pixels wide with alt text, and a summary.
 fn check_publishable(doc: &ProjectDoc, problems: &mut Problems) {
     match doc.cover() {
         None => problems.add(
             "media",
             "Add at least one photo before publishing. The first one is the cover.",
         ),
-        Some(cover) if cover.alt.is_empty() => problems.add(
-            "media.0.alt",
-            "Describe the cover photo for people who use screen readers.",
-        ),
-        Some(_) => {}
+        Some(cover) => {
+            if let Some(message) = cover.cover_problem() {
+                problems.add("media.0", message);
+            }
+            if cover.alt.is_empty() {
+                problems.add(
+                    "media.0.alt",
+                    "Describe the cover photo for people who use screen readers.",
+                );
+            }
+        }
     }
     if doc.summary.is_empty() {
         problems.add(
