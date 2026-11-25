@@ -1,8 +1,10 @@
-//! People and roles: listing, searching, adding and changing role assignments, and syncing directors from governance.
+//! People and roles: listing, searching, adding and changing role assignments, and syncing directors and heads from governance.
 //!
 //! Who may change what is decided by `crate::permissions`. On top of it: nobody removes their own admin role, the last admin stays, a lead's projects belong to the lead's committee, a person has at most one role per committee, and only admins give someone a second committee.
 
 mod governance;
+
+pub use governance::spawn_sync as spawn_governance_sync;
 
 use axum::extract::{Path, RawQuery, State};
 use axum::http::header::CACHE_CONTROL;
@@ -765,11 +767,17 @@ async fn update_assignment(
             clear_lead_projects(&mut tx, current.user_id, old).await?;
         }
     } else {
-        sqlx::query("UPDATE role_assignments SET can_post_ticker = $2 WHERE id = $1")
-            .bind(id)
-            .bind(can_post_ticker)
-            .execute(&mut *tx)
-            .await?;
+        // A lead edited here is the portal's from now on, so a governance sync no longer removes it.
+        sqlx::query(
+            "UPDATE role_assignments
+             SET can_post_ticker = $2,
+                 source = CASE WHEN role = 'lead' THEN 'portal' ELSE source END
+             WHERE id = $1",
+        )
+        .bind(id)
+        .bind(can_post_ticker)
+        .execute(&mut *tx)
+        .await?;
     }
     if let (Some(ids), Some(c)) = (&projects, committee) {
         set_lead_projects(&mut tx, current.user_id, c, ids, viewer.user_id).await?;

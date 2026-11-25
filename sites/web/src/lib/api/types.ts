@@ -485,11 +485,17 @@ export interface PeopleSearchResponse {
   people: (PersonRef & { hasSignedIn: boolean })[];
 }
 
-/** POST /api/people/sync-governance */
+/** POST /api/people/sync-governance. Directors and committee heads from governance's committees.yaml; Tech heads are not synced. */
 export interface GovernanceSyncResponse {
+  /** Directors made, directors changed or removed, and directors already in place. */
   added: number;
   updated: number;
   unchanged: number;
+  /** Heads made leads (source "governance"), governance leads removed because governance no longer lists them, and heads who already had a role in their committee. */
+  headsAdded: number;
+  headsRemoved: number;
+  headsUnchanged: number;
+  /** Skipped entries and removals, as sentences to show as they are. */
   messages: string[];
 }
 

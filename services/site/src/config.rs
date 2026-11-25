@@ -17,6 +17,8 @@ pub struct Config {
     pub s3: Option<S3Settings>,
     pub dev_login: DevLogin,
     pub seed_demo: bool,
+    /// Sync directors and heads from governance at startup and every six hours.
+    pub governance_sync: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +124,9 @@ impl Config {
             optional("PORTAL_DEV_LOGIN_KEY"),
         );
 
+        let governance_sync =
+            governance_sync_enabled(optional("GOVERNANCE_SYNC").as_deref(), &dev_login)?;
+
         Ok(Self {
             database_url,
             app_url,
@@ -131,6 +136,7 @@ impl Config {
             s3,
             dev_login,
             seed_demo: optional("SEED_DEMO_CONTENT").as_deref() == Some("1"),
+            governance_sync,
         })
     }
 
@@ -156,6 +162,19 @@ pub fn dev_login_mode(app_url: &Url, enabled: bool, key: Option<String>) -> DevL
     match key {
         Some(key) if key.len() >= 16 => DevLogin::Keyed(key),
         _ => DevLogin::Off,
+    }
+}
+
+/// `GOVERNANCE_SYNC=1` or `0` decides. Unset, the sync is on everywhere except local development with open dev sign-in, where it would fetch governance on every restart and add real people next to the seeded personas.
+pub fn governance_sync_enabled(
+    setting: Option<&str>,
+    dev_login: &DevLogin,
+) -> anyhow::Result<bool> {
+    match setting.map(str::trim) {
+        Some("1") => Ok(true),
+        Some("0") => Ok(false),
+        Some(_) => bail!("GOVERNANCE_SYNC must be 1 or 0"),
+        None => Ok(*dev_login != DevLogin::Open),
     }
 }
 
@@ -201,6 +220,17 @@ mod tests {
             dev_login_mode(&url("http://localhost:5173"), false, None),
             DevLogin::Off
         );
+    }
+
+    #[test]
+    fn governance_sync_is_off_by_default_only_in_local_development() {
+        let keyed = DevLogin::Keyed("k".repeat(24));
+        assert!(!governance_sync_enabled(None, &DevLogin::Open).unwrap());
+        assert!(governance_sync_enabled(None, &DevLogin::Off).unwrap());
+        assert!(governance_sync_enabled(None, &keyed).unwrap());
+        assert!(governance_sync_enabled(Some("1"), &DevLogin::Open).unwrap());
+        assert!(!governance_sync_enabled(Some("0"), &DevLogin::Off).unwrap());
+        assert!(governance_sync_enabled(Some("yes"), &DevLogin::Off).is_err());
     }
 
     #[test]

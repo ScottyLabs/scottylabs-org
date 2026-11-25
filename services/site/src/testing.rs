@@ -41,7 +41,7 @@ use crate::config::{Config, DevLogin};
 use crate::models::{AuthMode, Committee, Role};
 use crate::state::AppState;
 
-/// Local-development settings: http on localhost:5173, open dev login, demo content, no S3, no OIDC.
+/// Local-development settings: http on localhost:5173, open dev login, demo content, no S3, no OIDC, no governance sync.
 pub fn config() -> Config {
     Config {
         database_url: String::new(),
@@ -52,6 +52,7 @@ pub fn config() -> Config {
         s3: None,
         dev_login: DevLogin::Open,
         seed_demo: true,
+        governance_sync: false,
     }
 }
 
