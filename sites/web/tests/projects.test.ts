@@ -4,6 +4,7 @@
 /* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access */
 
 import assert from "node:assert/strict";
+import { ApiError } from "../src/lib/api/client.ts";
 import type { PersonRef, PersonRow, ProjectCard, ProjectDoc } from "../src/lib/api/types.ts";
 import {
   draftCard,
@@ -26,6 +27,7 @@ import {
   searchTextAfterNavigation,
 } from "../src/lib/projects/filter.ts";
 import { leadChoices, leadLabel, leadsIn } from "../src/lib/projects/editor/editors.ts";
+import { retriesOnItsOwn } from "../src/lib/projects/editor/retry.ts";
 import { linkHost, linkLabel, projectPath } from "../src/lib/projects/labels.ts";
 import { videoEmbed } from "../src/lib/projects/video.ts";
 
@@ -317,4 +319,19 @@ Deno.test("only leads of the owning committee can be chosen as editors", () => {
     ["aaron"],
   );
   assert.deepEqual(leadsIn(people, "design"), []);
+});
+
+function failure(status: number): ApiError {
+  return new ApiError(status, "internal", "Something went wrong.");
+}
+
+Deno.test("only dropped connections and server trouble retry a save by themselves", () => {
+  assert.ok(retriesOnItsOwn(new ApiError(0, "network", "We could not reach scottylabs.org.")));
+  assert.ok(retriesOnItsOwn(failure(429)));
+  assert.ok(retriesOnItsOwn(failure(500)));
+  assert.ok(retriesOnItsOwn(failure(503)));
+  for (const status of [401, 403, 404, 409, 413, 422]) {
+    assert.ok(!retriesOnItsOwn(failure(status)), `status ${status.toString()}`);
+  }
+  assert.ok(!retriesOnItsOwn(new Error("bug")));
 });

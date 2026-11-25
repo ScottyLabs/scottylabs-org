@@ -1,7 +1,8 @@
-// Saves a project's draft a moment after the last change (spec PR-7, CP-7). One save runs at a time; changes made while it runs are saved right after. Field problems stop saving until the next change; other failures retry on their own.
+// Saves a project's draft a moment after the last change (spec PR-7, CP-7). One save runs at a time; changes made while it runs are saved right after. Field problems and lasting failures (no access, gone, too large) stop saving until the next change; dropped connections and server trouble retry on their own.
 
 import { isApiError } from "../../api/client.ts";
 import type { ProjectDoc, ProjectEditorResponse } from "../../api/types.ts";
+import { retriesOnItsOwn } from "./retry.ts";
 
 export type SaveStatus = "saved" | "pending" | "saving" | "invalid" | "failed";
 
@@ -16,6 +17,8 @@ export class DraftSaver {
   errors = $state<Record<string, string>>({});
   /** What went wrong, as a sentence, when status is "invalid" or "failed". */
   message = $state<string | null>(null);
+  /** True while a failed save will be tried again by itself. */
+  retrying = $state(false);
 
   #save: (doc: ProjectDoc) => Promise<ProjectEditorResponse>;
   #onsaved: (response: ProjectEditorResponse) => void;
@@ -89,6 +92,7 @@ export class DraftSaver {
       this.savedAt = new Date();
       this.errors = {};
       this.message = null;
+      this.retrying = false;
       this.#onsaved(response);
       if (this.dirty) {
         this.status = "pending";
@@ -97,6 +101,8 @@ export class DraftSaver {
         this.status = "saved";
       }
     } catch (error) {
+      clearTimeout(this.#timer);
+      this.retrying = false;
       if (isApiError(error) && error.code === "validation_failed") {
         this.status = "invalid";
         this.errors = { ...error.fields };
@@ -104,9 +110,11 @@ export class DraftSaver {
         return;
       }
       this.status = "failed";
-      this.message = isApiError(error) ? error.message : "We couldn\u2019t save your changes.";
-      // Sign-in problems are handled by the portal; anything else is worth another try.
-      if (!isApiError(error) || error.status !== 401) {
+      this.message = isApiError(error)
+        ? error.message
+        : "We couldn\u2019t save your changes. Reload the page and try again.";
+      if (retriesOnItsOwn(error)) {
+        this.retrying = true;
         this.#timer = setTimeout(() => void this.#run(), RETRY_AFTER_MS);
       }
     }

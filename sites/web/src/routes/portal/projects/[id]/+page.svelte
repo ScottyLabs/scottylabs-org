@@ -173,7 +173,11 @@
     if (saver === null) return null;
     if (saver.status === "pending" || saver.status === "saving") return { text: "Saving\u2026", tone: "quiet" };
     if (saver.status === "invalid") return { text: "Not saved. Fix the highlighted fields.", tone: "danger" };
-    if (saver.status === "failed") return { text: "Not saved yet. Trying again.", tone: "warning" };
+    if (saver.status === "failed") {
+      return saver.retrying
+        ? { text: "Not saved yet. Trying again.", tone: "warning" }
+        : { text: "Not saved", tone: "danger" };
+    }
     if (saver.savedAt === null) return null;
     // The clock ticks every 30 seconds, so a save can be newer than it.
     const when = formatUpdated(saver.savedAt, saver.savedAt > now ? saver.savedAt : now);
@@ -187,7 +191,7 @@
     actionError =
       saver.status === "invalid"
         ? `Fix the highlighted fields, then ${action}.`
-        : `${saver.message ?? "We couldn\u2019t save your changes."} Try again in a moment.`;
+        : (saver.message ?? "We couldn\u2019t save your changes. Try again in a moment.");
     return false;
   }
 
@@ -356,8 +360,9 @@
       {#if saveLabel !== null}
         <span class={["save", `save--${saveLabel.tone}`]}>{saveLabel.text}</span>
       {/if}
+      <!-- A save that stopped for good is announced by its message below. -->
       <span class="p-sr-only" aria-live="polite">
-        {saver?.status === "invalid" || saver?.status === "failed" ? saveLabel?.text : ""}
+        {saver?.status === "invalid" || (saver?.status === "failed" && saver.retrying) ? saveLabel?.text : ""}
       </span>
       <span class="header__desktop">
         <Button variant="outline" size="lg" icon={Eye} loading={busy === "preview"} onclick={() => void preview()}>
@@ -394,6 +399,8 @@
     {/if}
     {#if actionError !== null}
       <Callout tone="error" role="alert">{actionError}</Callout>
+    {:else if saver !== null && saver.status === "failed" && !saver.retrying && saver.message !== null}
+      <Callout tone="error" role="alert">{saver.message}</Callout>
     {/if}
   </div>
 
