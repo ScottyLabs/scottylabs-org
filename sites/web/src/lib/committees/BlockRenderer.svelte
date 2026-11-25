@@ -146,7 +146,7 @@
         {/if}
       </div>
       {#if slot && freeSlot}
-        <div class="cb-cell cb-cell--free" style:--span={slot.columns}>
+        <div class="cb-cell cb-cell--free" style:--span={slot.columns} data-free-slot={slot.afterIndex}>
           {@render freeSlot(slot)}
         </div>
       {/if}

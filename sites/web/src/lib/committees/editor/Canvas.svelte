@@ -1,8 +1,9 @@
 <script lang="ts">
   // The page as it will look, with editing on top (Figma 109:7297 to 109:9177): select a block to
   // get the blue box, its label and toolbar; drag it, or a tile from the library, onto the blue
-  // drop line; add a block in a row's free columns; edit text in place. The 12-column grid shows
-  // while dragging or when the grid is on.
+  // drop line or into a row's free columns, where it fills them (109:8655); add a block in free
+  // columns from their menu; edit text in place. The 12-column grid shows while dragging or when
+  // the grid is on.
   import ArrowDown from "@lucide/svelte/icons/arrow-down";
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
   import CircleAlert from "@lucide/svelte/icons/circle-alert";
@@ -10,12 +11,12 @@
   import GripVertical from "@lucide/svelte/icons/grip-vertical";
   import Plus from "@lucide/svelte/icons/plus";
   import Trash from "@lucide/svelte/icons/trash";
-  import type { Block } from "../../api/types.ts";
+  import type { Block, BlockWidth } from "../../api/types.ts";
   import { Menu, type MenuItem } from "../../portal/ui/index.ts";
   import SelectionBox from "../../site/SelectionBox.svelte";
   import BlockRenderer, { type BlockFrame } from "../BlockRenderer.svelte";
-  import { BLOCK_LABELS, LIBRARY, MAX_BLOCKS, WIDTH_LABELS, allowedWidths, blockName } from "../blocks.ts";
-  import { type FreeSlot, dropIndex, widestFitting } from "../layout.ts";
+  import { BLOCK_LABELS, LIBRARY, MAX_BLOCKS, WIDTH_LABELS, blockName } from "../blocks.ts";
+  import { type FreeSlot, dropIndex, freeSlots, placeInSlot, slotWidth } from "../layout.ts";
   import { DRAG_TYPE, type EditorDrag } from "./drag.ts";
   import { type DropLine, dropLineAt } from "./drop.ts";
   import type { PageEditor } from "./state.svelte.ts";
@@ -39,6 +40,8 @@
 
   let sheet: HTMLElement | undefined = $state();
   let line = $state<DropLine | null>(null);
+  /** The free columns under the pointer while dragging, and the width the block would get there. */
+  let slotTarget = $state<{ slot: FreeSlot; width: BlockWidth } | null>(null);
   const settings = $derived(editor.doc.settings);
   const gridVisible = $derived((showGrid || drag !== null) && device === "desktop");
 
@@ -77,10 +80,29 @@
     return Number.isFinite(number) ? number : 0;
   }
 
+  /** The free columns under the pointer, when the dragged block can go there. */
+  function slotUnder(event: DragEvent, dragged: EditorDrag): { slot: FreeSlot; width: BlockWidth } | null {
+    const cell = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-free-slot]") : null;
+    if (cell === null) return null;
+    const slot = freeSlots(editor.doc.blocks).find((candidate) => String(candidate.afterIndex) === cell.dataset.freeSlot);
+    if (slot === undefined) return null;
+    if (dragged.kind === "new") {
+      const width = slotWidth(dragged.type, slot);
+      return width === null || !editor.canAddBlock ? null : { slot, width };
+    }
+    const placed = placeInSlot(editor.doc.blocks, dragged.id, slot)?.find((block) => block.id === dragged.id);
+    return placed === undefined ? null : { slot, width: placed.width };
+  }
+
   function ondragover(event: DragEvent) {
     if (drag === null || !editor.writable) return;
     event.preventDefault();
     if (event.dataTransfer !== null) event.dataTransfer.dropEffect = drag.kind === "new" ? "copy" : "move";
+    slotTarget = slotUnder(event, drag);
+    if (slotTarget !== null) {
+      line = null;
+      return;
+    }
     const measured = layout();
     if (measured === null) return;
     line = dropLineAt(
@@ -93,21 +115,34 @@
   function ondragleave(event: DragEvent) {
     if (sheet !== undefined && event.relatedTarget instanceof Node && sheet.contains(event.relatedTarget)) return;
     line = null;
+    slotTarget = null;
   }
 
   function ondrop(event: DragEvent) {
     event.preventDefault();
     const target = line;
+    const slot = slotTarget;
     const dragged = drag;
     line = null;
+    slotTarget = null;
     drag = null;
-    if (target === null || dragged === null) return;
+    if (dragged === null) return;
+    if (slot !== null) {
+      dropInSlot(dragged, slot.slot, slot.width);
+      return;
+    }
+    if (target === null) return;
     if (dragged.kind === "new") {
       editor.addBlock(dragged.type, target.before);
       return;
     }
     const from = editor.doc.blocks.findIndex((block) => block.id === dragged.id);
     if (from > 0 && editor.moveBlock(dragged.id, dropIndex(from, target.before))) onmoved(dragged.id);
+  }
+
+  function dropInSlot(dragged: EditorDrag, slot: FreeSlot, width: BlockWidth) {
+    if (dragged.kind === "new") editor.addBlock(dragged.type, slot.afterIndex + 1, width);
+    else if (editor.moveIntoSlot(dragged.id, slot)) onmoved(dragged.id);
   }
 
   function startMove(event: DragEvent, block: Block) {
@@ -122,6 +157,7 @@
   function endDrag() {
     drag = null;
     line = null;
+    slotTarget = null;
   }
 
   // -------------------------------------------------------------------------
@@ -146,7 +182,7 @@
   function slotItems(slot: FreeSlot): MenuItem[] {
     const full = editor.doc.blocks.length >= MAX_BLOCKS;
     return LIBRARY.flatMap((type) => {
-      const width = widestFitting(allowedWidths(type), slot.columns);
+      const width = slotWidth(type, slot);
       if (width === null) return [];
       return [
         {
@@ -227,12 +263,18 @@
 {/snippet}
 
 {#snippet freeSlot(slot: FreeSlot)}
+  {@const target = slotTarget?.slot.afterIndex === slot.afterIndex ? slotTarget : null}
   <Menu class="canvas__slot-menu" label="Add a block here" items={slotItems(slot)} align="start" width={260}>
     {#snippet trigger(props)}
-      <button {...props} type="button" class="slot" disabled={!editor.canAddBlock}>
+      <button {...props} type="button" class={["slot", target && "slot--target"]} disabled={!editor.canAddBlock}>
         <Plus size={18} strokeWidth={1.75} aria-hidden="true" />
-        <span class="slot__label">Add a block here</span>
-        <span class="slot__free">{slot.columns} of 12 columns free</span>
+        {#if target}
+          <span class="slot__label">Drop here</span>
+          <span class="slot__free">{WIDTH_LABELS[target.width]} width</span>
+        {:else}
+          <span class="slot__label">Add a block here</span>
+          <span class="slot__free">{slot.columns} of 12 columns free</span>
+        {/if}
       </button>
     {/snippet}
   </Menu>
@@ -277,7 +319,7 @@
     {/if}
   </div>
   {#if drag !== null}
-    <p class="canvas__hint" role="status">Drop on the blue line. Blocks snap to rows on the 12-column grid.</p>
+    <p class="canvas__hint" role="status">Drop on the blue line or in free columns. Blocks snap to rows on the 12-column grid.</p>
   {/if}
 </div>
 
@@ -501,6 +543,15 @@
     &:disabled {
       display: none;
     }
+  }
+  /* A full page hides the add button, but a block moved from elsewhere can still go here. */
+  .slot--target,
+  .slot--target:disabled,
+  .slot--target:hover:not(:disabled) {
+    display: flex;
+    border-style: solid;
+    background: rgba(36, 164, 255, 0.16);
+    box-shadow: inset 0 0 0 1px var(--p-selection);
   }
   .slot__label {
     font-size: 0.9375rem;

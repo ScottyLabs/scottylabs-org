@@ -16,7 +16,7 @@ import type {
 import { type AddableType, MAX_BLOCKS, duplicateBlock, newBlock } from "../blocks.ts";
 import { NO_PROBLEMS, type PageProblems, problemsFor } from "../errors.ts";
 import { History } from "../history.ts";
-import { moveBlock } from "../layout.ts";
+import { type FreeSlot, moveBlock, placeInSlot } from "../layout.ts";
 import type { CommitteeInfo } from "../render/types.ts";
 import { loadEditor, releaseLock, saveDraft, takeLock } from "../api.ts";
 
@@ -149,6 +149,14 @@ export class PageEditor {
     const blocks = moveBlock(this.doc.blocks, from, to);
     if (blocks.every((block, index) => block === this.doc.blocks[index])) return false;
     this.change({ ...this.doc, blocks }, key);
+    return true;
+  }
+
+  /** Moves a block into a row's free columns and sizes it to fill them, as one change. */
+  moveIntoSlot(id: string, slot: FreeSlot): boolean {
+    const blocks = placeInSlot(this.doc.blocks, id, slot);
+    if (blocks === null) return false;
+    this.change({ ...this.doc, blocks });
     return true;
   }
 

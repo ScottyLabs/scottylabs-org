@@ -1,7 +1,7 @@
 // How blocks sit on the 12-column grid. Rows fill left to right and a block that does not fit in what is left of a row starts the next one, which is what CSS grid's auto-placement does for the page. The editor uses this to find free columns and to describe moves.
 
-import type { Block, BlockWidth } from "../api/types.ts";
-import { blockName } from "./blocks.ts";
+import type { Block, BlockType, BlockWidth } from "../api/types.ts";
+import { allowedWidths, blockName } from "./blocks.ts";
 
 export const GRID_COLUMNS = 12;
 
@@ -60,6 +60,32 @@ export function widestFitting(widths: readonly BlockWidth[], columns: number): B
     if (width <= columns && (widest === null || width > widest)) widest = width;
   }
   return widest;
+}
+
+/** The width a block of `type` gets in a free slot: the widest it may be that fits, or null when none fits. */
+export function slotWidth(type: BlockType, slot: FreeSlot): BlockWidth | null {
+  return type === "cover" ? null : widestFitting(allowedWidths(type), slot.columns);
+}
+
+/**
+ * The blocks after moving the one with `id` into a row's free columns, sized to fill them as far
+ * as its widths allow. Null when it cannot go there: the cover, a block already in that row, or
+ * one with no width that fits.
+ */
+export function placeInSlot(blocks: readonly Block[], id: string, slot: FreeSlot): Block[] | null {
+  const from = blocks.findIndex((block) => block.id === id);
+  const block = blocks[from];
+  if (from <= 0 || block === undefined) return null;
+  const width = slotWidth(block.type, slot);
+  const row = layoutRows(blocks).find((candidate) =>
+    candidate.blocks.some((placed) => placed.index === slot.afterIndex),
+  );
+  if (width === null || row === undefined || row.blocks.some((placed) => placed.index === from)) {
+    return null;
+  }
+  const moved = moveBlock(blocks, from, dropIndex(from, slot.afterIndex + 1));
+  moved[moved.indexOf(block)] = { ...block, width };
+  return moved;
 }
 
 /** The blocks after moving the one at `from` so that it ends up at `to`. Never moves the cover or puts anything above it. */
