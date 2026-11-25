@@ -37,6 +37,7 @@ Local development runs Vite on port 5173 and the service on 127.0.0.1:8080. Vite
 | `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` | kennel `garage` | optional. Without them media is stored in Postgres |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OAUTH_RELAY_URL`, `PROJECT_GROUP`, `PROJECT_ADMIN_GROUP` | governance `oidc_client` | optional. Sign-in through Keycloak is on only when all seven are set |
 | `PORTAL_DEV_LOGIN` | dev shell sets `1` | optional |
+| `GOVERNANCE_SYNC` | `1` or `0`; declared in `secretspec.toml` so a deployment can turn it off | optional. Unset, the governance sync runs everywhere except local development with open dev sign-in |
 | `PORTAL_DEV_LOGIN_KEY` | OpenBao, preview profile only | optional |
 | `SEED_DEMO_CONTENT` | dev shell and preview profile | optional |
 | `RUST_LOG` | anywhere | optional |
@@ -68,7 +69,7 @@ Seeded only when `SEED_DEMO_CONTENT=1` (dev shell, previews):
 | -- | -- | -- |
 | `tkanz` | Thomas Kanz | admin |
 | `evanfost` | Evan Foster | director, events |
-| `anishp` | Anish Pallati | director, tech |
+| `apallati` | Anish Pallati | director, tech |
 | `spchoksh` | Sara Chokshi | lead, events, can post to the ticker, edits Nova |
 | `newmember` | New Member | no role |
 
@@ -105,16 +106,38 @@ Bundled seed images live in `sites/web/static/seed/` and are referenced as `/see
   - `returnTo` must start with `/portal`; anything else becomes `/portal/`.
   - Without OIDC configured, redirect to `/portal/sign-in/?error=not_configured`.
   - Create a PKCE S256 verifier, a nonce and a 32-byte random `csrf`. Store them with `returnTo` in `auth_attempts`.
-  - `state` is base64url (no padding) of `{"return_to": "<APP_URL>/api/auth/callback", "csrf": "<csrf>"}`. Ricochet reads `return_to` and forwards the browser there with `code` and `state` unchanged.
-  - `redirect_uri` is `OAUTH_RELAY_URL`. Scopes: `openid email profile`.
+  - `state` is base64url (no padding) of `{"return_to": "<APP_URL>/api/auth/callback", "csrf": "<csrf>"}`. Ricochet reads only `return_to` (other fields are ignored) and forwards the browser there with every provider parameter unchanged: `code`, `state`, `iss`, `session_state`, `error`, `error_description`.
+  - `redirect_uri` is `OAUTH_RELAY_URL`. Scopes: exactly `openid email profile`. Do not add `microprofile-jwt`: the realm offers it, and its mapper writes realm roles into a claim also named `groups`, replacing the group paths below.
   - Redirect (302) to Keycloak's authorization endpoint from discovery at `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>`.
 - `GET /api/auth/callback?code&state` (or `?error=...`)
+  - If `iss` is present it must equal `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>` exactly (RFC 9207), on errors too; otherwise `failed`. A callback without `iss` is accepted.
+  - On `error`, use up the attempt and go to `cancelled` for `access_denied`, `failed` for anything else.
   - Decode `state`, load and delete the attempt by `csrf`. Reject attempts older than 10 minutes.
-  - Exchange the code with the verifier and `redirect_uri = OAUTH_RELAY_URL`. Verify the ID token (signature, issuer, audience, expiry, nonce).
+  - Exchange the code with the verifier and `redirect_uri = OAUTH_RELAY_URL`. Keycloak's `invalid_grant` gives `expired`; other token errors give `failed`. Verify the ID token (signature, issuer, audience, expiry, nonce). Only RS256 is accepted, the algorithm of the realm's signing key, so a token signed with the client secret (HS256, which discovery also lists) is refused. Keys are picked by `kid`; the realm's encryption key (`use: enc`) is skipped.
   - Read `sub`, `preferred_username` (the Andrew ID), `name`, `email` and the `groups` claim.
   - Upsert the user: match `keycloak_sub`, else an existing row with that `andrew_id` (people can be added before they first sign in), else insert.
   - If `groups` contains `PROJECT_ADMIN_GROUP`, ensure an `admin` assignment with source `keycloak_group`.
   - Create a session and redirect to the attempt's `returnTo`. On any failure redirect to `/portal/sign-in/?error=<code>` with codes `cancelled`, `expired`, `failed`.
+  - Every unsuccessful callback logs why, never with a code, token or secret: a provider `error` (warn, with `error` and `error_description`), a refused code exchange (warn, with Keycloak's `error` and `error_description`), a missing sign-in cookie or an unknown, used or stale attempt (info), and every other failure (warn). Text taken from the URL is cut to 200 characters.
+
+### Ricochet relay
+
+- Production, staging and previews share `https://oauth.scottylabs.org/oauth2/callback`. Its allowlist accepts `https://scottylabs.org` and every `*.scottylabs.net` deployment host, so `APP_URL` works in prod and on previews. It refuses `www.scottylabs.org` and plain http.
+- Development: kennel runs Ricochet as the pitchfork process `ricochet` on `127.0.0.1:8090` with `RICOCHET_DEV=1`, which accepts any http loopback `return_to`. The `scottylabs-org-dev` client allows only `http://localhost:8090/oauth2/callback`.
+- Open the portal at `http://localhost:5173` in development, not `http://127.0.0.1:5173`. Sign-in returns to `APP_URL` (`http://localhost:5173`), and the sign-in cookie set on another host is not sent there, so the callback ends with `error=expired`.
+- The pitchfork `site` process loads the dev profile's secrets with `secretspec export` before `cargo run`, as the dev shell does, because kennel starts processes without them. Without an OpenBao token it starts anyway, with dev sign-in only. Log in once with `nix run git+https://git.cmu.dev/ScottyLabs/kennel#login`.
+
+### Where roles come from
+
+Authorization reads only `role_assignments`. Three things write to it:
+
+- **Admins from `PROJECT_ADMIN_GROUP`** (`/projects/scottylabs-org/admins`) in the token's `groups` claim, at every sign-in, with source `keycloak_group`. Governance fills that group with the UIA team leads, plus the Tech director because governance adds the Tech director to every team's leads. A `groups` list without the group, including an empty list, removes an admin role that came from the group (never the last admin). A token without the claim changes nothing. `PROJECT_GROUP` grants nothing.
+- **Directors and heads from governance's `data/committees.yaml`**, with source `governance`: each committee's `director` becomes its director, and the members of `committees.<c>.roles.*` and `committees.<c>.teams.*.roles.*` become leads of that committee (can post to the ticker, which still needs approval; no projects). Tech is left out of the head sync, since its leads live in governance's team files. The organization director is never made an admin.
+- **Everything else in the portal**: admins, directors and leads added on the People page, with source `portal`.
+
+Committee roles are not in the Keycloak token: governance creates Keycloak groups only for tech teams and projects. The portal does not read Grouper, which is generated from the same `committees.yaml` and syncs only to Google Groups.
+
+The governance sync runs from the admin Sync button, at startup (in the background, after seeding, with a one minute limit) and every six hours while the service runs. A failed run logs a warning and leaves roles as they were. `GOVERNANCE_SYNC` turns it on or off; see Environment. Runs by the service itself are audited with no actor.
 
 ### Sessions
 
@@ -154,7 +177,7 @@ Authenticated endpoints send no CORS headers. Public `GET /api/public/*` endpoin
 | See people | all | people with a role in C | no |
 | Add, change, remove leads in C | yes | yes | no |
 | Add, change, remove directors and admins | yes | no | no |
-| Sync directors from governance | yes | no | no |
+| Sync directors and heads from governance | yes | no | no |
 
 Extra rules:
 
@@ -266,7 +289,7 @@ Approving calls `announcements::apply_approval` or `projects::apply_approval` in
 | POST `/api/people` | `AddPersonInput` |
 | PATCH `/api/people/assignments/:id` | `UpdateAssignmentInput` |
 | DELETE `/api/people/assignments/:id` | 204 |
-| POST `/api/people/sync-governance` | admins. Reads `data/committees.yaml` from the governance repository and makes each listed director a director of their committee |
+| POST `/api/people/sync-governance` | admins. Reads `data/committees.yaml` from the governance repository, makes each listed director a director of their committee and each listed head a lead in it (see "Where roles come from"). `GovernanceSyncResponse` |
 
 ### Overview and activity
 
@@ -312,7 +335,26 @@ Each builder owns the files of their track. Edit shared files only where this ta
 
 Record changes to this contract here, newest first, with the reason.
 
+### 2026-11-24, sign-in hardening and roles from governance
+
+- **Callback checks**: the callback refuses an `iss` that is not exactly the Keycloak issuer (RFC 9207) and uses up the attempt; a callback without `iss` still works. Provider errors other than `access_denied` give `failed` and also use up the attempt. ID tokens must be RS256. Each unsuccessful sign-in logs why (see Keycloak sign-in). The contract used to say Ricochet forwards only `code` and `state`; it forwards every provider parameter.
+
+- **Committee heads become leads**: the governance sync also adds a `lead` assignment (`can_post_ticker` true, no project editors, `appointed_by` null, source `governance`) for each head listed in `committees.yaml` who has no role in that committee, in the same transaction as the director sync. Existing director and lead rows are never changed. Leads with source `governance` whom governance no longer lists are removed with their project editors, and each removal is a sentence in `messages`. Tech is not part of the head sync. A committee missing from the file keeps its governance leads.
+
+- **Editing a governance lead keeps it**: `PATCH /api/people/assignments/:id` on a lead sets its source to `portal`, so later syncs leave it alone. Removing a governance lead on the People page does not stop the next sync from adding them again while governance lists them.
+
+- **`GovernanceSyncResponse`** gains `headsAdded`, `headsRemoved` and `headsUnchanged`. `added`, `updated` and `unchanged` still count directors only. `messages` lists skipped entries first, then removals.
+
+- **The sync runs on its own** at startup and every six hours (see "Where roles come from"), switched by `GOVERNANCE_SYNC`. Unset, it is on everywhere except local development with open dev sign-in, so builders working side by side do not fetch governance at every start. Set `GOVERNANCE_SYNC=1` to try it locally. `Config` gains `governance_sync` (false in `testing::config()`), and `routes::spawn_governance_sync(state)` starts the task.
+
+- **Dev persona**: the Tech director persona is `apallati`, the Tech director's Andrew ID in governance, so a sync in development finds the persona instead of adding a second Tech director. Seeding renames an existing `anishp` user in place. The ticker seed's CMU Maps sample still names `anishp` and is seeded without an author until it is updated.
+
+- **Local development**: the pitchfork `site` process now loads the dev profile's secrets and logs at `info,site=debug` (kennel's shell sets `RUST_LOG` for a crate named `scottylabs_org`, which hides this crate's logs; a `cargo run -p site` by hand needs `RUST_LOG=info,site=debug`). Open the portal at `http://localhost:5173`.
+
+- **Tests**: the mock Keycloak in `routes/auth/tests.rs` signs ID tokens with a throwaway RS256 key made at test time and serves a JWKS with an encryption key beside it, like the realm. `rsa` (already in the tree through openidconnect) is a dev-dependency for that.
+
 - 2026-11-24, shared web components. Additive only. `Field` gives its label an id and `FieldContext` gains `labelId`, so controls that a `<label for>` cannot name (the contenteditable in `RichTextEditor`) use `aria-labelledby`. New shared pieces for the projects, committees and people tracks: `src/lib/editor/` (`RichTextEditor`, `RichText`, `sanitize`, `normalizeRichText`, `plainText`, `plainTextLength`; the client mirror of `richtext.rs`), `src/lib/media/` (`Img`, `ImageField`, `ImageListField`, `src`, `srcset`, `aspectRatio`, `uploadImage`), `PersonPicker` in the portal UI kit, `src/lib/projects/ProjectCard.svelte` (also exports `PROJECT_STATUS_LABELS`, `PROJECT_KIND_LABELS` and `projectPath`) and `src/lib/site/SelectionBox.svelte`. The projects track owns `src/lib/projects/` and may change the card; keep its props.
+
 - 2026-11-24, platform web. `sites/web/vite.config.ts` proxies to `SITE_SERVICE_URL` when it is set (default `http://127.0.0.1:8080`), so builds can run side by side on other ports. Prerendering warns instead of failing when `/projects/` or `/committees/` answer 404, because the header links to them before those routes exist; remove that handler once both routes are in.
 
 - 2026-11-24, platform web. How portal pages plug in: call the API with the helpers in `src/lib/api/client.ts`, whose paths are relative to `/api` (`get<MeResponse>("/me")`); read the signed-in person with `getPortalSession()` and show confirmations with `getToasts()` (both from `src/lib/portal/index.ts`); build pages from `src/lib/portal/ui/index.ts` and the `p-table` classes. Render the page's `<h1>` straight away (`PageHeader` does), since the shell moves focus to it after navigation. Unknown `/portal/` addresses get the portal error card from the root `+error.svelte`.
