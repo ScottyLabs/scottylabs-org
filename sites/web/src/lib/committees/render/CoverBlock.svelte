@@ -137,11 +137,13 @@
     font-weight: 400;
     line-height: 32px;
   }
+  /* Stays at the right edge, also when a long tagline pushes it onto its own line. */
   .cover__contact {
     display: flex;
     flex-direction: column;
     align-items: flex-end;
     gap: 16px;
+    margin-left: auto;
   }
   .cover__director {
     display: flex;
@@ -212,6 +214,7 @@
     }
     .cover__contact {
       align-items: flex-start;
+      margin-left: 0;
     }
     .cover__picture {
       aspect-ratio: 280 / 175;

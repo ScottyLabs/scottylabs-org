@@ -2,6 +2,7 @@
   // Publish (Figma 109:9546, spec CP-9 and CP-11): saves what is waiting, lists the changes since
   // the last published version, and lists anything that blocks publishing, such as a photo
   // without alt text, with a way to go to it.
+  import { untrack } from "svelte";
   import Check from "@lucide/svelte/icons/check";
   import CircleAlert from "@lucide/svelte/icons/circle-alert";
   import { isAbortError, isApiError } from "../../api/client.ts";
@@ -33,11 +34,12 @@
   let preparing = $state(false);
   let publishing = $state(false);
 
-  // Each time it opens: save first, then check the page and load what changed.
+  // Each time it opens: save first, then check the page and load what changed. Only opening
+  // runs it again; the save it starts changes state it reads.
   $effect(() => {
     if (!open) return;
     const controller = new AbortController();
-    void prepare(controller.signal);
+    untrack(() => void prepare(controller.signal));
     return () => controller.abort();
   });
 

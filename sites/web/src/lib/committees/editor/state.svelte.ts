@@ -323,8 +323,14 @@ export class PageEditor {
   async #claim(): Promise<void> {
     if (this.#destroyed) return;
     try {
-      this.lock = await takeLock(this.slug);
-      if (this.readOnlyReason !== null && this.saveState !== "conflict") this.readOnlyReason = null;
+      const lock = await takeLock(this.slug);
+      // Someone else was editing: start from what they saved.
+      if (this.readOnlyReason !== null) {
+        await this.refresh();
+        this.readOnlyReason = null;
+        this.saveState = "saved";
+      }
+      this.lock = lock;
     } catch (error) {
       if (!isApiError(error)) throw error;
       if (error.status === 409) {
@@ -335,13 +341,8 @@ export class PageEditor {
   }
 
   /** Tries again to edit a page someone else was editing, with their latest draft. */
-  async retry(): Promise<void> {
-    await this.refresh();
-    if (this.lock === null || this.lock.mine) {
-      this.readOnlyReason = null;
-      this.saveState = "saved";
-      await this.start();
-    }
+  retry(): Promise<void> {
+    return this.start();
   }
 
   /** Loads the latest draft from the service, dropping the history. Only while nothing waits to be saved. */
