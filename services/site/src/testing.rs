@@ -23,6 +23,7 @@
 //!
 //! `Req::cookie(&user)` sends the cookie without the CSRF token, to test that check. Requests have no `Origin` header unless you add one, and no client address, so they share one rate-limit bucket.
 
+use std::str::FromStr;
 use std::sync::Arc;
 
 use axum::Router;
@@ -30,7 +31,8 @@ use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, Method, Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
-use sqlx::PgPool;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
+use sqlx::{Connection, Executor, PgConnection, PgPool};
 use tower::ServiceExt;
 use url::Url;
 use uuid::Uuid;
@@ -518,6 +520,62 @@ pub async fn audit_summaries(db: &PgPool) -> Vec<String> {
         .fetch_all(db)
         .await
         .unwrap()
+}
+
+/// A migrated database that belongs to one test run, dropped when this goes out of scope, also when the test fails. Use it with `#[tokio::test]` in place of `#[sqlx::test]` for a test that spends seconds without the database, such as one that decodes images.
+///
+/// `#[sqlx::test]` names a test's database after the test alone, and the local Postgres server is shared. When the same test runs in two processes at once (two worktrees, or a commit hook beside a manual run), the second drops and recreates the database the first is using, which succeeds whenever the first holds no connection, as while it decodes an image. A name of its own for every run rules that out.
+pub struct IsolatedDb {
+    pub pool: PgPool,
+    name: String,
+}
+
+impl IsolatedDb {
+    pub async fn new() -> Self {
+        let name = format!("_sl_test_{}", Uuid::now_v7().simple());
+        let mut server = PgConnection::connect_with(&server_options()).await.unwrap();
+        server
+            .execute(format!("CREATE DATABASE \"{name}\"").as_str())
+            .await
+            .unwrap();
+        server.close().await.unwrap();
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(server_options().database(&name))
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        Self { pool, name }
+    }
+}
+
+impl Drop for IsolatedDb {
+    /// Drops the database from a thread of its own, since this may run inside the test's runtime.
+    fn drop(&mut self) {
+        let name = std::mem::take(&mut self.name);
+        let dropped = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            runtime.block_on(async {
+                let mut server = PgConnection::connect_with(&server_options()).await?;
+                server
+                    .execute(format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)").as_str())
+                    .await?;
+                server.close().await
+            })?;
+            Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+        })
+        .join();
+        if !matches!(dropped, Ok(Ok(()))) {
+            eprintln!("could not drop a test database: {dropped:?}");
+        }
+    }
+}
+
+fn server_options() -> PgConnectOptions {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    PgConnectOptions::from_str(&url).unwrap()
 }
 
 #[cfg(test)]

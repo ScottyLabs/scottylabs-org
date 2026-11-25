@@ -228,8 +228,11 @@ mod tests {
         assert_eq!(requested_width(None), None);
     }
 
-    #[sqlx::test(migrations = "./migrations")]
-    async fn uploads_a_jpeg_and_serves_each_width(db: PgPool) {
+    // Decoding and resizing this image takes seconds in a debug build, long enough for the same test in another worktree to replace a database named after the test, so it gets one of its own.
+    #[tokio::test]
+    async fn uploads_a_jpeg_and_serves_each_width() {
+        let isolated = testing::IsolatedDb::new().await;
+        let db = isolated.pool.clone();
         let app = testing::app(db.clone()).await;
         let lead = testing::user(&db, "uplead", &[(Role::Lead, Some(Committee::Events))]).await;
 
