@@ -7,7 +7,7 @@
   import Img from "../../media/Img.svelte";
   import EditableText from "../EditableText.svelte";
   import { LIMITS } from "../limits.ts";
-  import { videoEmbed } from "../video.ts";
+  import { videoEmbed } from "../../media/video.ts";
 
   let {
     props,
@@ -45,8 +45,8 @@
         <iframe
           bind:this={player}
           class="video__player"
-          src={embed.src}
-          title={props.title === "" ? `${embed.provider} video` : props.title}
+          src={embed.embedUrl}
+          title={props.title === "" ? `${embed.providerName} video` : props.title}
           allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
           allowfullscreen
           referrerpolicy="strict-origin-when-cross-origin"
@@ -71,7 +71,7 @@
         {:else}
           <button type="button" class="video__play" onclick={() => (playing = true)}>
             <Play size={26} strokeWidth={2} aria-hidden="true" />
-            <span class="cb-sr-only">Play {name} from {embed?.provider}</span>
+            <span class="cb-sr-only">Play {name} from {embed?.providerName}</span>
           </button>
         {/if}
       {/if}
@@ -88,7 +88,7 @@
         maxLength={LIMITS.videoTitle}
         onchange={(title) => onchange({ ...props, title })}
       />
-      {#if embed !== null}<span class="video__provider">{embed.provider} video</span>{/if}
+      {#if embed !== null}<span class="video__provider">{embed.providerName} video</span>{/if}
     </figcaption>
   </figure>
 {/if}

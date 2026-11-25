@@ -3,7 +3,7 @@
 import type { Block, CommitteePageDoc, ImageRef } from "../../api/types.ts";
 import { blockName } from "../blocks.ts";
 import { LIMITS } from "../limits.ts";
-import { videoEmbed } from "../video.ts";
+import { videoEmbed } from "../../media/video.ts";
 
 export interface PublishProblem {
   /** The block to fix, or null for the page settings. */

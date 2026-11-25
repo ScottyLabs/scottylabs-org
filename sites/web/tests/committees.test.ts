@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-// Tests for committee pages: the grid layout, block rules, undo history, video links, the service's field errors, publish checks, where a dragged block lands, when the editor asks for the edit lock and how handles report moves.
+// Tests for committee pages: the grid layout, block rules, undo history, the service's field errors, publish checks, where a dragged block lands, when the editor asks for the edit lock and how handles report moves.
 // Run from sites/web with `deno test tests/`.
 // The DOM library reference types the browser code under test; the tests stand in for the DOM where they need it.
 // The type-aware linter cannot see Deno's globals or node:assert's types, so calls on them read as untyped here.
@@ -35,7 +35,6 @@ import {
   widestFitting,
 } from "../src/lib/committees/layout.ts";
 import { cleanChannel, oneLine } from "../src/lib/committees/limits.ts";
-import { videoEmbed } from "../src/lib/committees/video.ts";
 
 function cover(): Block {
   return {
@@ -212,29 +211,6 @@ Deno.test("history keeps at least the last 20 changes", () => {
     const previous = history.undo(current);
     assert.notEqual(previous, null);
     current = previous ?? current;
-  }
-});
-
-Deno.test("videos embed from YouTube and Vimeo without tracking", () => {
-  assert.deepEqual(videoEmbed("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), {
-    provider: "YouTube",
-    src: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0",
-  });
-  assert.equal(videoEmbed("https://youtu.be/dQw4w9WgXcQ")?.provider, "YouTube");
-  assert.equal(videoEmbed("https://youtube.com/shorts/dQw4w9WgXcQ")?.provider, "YouTube");
-  assert.deepEqual(videoEmbed("https://vimeo.com/76979871"), {
-    provider: "Vimeo",
-    src: "https://player.vimeo.com/video/76979871?autoplay=1&dnt=1",
-  });
-  assert.equal(videoEmbed("https://player.vimeo.com/video/76979871")?.provider, "Vimeo");
-  for (const bad of [
-    "",
-    "http://youtube.com/watch?v=dQw4w9WgXcQ",
-    "https://evil.example/watch?v=x",
-    "javascript:alert(1)",
-    "https://youtube.com/watch?v=<script>",
-  ]) {
-    assert.equal(videoEmbed(bad), null, bad);
   }
 });
 

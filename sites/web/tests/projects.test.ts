@@ -28,8 +28,7 @@ import {
 } from "../src/lib/projects/filter.ts";
 import { leadChoices, leadLabel, leadsIn } from "../src/lib/projects/editor/editors.ts";
 import { retriesOnItsOwn } from "../src/lib/projects/editor/retry.ts";
-import { linkHost, linkLabel, projectPath } from "../src/lib/projects/labels.ts";
-import { videoEmbed } from "../src/lib/projects/video.ts";
+import { linkLabel, projectPath } from "../src/lib/projects/labels.ts";
 
 function card(fields: Partial<ProjectCard>): ProjectCard {
   return {
@@ -152,38 +151,7 @@ Deno.test("related projects start with the same committee", () => {
   );
 });
 
-Deno.test("videos embed only from YouTube and Vimeo, privacy-enhanced", () => {
-  const watch = videoEmbed("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m30s");
-  assert.equal(watch?.provider, "youtube");
-  assert.equal(
-    watch?.embedUrl,
-    "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0&start=90",
-  );
-  assert.equal(videoEmbed("https://youtu.be/dQw4w9WgXcQ")?.provider, "youtube");
-  assert.equal(videoEmbed("https://m.youtube.com/shorts/dQw4w9WgXcQ")?.provider, "youtube");
-  assert.equal(
-    videoEmbed("https://vimeo.com/76979871")?.embedUrl,
-    "https://player.vimeo.com/video/76979871?autoplay=1&dnt=1",
-  );
-  assert.equal(
-    videoEmbed("https://vimeo.com/76979871/abcdef1234")?.embedUrl,
-    "https://player.vimeo.com/video/76979871?autoplay=1&dnt=1&h=abcdef1234",
-  );
-  assert.equal(videoEmbed("https://player.vimeo.com/video/76979871")?.provider, "vimeo");
-  for (const bad of [
-    "http://www.youtube.com/watch?v=dQw4w9WgXcQ",
-    "https://www.youtube.com/watch?v=bad",
-    "https://evil.example/watch?v=dQw4w9WgXcQ",
-    "https://vimeo.com/channels/staffpicks",
-    "javascript:alert(1)",
-    "not a link",
-  ]) {
-    assert.equal(videoEmbed(bad), null, bad);
-  }
-});
-
 Deno.test("links read as short labels", () => {
-  assert.equal(linkHost("https://www.tartanhacks.com/"), "tartanhacks.com");
   assert.equal(linkLabel("https://git.cmu.dev/ScottyLabs/maps/"), "git.cmu.dev/ScottyLabs/maps");
   assert.equal(projectPath("cmu-maps"), "/projects/cmu-maps/");
 });

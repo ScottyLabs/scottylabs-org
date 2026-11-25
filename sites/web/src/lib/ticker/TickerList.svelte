@@ -4,7 +4,7 @@
   // back to the button.
   import type { PublicAnnouncement } from "../api/types.ts";
   import CommitteeChip from "../portal/ui/CommitteeChip.svelte";
-  import { linkHost } from "./format.ts";
+  import { linkHost } from "../site/links.ts";
   import { kindIcon } from "./kinds.ts";
 
   type Item = Pick<PublicAnnouncement, "id" | "kind" | "committee" | "message" | "linkUrl">;

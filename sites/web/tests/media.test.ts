@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-// Tests for image URLs, sizes and upload checks. Run from sites/web with `deno test tests/`.
+// Tests for image URLs, sizes, upload checks and video links. Run from sites/web with `deno test tests/`.
 // The DOM library reference types the browser code under test; the tests themselves never use it.
 // The type-aware linter cannot see Deno's globals or node:assert's types, so calls on them read as untyped here.
 /* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access */
@@ -9,6 +9,7 @@ import type { ImageRef } from "../src/lib/api/types.ts";
 import { focusAfterUpload, tileAfter } from "../src/lib/media/focus.ts";
 import { aspectRatio, isUploaded, src, srcset, storedWidths } from "../src/lib/media/images.ts";
 import { checkImageFile, formatBytes } from "../src/lib/media/upload.ts";
+import { videoEmbed } from "../src/lib/media/video.ts";
 
 const ID = "0193a5b0-7c1e-7d2a-9f00-1234567890ab";
 
@@ -98,4 +99,54 @@ Deno.test("when a tile goes, focus moves to the tile that took its place or the 
   assert.equal(tileAfter(0, 1), 0);
   assert.equal(tileAfter(-1, 2), 0);
   assert.equal(tileAfter(0, 0), null);
+});
+
+Deno.test("videos embed from YouTube and Vimeo without tracking", () => {
+  assert.deepEqual(videoEmbed("https://www.youtube.com/watch?v=dQw4w9WgXcQ"), {
+    provider: "youtube",
+    providerName: "YouTube",
+    embedUrl: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0",
+  });
+  assert.equal(
+    videoEmbed("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=1m30s")?.embedUrl,
+    "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?autoplay=1&rel=0&start=90",
+  );
+  assert.equal(videoEmbed("https://youtu.be/dQw4w9WgXcQ")?.provider, "youtube");
+  assert.equal(videoEmbed("https://youtube.com/shorts/dQw4w9WgXcQ")?.provider, "youtube");
+  assert.equal(videoEmbed("https://m.youtube.com/live/dQw4w9WgXcQ")?.provider, "youtube");
+  assert.deepEqual(videoEmbed("https://vimeo.com/76979871"), {
+    provider: "vimeo",
+    providerName: "Vimeo",
+    embedUrl: "https://player.vimeo.com/video/76979871?autoplay=1&dnt=1",
+  });
+  assert.equal(
+    videoEmbed("https://vimeo.com/76979871/abcdef1234")?.embedUrl,
+    "https://player.vimeo.com/video/76979871?autoplay=1&dnt=1&h=abcdef1234",
+  );
+  assert.equal(
+    videoEmbed("https://vimeo.com/channels/staffpicks/76979871")?.embedUrl,
+    "https://player.vimeo.com/video/76979871?autoplay=1&dnt=1",
+  );
+  assert.equal(videoEmbed("https://player.vimeo.com/video/76979871")?.provider, "vimeo");
+  for (const bad of [
+    "",
+    "not a link",
+    "javascript:alert(1)",
+    "http://youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://evil.example/watch?v=dQw4w9WgXcQ",
+    "https://youtube.com/watch?v=<script>",
+    "https://www.youtube.com/watch?v=bad",
+    "https://www.youtube.com/@scottylabs",
+    "https://www.youtube.com/playlist?list=PL1234567890",
+    "https://vimeo.com/channels/staffpicks",
+    "https://vimeo.com/12",
+  ]) {
+    assert.equal(videoEmbed(bad), null, bad);
+  }
+});
+
+Deno.test("committee and project pages play the same links", () => {
+  // These used to play on one kind of page and not the other.
+  assert.notEqual(videoEmbed("https://youtu.be/abcdefg"), null);
+  assert.equal(videoEmbed("https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"), null);
 });

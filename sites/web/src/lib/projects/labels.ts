@@ -24,15 +24,6 @@ export function projectPath(slug: string): string {
   return `/projects/${encodeURIComponent(slug)}/`;
 }
 
-/** The host of a link for a short label, such as "tartanhacks.com" for https://www.tartanhacks.com/. */
-export function linkHost(url: string): string {
-  try {
-    return new URL(url).host.replace(/^www\./u, "");
-  } catch {
-    return url;
-  }
-}
-
 /** A repository link without the scheme, such as "git.cmu.dev/ScottyLabs/maps". */
 export function linkLabel(url: string): string {
   try {

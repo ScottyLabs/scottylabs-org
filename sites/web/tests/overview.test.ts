@@ -18,7 +18,6 @@ import type {
 } from "../src/lib/api/types.ts";
 import {
   approvedMessage,
-  linkHost,
   projectCardFromDoc,
   reviewDescription,
   reviewTitle,
@@ -174,15 +173,6 @@ Deno.test("a decided submission is worded in the past tense", () => {
     reviewDescription(approval({ submittedBy: null, status: "withdrawn" })),
     "The lead changed it after sending it, so nothing is left to decide.",
   );
-});
-
-Deno.test("links show their host, and only https links count", () => {
-  assert.equal(linkHost("https://www.tartanhacks.com/volunteer"), "tartanhacks.com");
-  assert.equal(linkHost("https://cmumaps.com"), "cmumaps.com");
-  assert.equal(linkHost("javascript:alert(1)"), null);
-  assert.equal(linkHost("http://example.com"), null);
-  assert.equal(linkHost(null), null);
-  assert.equal(linkHost("not a url"), null);
 });
 
 Deno.test("a submitted project previews as its card, without a page yet", () => {

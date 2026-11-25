@@ -6,4 +6,4 @@ export { default as ProjectPage } from "./ProjectPage.svelte";
 export * from "./drafts.ts";
 export * from "./filter.ts";
 export * from "./labels.ts";
-export * from "./video.ts";
+export { type VideoEmbed, videoEmbed } from "../media/video.ts";

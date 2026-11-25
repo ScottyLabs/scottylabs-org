@@ -8,7 +8,8 @@
   import CommitteeChip from "../portal/ui/CommitteeChip.svelte";
   import SelectionBox from "../site/SelectionBox.svelte";
   import ProjectCard from "./ProjectCard.svelte";
-  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, linkHost, projectPath } from "./labels.ts";
+  import { linkHost } from "../site/links.ts";
+  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, projectPath } from "./labels.ts";
 
   let { project }: { project: Card } = $props();
 
@@ -65,7 +66,7 @@
               target="_blank"
               rel="noopener noreferrer"
             >
-              {linkHost(project.siteUrl)}
+              {linkHost(project.siteUrl) ?? "Website"}
               <ArrowUpRight size={16} strokeWidth={2} aria-hidden="true" />
               <span class="p-sr-only">(opens in a new tab)</span>
             </a>
