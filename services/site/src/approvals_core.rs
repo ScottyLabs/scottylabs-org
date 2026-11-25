@@ -1,5 +1,7 @@
 //! Creating and finding approvals. Used by the ticker and projects when a lead submits, and by routes/approvals.rs when an approver decides.
 
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
@@ -86,13 +88,45 @@ pub async fn latest(
 ) -> AppResult<Option<ApprovalRow>> {
     let row = sqlx::query_as::<_, ApprovalRow>(&format!(
         "SELECT {COLUMNS} FROM approvals WHERE subject_type = $1 AND subject_id = $2
-         ORDER BY created_at DESC LIMIT 1"
+         ORDER BY created_at DESC, id DESC LIMIT 1"
     ))
     .bind(subject_type)
     .bind(subject_id)
     .fetch_optional(conn)
     .await?;
     Ok(row)
+}
+
+/// What a list shows about the latest approval of a subject, without the snapshot.
+#[derive(Clone, Debug, FromRow)]
+pub struct LatestApproval {
+    pub id: Uuid,
+    pub subject_id: Uuid,
+    pub status: ApprovalStatus,
+    pub note: Option<String>,
+    pub decided_by: Option<Uuid>,
+    pub decided_at: Option<DateTime<Utc>>,
+}
+
+/// [`latest`] for many subjects in one query, keyed by subject id. Subjects never submitted are missing.
+pub async fn latest_of_each(
+    conn: &mut PgConnection,
+    subject_type: SubjectType,
+    subject_ids: &[Uuid],
+) -> AppResult<HashMap<Uuid, LatestApproval>> {
+    if subject_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows = sqlx::query_as::<_, LatestApproval>(
+        "SELECT DISTINCT ON (subject_id) id, subject_id, status, note, decided_by, decided_at
+         FROM approvals WHERE subject_type = $1 AND subject_id = ANY($2)
+         ORDER BY subject_id, created_at DESC, id DESC",
+    )
+    .bind(subject_type)
+    .bind(subject_ids)
+    .fetch_all(conn)
+    .await?;
+    Ok(rows.into_iter().map(|row| (row.subject_id, row)).collect())
 }
 
 /// Locks and returns an approval for deciding on it.

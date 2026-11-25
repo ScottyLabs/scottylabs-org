@@ -350,11 +350,10 @@ async fn describe(
     rows: Vec<Row>,
     now: DateTime<Utc>,
 ) -> AppResult<Vec<AnnouncementDto>> {
-    let mut approvals = Vec::with_capacity(rows.len());
-    for row in &rows {
-        approvals
-            .push(approvals_core::latest(&mut *conn, SubjectType::Announcement, row.id).await?);
-    }
+    let row_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let mut latest =
+        approvals_core::latest_of_each(&mut *conn, SubjectType::Announcement, &row_ids).await?;
+    let approvals: Vec<_> = rows.iter().map(|row| latest.remove(&row.id)).collect();
     let ids: BTreeSet<Uuid> = rows
         .iter()
         .flat_map(|row| [row.created_by, row.approved_by])
