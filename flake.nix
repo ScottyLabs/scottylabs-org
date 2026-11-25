@@ -57,7 +57,18 @@
 
             processes = {
               site = {
-                run = "exec cargo run -p site";
+                # Pitchfork starts processes without the dev shell's secrets. Load the profile's secrets the way the shell does, so Keycloak sign-in is on once you have logged in to OpenBao. `secretspec run` alone refuses to start without a token; this starts anyway, with dev sign-in only.
+                run = ''
+                  if secrets=$(secretspec export -P "''${SECRETSPEC_PROFILE:-dev}" --caller scottylabs-site --reason "start the site service"); then
+                    eval "$secrets"
+                  else
+                    echo "site: starting without this project's secrets, so Keycloak sign-in is off. Log in with 'nix run git+https://git.cmu.dev/ScottyLabs/kennel#login', then restart the site." >&2
+                  fi
+                  unset secrets
+                  # Kennel's environment keeps only log lines from a crate named after the project (scottylabs_org); this crate is `site`.
+                  export RUST_LOG=info,site=debug
+                  exec cargo run -p site
+                '';
                 depends = [
                   "postgres-setup"
                   "garage-setup"
