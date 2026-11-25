@@ -12,11 +12,13 @@ import type {
   TickerSource,
 } from "../../api/types.ts";
 
+/** One tab. The expired tab comes 50 at a time: pass the last answer's `nextBefore` as `before`. */
 export function listAnnouncements(
   tab: AnnouncementTab,
   signal?: AbortSignal,
+  before?: string,
 ): Promise<AnnouncementListResponse> {
-  return get<AnnouncementListResponse>("/announcements", { query: { tab }, signal });
+  return get<AnnouncementListResponse>("/announcements", { query: { tab, before }, signal });
 }
 
 export async function getAnnouncement(id: string, signal?: AbortSignal): Promise<Announcement> {

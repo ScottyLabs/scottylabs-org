@@ -643,6 +643,88 @@ async fn tabs_show_what_each_person_may_see(db: PgPool) {
     assert_eq!(res.status, StatusCode::UNAUTHORIZED);
 }
 
+#[sqlx::test(migrations = "./migrations")]
+async fn the_expired_tab_comes_in_pages_of_fifty(db: PgPool) {
+    let c = cast(&db).await;
+    // 120 that left the ticker in the last few days, mostly three at the same time, so a page ends inside a tie; every fourth was ended early. One left 91 days ago and is no longer listed.
+    sqlx::query(
+        "INSERT INTO announcements (id, kind, committee, message, state, starts_at, expires_at, ended_at)
+         SELECT gen_random_uuid(), 'event', 'events', 'Left ' || g,
+                CASE WHEN g % 4 = 0 THEN 'ended' ELSE 'live' END,
+                now() - interval '30 days',
+                CASE WHEN g % 4 = 0 THEN now() + interval '1 day' ELSE left_at END,
+                CASE WHEN g % 4 = 0 THEN left_at END
+         FROM generate_series(1, 120) AS g,
+              LATERAL (SELECT date_trunc('second', now()) - interval '1 hour' * ((g + 1) / 3) AS left_at) AS t",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let old = live_row(&db, "events", "Expired long ago", 0).await;
+    set_column(&db, old, "expires_at = now() - interval '91 days'").await;
+    live_row(&db, "events", "Still live", 1).await;
+
+    let page = |before: Option<String>| {
+        let app = c.app.clone();
+        let user = c.lead.clone();
+        async move {
+            let mut path = "/api/announcements?tab=expired".to_owned();
+            if let Some(before) = before {
+                let query = url::form_urlencoded::Serializer::new(String::new())
+                    .append_pair("before", &before)
+                    .finish();
+                path = format!("{path}&{query}");
+            }
+            let res = Req::get(&path).user(&user).send(&app).await;
+            assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+            res.json
+        }
+    };
+    let mut seen: Vec<(String, String)> = Vec::new();
+    let mut before = None;
+    let mut sizes = Vec::new();
+    loop {
+        let list = page(before.clone()).await;
+        assert_eq!(list["counts"]["expired"], 120);
+        let rows = list["announcements"].as_array().unwrap();
+        sizes.push(rows.len());
+        for row in rows {
+            let left = row["endedAt"]
+                .as_str()
+                .or(row["expiresAt"].as_str())
+                .unwrap();
+            seen.push((left.to_owned(), row["id"].as_str().unwrap().to_owned()));
+        }
+        match list["nextBefore"].as_str() {
+            Some(next) => before = Some(next.to_owned()),
+            None => break,
+        }
+    }
+    assert_eq!(sizes, [50, 50, 20]);
+    let ids: std::collections::HashSet<&str> = seen.iter().map(|(_, id)| id.as_str()).collect();
+    assert_eq!(ids.len(), 120, "no announcement is listed twice");
+    assert!(!ids.contains(old.to_string().as_str()));
+    // Newest first by when each one left; ties keep a stable order across pages.
+    let times: Vec<DateTime<Utc>> = seen.iter().map(|(left, _)| left.parse().unwrap()).collect();
+    assert!(times.windows(2).all(|pair| pair[0] >= pair[1]));
+
+    // The other tabs are not paged, and a cursor that is not one is refused.
+    let list = tab(&c.app, &c.lead, "live").await;
+    assert_eq!(messages(&list), ["Still live"]);
+    assert_eq!(list["nextBefore"], Value::Null);
+    let res = Req::get("/api/announcements?tab=live&before=nonsense")
+        .user(&c.lead)
+        .send(&c.app)
+        .await;
+    assert_eq!(res.status, StatusCode::OK);
+    let res = Req::get("/api/announcements?tab=expired&before=yesterday")
+        .user(&c.lead)
+        .send(&c.app)
+        .await;
+    assert_eq!(res.status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(res.json["error"]["fields"]["before"].is_string());
+}
+
 // ---------------------------------------------------------------------------
 // Editing
 

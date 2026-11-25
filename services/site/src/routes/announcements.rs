@@ -14,7 +14,7 @@ use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, SecondsFormat, TimeDelta, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgConnection;
 use uuid::Uuid;
@@ -38,6 +38,8 @@ use model::{
 pub const MAX_LIVE: i64 = 6;
 /// Expired and ended announcements stay listed this long, so they can be posted again.
 const EXPIRED_KEPT_DAYS: i64 = 90;
+/// The expired tab lists this many at a time, newest first; `before` asks for the next ones.
+const EXPIRED_PAGE: usize = 50;
 /// "Extend" takes 1 to this many days.
 const MAX_EXTEND_DAYS: i64 = 30;
 /// Held while counting or reordering the live set, so two requests cannot both take the last slot.
@@ -160,21 +162,28 @@ struct ApproverGroup {
 
 /// Mirrors `AnnouncementListResponse` in types.ts.
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AnnouncementListResponse {
     announcements: Vec<AnnouncementDto>,
     slots: Slots,
     counts: TabCounts,
     approvers: Vec<ApproverGroup>,
+    /// On the expired tab, the `before` that lists the next page; null on the last page and on the other tabs.
+    next_before: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Tab {
     Live,
     Waiting,
-    Expired,
+    /// One page of the expired tab: the newest ones, or those that left the ticker before `before`.
+    Expired {
+        before: Option<ExpiredCursor>,
+    },
 }
 
 impl Tab {
+    /// `?tab=` and, for the expired tab, `?before=`.
     fn parse(query: Option<&str>) -> AppResult<Self> {
         let value = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
             .find(|(key, _)| key == "tab")
@@ -182,12 +191,57 @@ impl Tab {
         match value.as_deref() {
             None | Some("" | "live") => Ok(Self::Live),
             Some("waiting") => Ok(Self::Waiting),
-            Some("expired") => Ok(Self::Expired),
+            Some("expired") => {
+                let before = common::query_param(query, "before")
+                    .map(|raw| {
+                        ExpiredCursor::parse(&raw).ok_or_else(|| {
+                            AppError::field(
+                                "before",
+                                "We couldn't find where the list stopped. Reload the page to start again.",
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(Self::Expired { before })
+            }
             Some(_) => Err(AppError::field(
                 "tab",
                 "Choose the live, waiting or expired announcements.",
             )),
         }
+    }
+}
+
+/// Where a page of the expired tab ends: when the last announcement on it left the ticker, and its id for ties. Sent as `<RFC 3339 time>_<id>`; the web passes it back as it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ExpiredCursor {
+    left_at: DateTime<Utc>,
+    id: Uuid,
+}
+
+impl ExpiredCursor {
+    fn after(row: &Row) -> Self {
+        Self {
+            left_at: row.ended_at.unwrap_or(row.expires_at),
+            id: row.id,
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        let (left_at, id) = raw.split_once('_')?;
+        Some(Self {
+            left_at: DateTime::parse_from_rfc3339(left_at).ok()?.to_utc(),
+            id: Uuid::parse_str(id).ok()?,
+        })
+    }
+
+    /// Microseconds, as Postgres stores them, so the next page starts exactly after this row.
+    fn encode(self) -> String {
+        format!(
+            "{}_{}",
+            self.left_at.to_rfc3339_opts(SecondsFormat::Micros, true),
+            self.id
+        )
     }
 }
 
@@ -198,7 +252,7 @@ fn one(announcement: AnnouncementDto) -> Json<AnnouncementResponse> {
 // ---------------------------------------------------------------------------
 // Reading
 
-// The tabs as SQL conditions. `$1` is now, `$2` the days expired ones are kept, `$3` the viewer and `$4` the sources they manage: a waiting announcement shows to its author and its managers.
+// The tabs as SQL conditions. `$1` is now, `$2` the days expired ones are kept, `$3` the viewer and `$4` the sources they manage: a waiting announcement shows to its author and its managers. The expired tab lists by when each one left the ticker, `coalesce(ended_at, expires_at)`.
 const LIVE: &str = "state = 'live' AND expires_at > $1";
 const WAITING: &str =
     "state IN ('pending_approval', 'sent_back') AND (created_by = $3 OR committee = ANY($4))";
@@ -217,6 +271,7 @@ fn kept_days() -> i32 {
     i32::try_from(EXPIRED_KEPT_DAYS).unwrap_or(90)
 }
 
+/// The rows of a tab. For the expired tab, at most one more than [`EXPIRED_PAGE`], which tells whether there is another page.
 async fn rows_for(
     conn: &mut PgConnection,
     viewer: &Viewer,
@@ -246,13 +301,20 @@ async fn rows_for(
                 .fetch_all(conn)
                 .await?
             }
-            Tab::Expired => {
+            // EXPIRED reads only `$1` and `$2`, so `$3` and `$4` are free for the cursor here.
+            Tab::Expired { before } => {
                 sqlx::query_as::<_, Row>(&format!(
                     "SELECT {columns} FROM announcements WHERE {EXPIRED}
-                 ORDER BY coalesce(ended_at, expires_at) DESC, id DESC"
+                   AND ($3::timestamptz IS NULL
+                        OR (coalesce(ended_at, expires_at), id) < ($3::timestamptz, $4::uuid))
+                 ORDER BY coalesce(ended_at, expires_at) DESC, id DESC
+                 LIMIT $5"
                 ))
                 .bind(now)
                 .bind(kept_days())
+                .bind(before.map(|cursor| cursor.left_at))
+                .bind(before.map(|cursor| cursor.id))
+                .bind(i64::try_from(EXPIRED_PAGE + 1).unwrap_or(i64::MAX))
                 .fetch_all(conn)
                 .await?
             }
@@ -418,7 +480,12 @@ async fn list_response(
     tab: Tab,
     now: DateTime<Utc>,
 ) -> AppResult<AnnouncementListResponse> {
-    let rows = rows_for(conn, viewer, tab, now).await?;
+    let mut rows = rows_for(conn, viewer, tab, now).await?;
+    let mut next_before = None;
+    if matches!(tab, Tab::Expired { .. }) && rows.len() > EXPIRED_PAGE {
+        rows.truncate(EXPIRED_PAGE);
+        next_before = rows.last().map(|row| ExpiredCursor::after(row).encode());
+    }
     let announcements = describe(conn, viewer, rows, now).await?;
     let counts = tab_counts(conn, viewer, now).await?;
     let approvers = approvers_for(conn, viewer).await?;
@@ -430,6 +497,7 @@ async fn list_response(
         },
         counts,
         approvers,
+        next_before,
     })
 }
 

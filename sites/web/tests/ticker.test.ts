@@ -21,6 +21,8 @@ import {
   zonedInstant,
 } from "../src/lib/ticker/format.ts";
 import { offersList, reservesSpace, tickerMode } from "../src/lib/ticker/mode.ts";
+import type { Announcement, AnnouncementListResponse } from "../src/lib/api/types.ts";
+import { addedMessage, appendPage } from "../src/lib/ticker/portal/paging.ts";
 import { actionNote, composerRole, submitLabel } from "../src/lib/ticker/portal/wording.ts";
 
 // Tuesday, November 24, 2026, 12:00 PM in Pittsburgh.
@@ -169,4 +171,67 @@ Deno.test("a chosen expiry is described from the current time, past midnight too
   assert.equal(presetFor(tomorrow, later), null);
   assert.equal(distanceInDays(tomorrow, later), "today");
   assert.equal(presetExpiry("tomorrow", later), "2026-11-27T04:59:00.000Z");
+});
+
+function expired(id: string): Announcement {
+  return {
+    id,
+    kind: "event",
+    committee: "events",
+    message: `Announcement ${id}`,
+    linkUrl: null,
+    state: "expired",
+    startsAt: "2026-11-01T14:00:00Z",
+    expiresAt: "2026-11-10T14:00:00Z",
+    endedAt: null,
+    position: 0,
+    createdBy: null,
+    approvedBy: null,
+    createdAt: "2026-11-01T14:00:00Z",
+    updatedAt: "2026-11-01T14:00:00Z",
+    approval: null,
+    canEdit: false,
+    canManage: false,
+  };
+}
+
+function expiredPage(
+  ids: string[],
+  nextBefore: string | null,
+  total: number,
+): AnnouncementListResponse {
+  return {
+    announcements: ids.map((id) => expired(id)),
+    slots: { used: 2, total: 6 },
+    counts: { live: 2, waiting: 0, expired: total },
+    approvers: [],
+    nextBefore,
+  };
+}
+
+Deno.test("show more adds the next page of expired announcements once", () => {
+  const first = expiredPage(["a", "b", "c"], "cursor-1", 5);
+  // "c" left the ticker at the same moment as the next ones and comes again; it is not repeated.
+  const second = expiredPage(["c", "d", "e"], null, 6);
+  const { list, added } = appendPage(first, second);
+  assert.deepEqual(
+    list.announcements.map((announcement) => announcement.id),
+    ["a", "b", "c", "d", "e"],
+  );
+  assert.deepEqual(
+    added.map((announcement) => announcement.id),
+    ["d", "e"],
+  );
+  assert.equal(list.nextBefore, null);
+  assert.equal(list.counts.expired, 6);
+  // The page shown before is left as it was.
+  assert.equal(first.announcements.length, 3);
+});
+
+Deno.test("show more says how many it added and how many are shown", () => {
+  assert.equal(addedMessage(50, 100, 120), "Added 50 more announcements. Showing 100 of 120.");
+  assert.equal(addedMessage(1, 51, 51), "Added 1 more announcement. Showing all 51.");
+  // The total may lag behind what is shown.
+  assert.equal(addedMessage(20, 120, 118), "Added 20 more announcements. Showing all 120.");
+  assert.equal(addedMessage(0, 50, 50), "No more announcements. Showing all 50.");
 });

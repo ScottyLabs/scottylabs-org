@@ -100,7 +100,7 @@ export interface Announcement {
 
 export type AnnouncementTab = "live" | "waiting" | "expired";
 
-/** GET /api/announcements?tab=live|waiting|expired, and PUT /api/announcements/order (the live tab). */
+/** GET /api/announcements?tab=live|waiting|expired&before=, and PUT /api/announcements/order (the live tab). */
 export interface AnnouncementListResponse {
   announcements: Announcement[];
   slots: { used: number; total: number };
@@ -108,6 +108,11 @@ export interface AnnouncementListResponse {
   counts: Record<AnnouncementTab, number>;
   /** For leads: the directors who approve their announcements, per committee they post for. */
   approvers: { committee: CommitteeSlug; people: PersonRef[] }[];
+  /**
+   * The expired tab comes 50 at a time: pass this as `before` for the next ones. Null on the last
+   * page and on the other tabs.
+   */
+  nextBefore: string | null;
 }
 
 /**

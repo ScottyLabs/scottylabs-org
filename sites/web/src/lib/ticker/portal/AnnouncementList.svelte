@@ -76,6 +76,7 @@
   let dragging = $state<string | null>(null);
   let dragStart: string[] = [];
   let body = $state<HTMLElement>();
+  let root = $state<HTMLElement>();
   let notice = $state("");
 
   function moved(id: string, to: number): string[] {
@@ -167,6 +168,20 @@
     return items;
   }
 
+  /**
+   * Moves focus to an announcement's row, or its card on phones, for example the first one "Show
+   * more" added on the expired tab. Only expired rows can take focus this way.
+   */
+  export function focusRow(id: string): void {
+    const target = [...(root?.querySelectorAll<HTMLElement>("[data-focus-row]") ?? [])].find(
+      (element) => element.dataset.focusRow === id && element.offsetParent !== null,
+    );
+    if (target === undefined) return;
+    // Focusable from code only, so rows never join the tab order.
+    target.tabIndex = -1;
+    target.focus();
+  }
+
   function leftLabel(announcement: Announcement): string {
     return announcement.endedAt === null
       ? `Expired ${formatShortDate(announcement.expiresAt, now)}`
@@ -230,7 +245,7 @@
   {/if}
 {/snippet}
 
-<div class="list">
+<div class="list" bind:this={root}>
   <div class="p-table-card list__table">
     <table class="p-table">
       <thead>
@@ -256,6 +271,7 @@
           {@const Icon = kindIcon(announcement.kind)}
           <tr
             data-row
+            data-focus-row={tab === "expired" ? announcement.id : undefined}
             data-highlighted={announcement.id === highlight ? "" : undefined}
             class={[announcement.id === highlight && "p-table__row--highlight", dragging === announcement.id && "list__row--dragging"]}
           >
@@ -309,6 +325,7 @@
       {@const soon = tab === "live" && timeLeft(announcement, now).soon}
       <li
         class={["list__card", announcement.id === highlight && "list__card--highlight"]}
+        data-focus-row={tab === "expired" ? announcement.id : undefined}
         data-highlighted={announcement.id === highlight ? "" : undefined}
       >
         <div class="list__card-top">
@@ -474,6 +491,11 @@
   }
   .list__card--highlight {
     background: var(--p-info-surface);
+  }
+  /* Rows "Show more" moves focus to. */
+  [data-focus-row]:focus-visible {
+    outline: 2px solid var(--p-focus);
+    outline-offset: -2px;
   }
   .list__card-top {
     display: flex;

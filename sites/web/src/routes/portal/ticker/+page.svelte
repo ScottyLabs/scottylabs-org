@@ -25,6 +25,7 @@
     postsDirectly,
     reorderAnnouncements,
   } from "#lib/ticker/portal/api.ts";
+  import { addedMessage, appendPage } from "#lib/ticker/portal/paging.ts";
   import { MAX_LIVE, quoted } from "#lib/ticker/format.ts";
 
   const session = getPortalSession();
@@ -92,6 +93,39 @@
   );
   const reorderable = $derived(permissions !== null && canReorder(permissions));
   const rows = $derived(shown !== null && shown.tab === tab ? shown.data.announcements : null);
+
+  // The expired tab comes 50 at a time; "Show more" adds the next ones under the list.
+  let list = $state<AnnouncementList>();
+  let loadingMore = $state(false);
+  let moreNotice = $state("");
+  const nextBefore = $derived(shown !== null && shown.tab === "expired" && tab === "expired" ? shown.data.nextBefore : null);
+
+  async function showMore() {
+    const base = shown;
+    if (base === null || base.data.nextBefore === null || loadingMore) return;
+    loadingMore = true;
+    moreNotice = "";
+    try {
+      const next = await listAnnouncements("expired", undefined, base.data.nextBefore);
+      // A reload or another tab replaced the list while this page loaded.
+      if (shown !== base) return;
+      const { list: merged, added } = appendPage(base.data, next);
+      shown = { tab: "expired", data: merged };
+      live = live === null ? null : { ...live, counts: merged.counts };
+      moreNotice = addedMessage(added.length, merged.announcements.length, merged.counts.expired);
+      await tick();
+      // Carry on from the first row that just appeared. With nothing new and the button gone (the
+      // last page held only rows already shown), the last row keeps focus off the page body.
+      const target = added[0] ?? (merged.nextBefore === null ? merged.announcements.at(-1) : undefined);
+      if (target !== undefined) list?.focusRow(target.id);
+    } catch (error) {
+      toasts.error(failure(error, "We could not load more announcements. Try again."));
+      await tick();
+      document.querySelector<HTMLElement>("#ticker-show-more")?.focus();
+    } finally {
+      loadingMore = false;
+    }
+  }
 
   function canRepost(announcement: Announcement): boolean {
     return sources.includes(announcement.committee);
@@ -258,6 +292,7 @@
     </div>
   {:else}
     <AnnouncementList
+      bind:this={list}
       {tab}
       announcements={rows}
       {now}
@@ -278,7 +313,18 @@
       {/if}
       Up to {MAX_LIVE} can be live at once.
     </p>
+    {#if nextBefore !== null}
+      <div class="ticker-page__more">
+        <Button id="ticker-show-more" variant="outline" loading={loadingMore} onclick={() => void showMore()}>
+          Show more
+        </Button>
+        <p class="ticker-page__more-count">
+          Showing {rows.length} of {Math.max(counts?.expired ?? 0, rows.length)}
+        </p>
+      </div>
+    {/if}
   {/if}
+  <p class="p-sr-only" aria-live="polite">{moreNotice}</p>
 </div>
 
 <Dialog
@@ -345,6 +391,18 @@
   }
   .ticker-page__order--narrow {
     display: none;
+  }
+  .ticker-page__more {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+  }
+  .ticker-page__more-count {
+    margin: 0;
+    color: var(--p-text-tertiary);
+    font-size: 0.75rem;
+    line-height: 16px;
   }
   /* Where AnnouncementList swaps its table for cards. */
   @media (max-width: 720px) {
