@@ -75,10 +75,11 @@
   let imagesVisibleOnScreen = $state(5);
   const INITIAL_IMAGES_TO_LOAD = 10;
 
+  function updateCustomTilePositioning() {
+    imagesVisibleOnScreen = Math.max(2, Math.ceil(window.innerWidth / 300));
+  }
+
   $effect(() => {
-    const updateCustomTilePositioning = () => {
-      imagesVisibleOnScreen = Math.max(2, Math.ceil(window.innerWidth / 300));
-    };
     window.addEventListener("resize", updateCustomTilePositioning);
     updateCustomTilePositioning();
     return () => {

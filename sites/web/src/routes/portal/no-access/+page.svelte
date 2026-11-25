@@ -33,10 +33,11 @@
     }
   }
 
+  function onVisible() {
+    if (document.visibilityState === "visible" && !checking) void session.refresh();
+  }
+
   onMount(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && !checking) void session.refresh();
-    };
     document.addEventListener("visibilitychange", onVisible);
     return () => document.removeEventListener("visibilitychange", onVisible);
   });

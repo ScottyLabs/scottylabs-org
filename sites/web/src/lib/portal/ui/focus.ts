@@ -21,7 +21,7 @@ export function focusAfterDialog(
 }
 
 /** True when focus is on the body, on a removed element, or inside `closed`, which is closing. */
-export function focusIsLost(closed: Element | undefined): boolean {
+export function focusIsLost(closed?: Element): boolean {
   const active = document.activeElement;
   if (active === null || active === document.body || !active.isConnected) return true;
   return closed?.contains(active) === true;

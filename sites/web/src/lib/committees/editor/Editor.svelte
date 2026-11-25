@@ -80,7 +80,7 @@
     // from the block now in its place in the outline (on phones, its card), or the one before it
     // when the removed block was last, instead of the top of the document.
     await tick();
-    if (!focusIsLost(undefined)) return;
+    if (!focusIsLost()) return;
     const targets = [...(root?.querySelectorAll<HTMLElement>(".outline__button, .mobile__toggle") ?? [])];
     // The cover cannot be removed, so there is always one to go to.
     targets[Math.min(index, targets.length - 1)]?.focus();

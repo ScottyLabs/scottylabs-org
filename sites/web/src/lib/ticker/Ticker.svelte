@@ -247,7 +247,7 @@
     heldByList = false;
     if (byList) {
       // Play while only the list holds the strip: close the list and the strip moves again.
-      const list = document.getElementById(listId);
+      const list = document.querySelector<HTMLElement>(`#${CSS.escape(listId)}`);
       if (list?.matches(":popover-open") === true) list.hidePopover();
       return;
     }
