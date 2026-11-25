@@ -12,10 +12,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, PgExecutor};
 use uuid::Uuid;
 
-use super::{
-    CommitteeRef, PageRow, PageStatus, ProjectCard, all_pages, committee_from_slug, one_page,
-    published_projects,
-};
+use super::{CommitteeRef, PageRow, PageStatus, all_pages, committee_from_slug, one_page};
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
 use crate::blocks::{self, CommitteePageDoc};
@@ -23,6 +20,7 @@ use crate::error::{AppError, AppResult, Problems};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, ImageRef, PersonRef};
 use crate::permissions;
+use crate::routes::projects::public::{ProjectCard, published_cards};
 use crate::state::AppState;
 
 // ---------------------------------------------------------------------------
@@ -170,7 +168,7 @@ async fn editor_response(
     committee: Committee,
 ) -> AppResult<EditorResponse> {
     let row = one_page(&mut *conn, committee).await?;
-    let projects = published_projects(&mut *conn, committee).await?;
+    let projects = published_cards(&mut *conn, Some(committee)).await?;
     Ok(EditorResponse {
         committee: row.committee_ref(),
         status: row.status(),

@@ -145,6 +145,47 @@ async fn a_public_page_has_its_blocks_and_published_projects(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn committee_pages_show_the_same_cards_as_the_projects_page(db: PgPool) {
+    let app = setup(&db).await;
+    // A move to Events saved only in the draft: CMU Maps stays with Tech until it is published.
+    sqlx::query(
+        "UPDATE projects SET committee = 'events', draft = jsonb_set(draft, '{committee}', '\"events\"')
+         WHERE slug = 'cmu-maps'",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+
+    let mut lists = Vec::new();
+    for slug in ["tech", "events"] {
+        let (status, page) =
+            testing::get(&app, &format!("/api/public/committees/{slug}"), None).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        let (_, list) = testing::get(
+            &app,
+            &format!("/api/public/projects?committee={slug}"),
+            None,
+        )
+        .await;
+        assert_eq!(page["projects"], list["projects"], "{slug}");
+        let slugs: Vec<String> = page["projects"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["slug"].as_str().unwrap().to_owned())
+            .collect();
+        lists.push(slugs);
+    }
+    assert!(lists[0].iter().any(|slug| slug == "cmu-maps"));
+    assert!(lists[1].iter().all(|slug| slug != "cmu-maps"));
+    // The editor previews the same cards.
+    let anish = testing::persona(&db, "anishp").await;
+    let tech = editor(&app, &anish, "tech").await;
+    let (_, list) = testing::get(&app, "/api/public/projects?committee=tech", None).await;
+    assert_eq!(tech["projects"], list["projects"]);
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn the_portal_list_says_who_can_edit_what(db: PgPool) {
     let app = setup(&db).await;
     let thomas = testing::persona(&db, "tkanz").await;

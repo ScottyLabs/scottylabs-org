@@ -8,10 +8,11 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use super::{PageRow, ProjectCard, all_pages, committee_from_slug, one_page, published_projects};
+use super::{PageRow, all_pages, committee_from_slug, one_page};
 use crate::blocks::{Block, CommitteePageDoc, CommitteeSettings};
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, ImageRef};
+use crate::routes::projects::public::{ProjectCard, published_cards};
 use crate::state::AppState;
 
 /// Mirrors `CommitteeSummary` in types.ts.
@@ -83,7 +84,7 @@ pub(super) async fn list(State(state): State<AppState>) -> AppResult<Response> {
     Ok(public_json(PublicCommitteesResponse { committees }))
 }
 
-/// GET /api/public/committees/:slug: the published blocks and the committee's published projects. 404 until the page is published.
+/// GET /api/public/committees/:slug: the published blocks and the committee's published projects, the same cards as the Projects page. 404 until the page is published.
 pub(super) async fn page(
     State(state): State<AppState>,
     Path(slug): Path<String>,
@@ -94,7 +95,7 @@ pub(super) async fn page(
     let Some(published) = row.published.as_ref().map(|json| &json.0) else {
         return Err(AppError::not_found("committee page"));
     };
-    let projects = published_projects(&mut *conn, committee).await?;
+    let projects = published_cards(&mut *conn, Some(committee)).await?;
     Ok(public_json(PublicCommitteePageResponse {
         committee: CommitteeSummary::new(&row, published),
         blocks: published.blocks.clone(),

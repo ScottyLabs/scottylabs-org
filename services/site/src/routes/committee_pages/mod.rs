@@ -10,14 +10,14 @@ mod tests;
 use axum::Router;
 use axum::routing::{get, post, put};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::types::Json as JsonColumn;
 use sqlx::{FromRow, PgConnection, PgExecutor};
 use uuid::Uuid;
 
 use crate::blocks::CommitteePageDoc;
 use crate::error::{AppError, AppResult};
-use crate::models::{Committee, ImageRef};
+use crate::models::Committee;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -174,88 +174,4 @@ struct CommitteeRef {
     name: String,
     color: String,
     tint: String,
-}
-
-/// Mirrors `ProjectCard` in types.ts, read straight from the projects table.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectCard {
-    id: Uuid,
-    slug: String,
-    name: String,
-    summary: String,
-    excerpt: String,
-    committee: Committee,
-    status: String,
-    kind: String,
-    cover: Option<ImageRef>,
-    site_url: Option<String>,
-    repo_url: Option<String>,
-    featured: bool,
-}
-
-/// The parts of a published `ProjectDoc` that a card shows. Lenient, so a project the projects track stores with more fields still reads.
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase", default)]
-struct PublishedProject {
-    name: String,
-    summary: String,
-    description: String,
-    status: Option<String>,
-    kind: Option<String>,
-    site_url: Option<String>,
-    repo_url: Option<String>,
-    media: Vec<ImageRef>,
-}
-
-#[derive(FromRow)]
-struct ProjectRow {
-    id: Uuid,
-    slug: String,
-    committee: Committee,
-    featured: bool,
-    published: JsonColumn<serde_json::Value>,
-}
-
-/// Longest excerpt on a card, in characters.
-const EXCERPT_CHARS: usize = 240;
-
-/// The committee's published projects, featured first, then by name.
-async fn published_projects<'e>(
-    db: impl PgExecutor<'e>,
-    committee: Committee,
-) -> AppResult<Vec<ProjectCard>> {
-    let rows = sqlx::query_as::<_, ProjectRow>(
-        "SELECT id, slug, committee, featured, published FROM projects
-         WHERE committee = $1 AND state = 'published' AND published IS NOT NULL
-         ORDER BY featured DESC, lower(published->>'name'), slug",
-    )
-    .bind(committee)
-    .fetch_all(db)
-    .await?;
-    Ok(rows.into_iter().map(ProjectRow::into_card).collect())
-}
-
-impl ProjectRow {
-    fn into_card(self) -> ProjectCard {
-        let doc: PublishedProject = serde_json::from_value(self.published.0).unwrap_or_default();
-        ProjectCard {
-            id: self.id,
-            excerpt: crate::richtext::excerpt(&doc.description, EXCERPT_CHARS),
-            name: if doc.name.is_empty() {
-                self.slug.clone()
-            } else {
-                doc.name
-            },
-            slug: self.slug,
-            summary: doc.summary,
-            committee: self.committee,
-            status: doc.status.unwrap_or_else(|| "live".into()),
-            kind: doc.kind.unwrap_or_else(|| "other".into()),
-            cover: doc.media.into_iter().next(),
-            site_url: doc.site_url,
-            repo_url: doc.repo_url,
-            featured: self.featured,
-        }
-    }
 }
