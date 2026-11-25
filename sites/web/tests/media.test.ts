@@ -7,7 +7,16 @@
 import assert from "node:assert/strict";
 import type { ImageRef } from "../src/lib/api/types.ts";
 import { focusAfterUpload, tileAfter } from "../src/lib/media/focus.ts";
-import { aspectRatio, isUploaded, src, srcset, storedWidths } from "../src/lib/media/images.ts";
+import {
+  aspectRatio,
+  isSeedPhoto,
+  isUploaded,
+  seedVariantPath,
+  seedWidths,
+  src,
+  srcset,
+  storedWidths,
+} from "../src/lib/media/images.ts";
 import { checkImageFile, formatBytes } from "../src/lib/media/upload.ts";
 import { videoEmbed } from "../src/lib/media/video.ts";
 
@@ -33,7 +42,7 @@ Deno.test("stored widths follow the service: standard widths below the original,
   assert.deepEqual(storedWidths(image(null, null)), [480, 960, 1920]);
 });
 
-Deno.test("srcset lists every stored width for uploads only", () => {
+Deno.test("srcset lists every stored width of an upload", () => {
   assert.equal(
     srcset(image(1920, 1080)),
     `/media/${ID}?w=480 480w, /media/${ID}?w=960 960w, /media/${ID}?w=1920 1920w`,
@@ -42,7 +51,7 @@ Deno.test("srcset lists every stored width for uploads only", () => {
     srcset(image(1200, 900)),
     `/media/${ID}?w=480 480w, /media/${ID}?w=960 960w, /media/${ID}?w=1200 1200w`,
   );
-  assert.equal(srcset(image(1600, 1200, "/seed/projects/maps.jpg")), undefined);
+  assert.equal(srcset(image(1600, 1200, "/seed/logos/scottylabs.png")), undefined);
 });
 
 Deno.test("src picks the smallest stored width that is wide enough", () => {
@@ -51,7 +60,10 @@ Deno.test("src picks the smallest stored width that is wide enough", () => {
   assert.equal(src(image(1920, 1080), 4000), `/media/${ID}?w=1920`);
   assert.equal(src(image(1200, 900), 1500), `/media/${ID}?w=1200`);
   assert.equal(src(image(null, null), 960), `/media/${ID}?w=960`);
-  assert.equal(src(image(800, 600, "/seed/photos/c01.jpg"), 480), "/seed/photos/c01.jpg");
+  assert.equal(
+    src(image(800, 600, "/seed/logos/scottylabs.png"), 480),
+    "/seed/logos/scottylabs.png",
+  );
 });
 
 Deno.test("aspect ratio falls back when the size is unknown", () => {
@@ -99,6 +111,35 @@ Deno.test("when a tile goes, focus moves to the tile that took its place or the 
   assert.equal(tileAfter(0, 1), 0);
   assert.equal(tileAfter(-1, 2), 0);
   assert.equal(tileAfter(0, 0), null);
+});
+
+Deno.test("bundled photos come in smaller copies at most 80% as wide", () => {
+  assert.equal(isSeedPhoto("/seed/photos/c10.jpg"), true);
+  assert.equal(isSeedPhoto("/seed/../etc/passwd.jpg"), false);
+  assert.equal(isSeedPhoto("/seed//photos/c10.jpg"), false);
+  assert.equal(isSeedPhoto("/seed/photos/c10.png"), false);
+  assert.deepEqual(seedWidths("/seed/projects/maps.jpg", 1440), [480, 960, 1440]);
+  assert.deepEqual(seedWidths("/seed/photos/c10.jpg", 1000), [480, 1000]);
+  assert.deepEqual(seedWidths("/seed/photos/small.jpg", 500), [500]);
+  assert.deepEqual(seedWidths("/seed/photos/c10.jpg", null), []);
+  assert.equal(seedVariantPath("/seed/photos/c10.jpg", 480), "/seed/photos/c10-480.jpg");
+});
+
+Deno.test("bundled photos get a srcset and a src that fits", () => {
+  const maps = { src: "/seed/projects/maps.jpg", width: 1440 };
+  assert.equal(
+    srcset(maps),
+    "/seed/projects/maps-480.jpg 480w, /seed/projects/maps-960.jpg 960w, /seed/projects/maps.jpg 1440w",
+  );
+  assert.equal(src(maps, 300), "/seed/projects/maps-480.jpg");
+  assert.equal(src(maps, 700), "/seed/projects/maps-960.jpg");
+  assert.equal(src(maps, 1920), "/seed/projects/maps.jpg");
+  const photo = { src: "/seed/photos/c10.jpg", width: 1000 };
+  assert.equal(srcset(photo), "/seed/photos/c10-480.jpg 480w, /seed/photos/c10.jpg 1000w");
+  assert.equal(src(photo, 960), "/seed/photos/c10.jpg");
+  // Without a known width there is nothing to choose from.
+  assert.equal(srcset({ src: "/seed/photos/c10.jpg", width: null }), undefined);
+  assert.equal(src({ src: "/seed/photos/c10.jpg", width: null }, 480), "/seed/photos/c10.jpg");
 });
 
 Deno.test("videos embed from YouTube and Vimeo without tracking", () => {
