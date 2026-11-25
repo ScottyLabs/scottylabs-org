@@ -178,9 +178,13 @@
     setFilters({ committee: filters.committee, q }, "later");
   }
 
-  function reset(): void {
+  async function reset(): Promise<void> {
     searchText = "";
     setFilters({ ...NO_FILTERS }, "now");
+    // The button went with the empty state. Carry on from the emptied search box, as its own
+    // clear button does, instead of the top of the document.
+    await tick();
+    document.querySelector<HTMLInputElement>("#project-search")?.focus();
   }
 
   async function showMore(): Promise<void> {
@@ -274,11 +278,11 @@
             <p class="empty__text">
               Check the spelling, or try the name of a committee or a word such as app or event.
             </p>
-            <button type="button" class="pill pill--outline" onclick={reset}>Show all projects</button>
+            <button type="button" class="pill pill--outline" onclick={() => void reset()}>Show all projects</button>
           {:else if filters.committee !== null}
             <h2 class="empty__title">{COMMITTEES[filters.committee].name} has no projects here yet</h2>
             <p class="empty__text">See what the other committees are building.</p>
-            <button type="button" class="pill pill--outline" onclick={reset}>Show all projects</button>
+            <button type="button" class="pill pill--outline" onclick={() => void reset()}>Show all projects</button>
           {/if}
         </div>
       {:else}
