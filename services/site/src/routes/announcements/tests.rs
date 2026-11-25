@@ -189,6 +189,15 @@ async fn waiting_approval(db: &PgPool, id: Uuid) -> ApprovalRow {
         .unwrap()
 }
 
+/// Who an approval is credited to.
+async fn submitter(db: &PgPool, approval: &ApprovalRow) -> Option<Uuid> {
+    sqlx::query_scalar("SELECT submitted_by FROM approvals WHERE id = $1")
+        .bind(approval.id)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
 /// Decides on the latest approval the way routes/approvals.rs does: the hook and the approval's own status in one transaction, committed only when the hook succeeds.
 async fn decide(
     db: &PgPool,
@@ -323,7 +332,7 @@ async fn admins_and_directors_post_live_and_leads_send_for_approval(db: PgPool) 
     assert_eq!(pending["canManage"], false);
     let approval = waiting_approval(&db, id_of(pending)).await;
     assert_eq!(approval.committee, Committee::Events);
-    assert_eq!(approval.submitted_by, Some(c.lead.id));
+    assert_eq!(submitter(&db, &approval).await, Some(c.lead.id));
     assert_eq!(approval.snapshot["message"], "Lead news.");
     assert_eq!(approval.snapshot["linkUrl"], "https://tartanhacks.com/");
 
@@ -1125,7 +1134,7 @@ async fn approvers_edit_a_submission_without_taking_it_over(db: PgPool) {
     assert_eq!(body["announcement"]["state"], "pending_approval");
     assert_eq!(body["announcement"]["createdBy"]["name"], "Sara Chokshi");
     let approval = waiting_approval(&db, id).await;
-    assert_eq!(approval.submitted_by, Some(c.lead.id));
+    assert_eq!(submitter(&db, &approval).await, Some(c.lead.id));
     assert_eq!(approval.snapshot["message"], "Volunteer sign-ups");
     assert!(testing::audit_summaries(&db).await.contains(
         &"Edited \u{201C}Volunteer sign-ups\u{201D} while it waits for approval".to_owned()

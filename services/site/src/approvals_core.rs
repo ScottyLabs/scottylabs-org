@@ -25,16 +25,15 @@ pub struct ApprovalRow {
     pub subject_type: SubjectType,
     pub subject_id: Uuid,
     pub committee: Committee,
-    pub submitted_by: Option<Uuid>,
     pub snapshot: serde_json::Value,
     pub status: ApprovalStatus,
     pub note: Option<String>,
     pub decided_by: Option<Uuid>,
     pub decided_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
 }
 
-const COLUMNS: &str = "id, subject_type, subject_id, committee, submitted_by, snapshot, status, note, decided_by, decided_at, created_at";
+const COLUMNS: &str =
+    "id, subject_type, subject_id, committee, snapshot, status, note, decided_by, decided_at";
 
 /// Withdraws any waiting approval for the subject, then opens a new one.
 pub async fn submit(

@@ -29,6 +29,8 @@ pub enum AppError {
     UnsupportedMediaType(String),
     #[error("Too many requests. Wait a minute and try again.")]
     RateLimited,
+    /// One of the error codes in the contract, which the web client understands. Sign-in answers with redirects instead today, so nothing builds it yet.
+    #[allow(dead_code)]
     #[error("Sign-in with ScottyLabs is not set up for this site yet.")]
     AuthNotConfigured,
     #[error("Something went wrong on our side. Try again in a moment.")]
@@ -38,10 +40,6 @@ pub enum AppError {
 pub type AppResult<T> = Result<T, AppError>;
 
 impl AppError {
-    pub fn forbidden() -> Self {
-        Self::Forbidden("You don't have access to do that.".into())
-    }
-
     pub fn not_found(what: &str) -> Self {
         Self::NotFound(format!("We couldn't find that {what}."))
     }
@@ -102,10 +100,6 @@ impl Problems {
         self.fields
             .entry(field.into())
             .or_insert_with(|| message.into());
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.fields.is_empty()
     }
 
     /// `Ok(())` when nothing was added, otherwise a validation error whose message is the first problem.

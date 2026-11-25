@@ -18,13 +18,6 @@ pub fn directs(viewer: &Viewer, committee: Committee) -> bool {
         .any(|a| a.role == Role::Director && a.committee == Some(committee))
 }
 
-pub fn leads(viewer: &Viewer, committee: Committee) -> bool {
-    viewer
-        .roles
-        .iter()
-        .any(|a| a.role == Role::Lead && a.committee == Some(committee))
-}
-
 fn committees_with(viewer: &Viewer, role: Role) -> Vec<Committee> {
     let mut list: Vec<Committee> = viewer
         .roles

@@ -853,7 +853,13 @@ async fn a_lead_sends_for_approval_and_a_director_publishes_the_snapshot(db: PgP
             .unwrap()
             .unwrap();
     assert_eq!(approval.committee, Committee::Events);
-    assert_eq!(approval.submitted_by, Some(lead.id));
+    let submitted_by: Option<Uuid> =
+        sqlx::query_scalar("SELECT submitted_by FROM approvals WHERE id = $1")
+            .bind(approval.id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(submitted_by, Some(lead.id));
     assert_eq!(approval.snapshot["summary"], "Fall hackathon with demos");
 
     // Editing again withdraws it; sending again opens a new one.

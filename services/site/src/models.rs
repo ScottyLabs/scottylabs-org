@@ -12,6 +12,8 @@ macro_rules! text_enum {
         pub enum $name { $($variant),+ }
 
         impl $name {
+            /// Every variant, in declaration order. Only some of the enums built here list their variants.
+            #[allow(dead_code)]
             pub const ALL: &'static [$name] = &[$($name::$variant),+];
 
             pub fn slug(self) -> &'static str {

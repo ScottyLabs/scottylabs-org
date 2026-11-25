@@ -552,7 +552,7 @@ mod tests {
     fn publishing_needs_a_described_cover_and_a_summary() {
         let mut problems = Problems::new();
         check_publishable(&doc(), &mut problems);
-        assert!(problems.is_empty());
+        assert!(problems.finish().is_ok());
 
         let mut problems = Problems::new();
         check_publishable(
