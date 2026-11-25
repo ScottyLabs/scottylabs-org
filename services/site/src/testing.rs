@@ -25,6 +25,7 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -522,46 +523,64 @@ pub async fn audit_summaries(db: &PgPool) -> Vec<String> {
         .unwrap()
 }
 
-/// A migrated database that belongs to one test run, dropped when this goes out of scope, also when the test fails. Use it with `#[tokio::test]` in place of `#[sqlx::test]` for a test that spends seconds without the database, such as one that decodes images.
+/// A migrated database that belongs to one test run, dropped when this goes out of scope. Use it with `#[tokio::test]` in place of `#[sqlx::test]` for a test that spends seconds without the database, such as one that encodes or decodes images.
 ///
-/// `#[sqlx::test]` names a test's database after the test alone, and the local Postgres server is shared. When the same test runs in two processes at once (two worktrees, or a commit hook beside a manual run), the second drops and recreates the database the first is using, which succeeds whenever the first holds no connection, as while it decodes an image. A name of its own for every run rules that out.
+/// `#[sqlx::test]` names a test's database after the test alone, and the local Postgres server is shared. When the same test runs in two processes at once (two worktrees, or a commit hook beside a manual run), the second drops and recreates the database the first is using, which succeeds whenever the first holds no connection for a second, as while it works on an image. A name of its own for every run rules that out.
+///
+/// A killed run never drops its database, and neither does a failed test in the dev build, whose Cranelift backend does not unwind, so a panic skips every drop. Each new `IsolatedDb` therefore first drops the test databases more than an hour old.
 pub struct IsolatedDb {
     pub pool: PgPool,
-    name: String,
+    // Dropped after the pool; the drop ends any connection still open.
+    database: TestDatabase,
 }
 
 impl IsolatedDb {
     pub async fn new() -> Self {
-        let name = format!("_sl_test_{}", Uuid::now_v7().simple());
         let mut server = PgConnection::connect_with(&server_options()).await.unwrap();
+        drop_stale_databases(&mut server).await;
+        let database = TestDatabase::create(&mut server).await;
+        server.close().await.unwrap();
+        // Where panics unwind, a failure from here on, such as a failed migration, drops `database` and so the database; elsewhere the next run's clean-up does.
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect_with(server_options().database(&database.0))
+            .await
+            .unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        Self { pool, database }
+    }
+}
+
+const TEST_DATABASE_PREFIX: &str = "_sl_test_";
+
+/// No test holds a database this long, so an older one was left by a run that was killed or failed.
+const STALE_TEST_DATABASE: Duration = Duration::from_secs(60 * 60);
+
+/// A database created for one test run, named for the time it was made. Dropping this drops it.
+struct TestDatabase(String);
+
+impl TestDatabase {
+    async fn create(server: &mut PgConnection) -> Self {
+        let name = test_database_name(Uuid::now_v7());
         server
             .execute(format!("CREATE DATABASE \"{name}\"").as_str())
             .await
             .unwrap();
-        server.close().await.unwrap();
-        let pool = PgPoolOptions::new()
-            .max_connections(5)
-            .connect_with(server_options().database(&name))
-            .await
-            .unwrap();
-        crate::db::migrate(&pool).await.unwrap();
-        Self { pool, name }
+        Self(name)
     }
 }
 
-impl Drop for IsolatedDb {
+impl Drop for TestDatabase {
     /// Drops the database from a thread of its own, since this may run inside the test's runtime.
     fn drop(&mut self) {
-        let name = std::mem::take(&mut self.name);
+        let name = std::mem::take(&mut self.0);
         let dropped = std::thread::spawn(move || {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
             runtime.block_on(async {
                 let mut server = PgConnection::connect_with(&server_options()).await?;
-                server
-                    .execute(format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)").as_str())
-                    .await?;
+                server.execute(drop_database(&name).as_str()).await?;
                 server.close().await
             })?;
             Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
@@ -569,6 +588,55 @@ impl Drop for IsolatedDb {
         .join();
         if !matches!(dropped, Ok(Ok(()))) {
             eprintln!("could not drop a test database: {dropped:?}");
+        }
+    }
+}
+
+fn test_database_name(id: Uuid) -> String {
+    format!("{TEST_DATABASE_PREFIX}{}", id.simple())
+}
+
+fn drop_database(name: &str) -> String {
+    format!("DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)")
+}
+
+/// When a test database was made, for names this module gives out and nothing else.
+fn test_database_created(name: &str) -> Option<SystemTime> {
+    let id = Uuid::try_parse(name.strip_prefix(TEST_DATABASE_PREFIX)?).ok()?;
+    if test_database_name(id) != name {
+        return None;
+    }
+    let (seconds, nanos) = id.get_timestamp()?.to_unix();
+    Some(UNIX_EPOCH + Duration::new(seconds, nanos))
+}
+
+fn is_stale_test_database(name: &str, now: SystemTime) -> bool {
+    test_database_created(name)
+        .and_then(|created| now.duration_since(created).ok())
+        .is_some_and(|age| age > STALE_TEST_DATABASE)
+}
+
+/// Drops the test databases that killed runs left behind. Best effort: a failure here never fails a test.
+async fn drop_stale_databases(server: &mut PgConnection) {
+    let names: Vec<String> =
+        match sqlx::query_scalar("SELECT datname FROM pg_database WHERE starts_with(datname, $1)")
+            .bind(TEST_DATABASE_PREFIX)
+            .fetch_all(&mut *server)
+            .await
+        {
+            Ok(names) => names,
+            Err(error) => {
+                eprintln!("could not list test databases: {error}");
+                return;
+            }
+        };
+    let now = SystemTime::now();
+    for name in names
+        .iter()
+        .filter(|name| is_stale_test_database(name, now))
+    {
+        if let Err(error) = server.execute(drop_database(name).as_str()).await {
+            eprintln!("could not drop the stale test database {name}: {error}");
         }
     }
 }
@@ -581,6 +649,70 @@ fn server_options() -> PgConnectOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A test database name as a run would have made it `ago` before `now`.
+    fn made_before(now: SystemTime, ago: Duration) -> String {
+        let since = (now - ago).duration_since(UNIX_EPOCH).unwrap();
+        let at = uuid::Timestamp::from_unix(uuid::NoContext, since.as_secs(), since.subsec_nanos());
+        test_database_name(Uuid::new_v7(at))
+    }
+
+    async fn database_exists(server: &mut PgConnection, name: &str) -> bool {
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(name)
+            .fetch_one(server)
+            .await
+            .unwrap()
+    }
+
+    #[test]
+    fn only_test_databases_left_for_an_hour_are_stale() {
+        let now = SystemTime::now();
+        let two_hours = Duration::from_secs(2 * 60 * 60);
+        assert!(is_stale_test_database(&made_before(now, two_hours), now));
+        assert!(!is_stale_test_database(
+            &made_before(now, Duration::from_secs(60)),
+            now
+        ));
+
+        // Names this module does not give out are never dropped.
+        let old = made_before(now, two_hours);
+        let hyphenated = format!(
+            "{TEST_DATABASE_PREFIX}{}",
+            Uuid::try_parse(old.strip_prefix(TEST_DATABASE_PREFIX).unwrap())
+                .unwrap()
+                .hyphenated()
+        );
+        let without_time = test_database_name(Uuid::new_v4());
+        for name in [
+            "sl_stage3",
+            "_sl_test_",
+            "_sl_test_old",
+            &hyphenated,
+            &without_time,
+        ] {
+            assert!(!is_stale_test_database(name, now), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn isolated_databases_go_when_dropped_and_clear_ones_killed_runs_left() {
+        let mut server = PgConnection::connect_with(&server_options()).await.unwrap();
+        let left = made_before(SystemTime::now(), Duration::from_secs(2 * 60 * 60));
+        server
+            .execute(format!("CREATE DATABASE \"{left}\"").as_str())
+            .await
+            .unwrap();
+
+        let isolated = IsolatedDb::new().await;
+        let name = isolated.database.0.clone();
+        assert!(database_exists(&mut server, &name).await);
+        assert!(!database_exists(&mut server, &left).await);
+
+        drop(isolated);
+        assert!(!database_exists(&mut server, &name).await);
+        server.close().await.unwrap();
+    }
 
     #[sqlx::test(migrations = "./migrations")]
     async fn helpers_drive_the_real_router(db: PgPool) {

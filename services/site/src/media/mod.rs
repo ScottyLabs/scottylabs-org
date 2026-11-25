@@ -462,13 +462,16 @@ pub(crate) mod tests {
         (store, id, processed)
     }
 
-    #[sqlx::test(migrations = "./migrations")]
-    async fn slow_downloads_are_not_cut_off(db: PgPool) {
+    // Encoding and resizing the image takes seconds in a debug build, so the S3 tests get databases of their own; `testing::IsolatedDb` says why.
+    #[tokio::test]
+    async fn slow_downloads_are_not_cut_off() {
+        let isolated = testing::IsolatedDb::new().await;
+        let db = &isolated.pool;
         let stall = Duration::from_millis(400);
-        let (store, id, processed) = stored_in_s3(&db, Duration::from_millis(150), stall).await;
+        let (store, id, processed) = stored_in_s3(db, Duration::from_millis(150), stall).await;
         let storage: String = sqlx::query_scalar("SELECT storage FROM media WHERE id = $1")
             .bind(id)
-            .fetch_one(&db)
+            .fetch_one(db)
             .await
             .unwrap();
         assert_eq!(storage, "s3");
@@ -484,10 +487,15 @@ pub(crate) mod tests {
         assert_eq!(body.to_bytes(), expected.bytes);
     }
 
-    #[sqlx::test(migrations = "./migrations")]
-    async fn stalled_downloads_end_with_an_error(db: PgPool) {
-        let (store, id, _) =
-            stored_in_s3(&db, Duration::from_secs(2), Duration::from_millis(200)).await;
+    #[tokio::test]
+    async fn stalled_downloads_end_with_an_error() {
+        let isolated = testing::IsolatedDb::new().await;
+        let (store, id, _) = stored_in_s3(
+            &isolated.pool,
+            Duration::from_secs(2),
+            Duration::from_millis(200),
+        )
+        .await;
         let media = store.open(id, None).await.unwrap().unwrap();
         let started = Instant::now();
         assert!(media.body.collect().await.is_err());

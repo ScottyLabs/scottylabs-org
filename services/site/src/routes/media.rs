@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(requested_width(None), None);
     }
 
-    // Decoding and resizing this image takes seconds in a debug build, long enough for the same test in another worktree to replace a database named after the test, so it gets one of its own.
+    // Encoding, decoding and resizing these images takes seconds in a debug build, long enough for the same test in another worktree to replace a database named after the test, so the tests that do it get databases of their own.
     #[tokio::test]
     async fn uploads_a_jpeg_and_serves_each_width() {
         let isolated = testing::IsolatedDb::new().await;
@@ -282,8 +282,10 @@ mod tests {
         }
     }
 
-    #[sqlx::test(migrations = "./migrations")]
-    async fn serves_images_stored_in_s3(db: PgPool) {
+    #[tokio::test]
+    async fn serves_images_stored_in_s3() {
+        let isolated = testing::IsolatedDb::new().await;
+        let db = isolated.pool.clone();
         let mut config = testing::config();
         config.s3 = Some(fake_s3(Duration::ZERO).await);
         let app = testing::app_with(db.clone(), config).await;
