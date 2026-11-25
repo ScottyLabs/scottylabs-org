@@ -440,7 +440,7 @@ fn width_phrase(width: u8) -> String {
     format!("{} width", width_name(width))
 }
 
-/// The video a YouTube or Vimeo link plays, read the way the page reads it (`videoEmbed` in sites/web/src/lib/committees/video.ts): YouTube watch, `youtu.be`, embed, shorts and live links, and Vimeo links with a video number. Channels, playlists and profiles play no single video, so the page could not show them.
+/// The video a YouTube or Vimeo link plays, read the way the page reads it (`videoEmbed` in sites/web/src/lib/media/video.ts): YouTube watch, `youtu.be`, embed, shorts and live links, and Vimeo links with a video number. Channels, playlists and profiles play no single video, so the page could not show them.
 pub fn video_id(link: &str) -> Option<String> {
     let url = url::Url::parse(link.trim()).ok()?;
     if url.scheme() != "https" {
@@ -545,11 +545,7 @@ fn clean_block(content: &mut BlockContent, fields: &mut Fields<'_>) {
                 video.url.clear();
             } else {
                 match check_video_url(url) {
-                    Ok(clean) if video_id(&clean).is_some() => video.url = clean,
-                    Ok(_) => fields.add(
-                        "url",
-                        "Use a link to one YouTube or Vimeo video, not a channel or playlist.",
-                    ),
+                    Ok(clean) => video.url = clean,
                     Err(message) => fields.add("url", message),
                 }
             }

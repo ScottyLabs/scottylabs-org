@@ -320,7 +320,7 @@ fn check_site_path(path: &str) -> Result<String, String> {
     Ok(path.to_owned())
 }
 
-/// A YouTube or Vimeo link, normalized. Returns an error message otherwise.
+/// A link to one YouTube or Vimeo video, normalized, for project pages and committee video blocks. Channel, playlist and profile links are refused: they play no single video ([`crate::blocks::video_id`]), so the page could only show them as a plain link. Returns an error message otherwise.
 pub fn check_video_url(raw: &str) -> Result<String, String> {
     let normalized = check_https_url(raw)?;
     let url = Url::parse(&normalized).map_err(|_| "Enter a YouTube or Vimeo link.".to_owned())?;
@@ -328,14 +328,16 @@ pub fn check_video_url(raw: &str) -> Result<String, String> {
         .host_str()
         .unwrap_or_default()
         .trim_start_matches("www.");
-    if matches!(
+    if !matches!(
         host,
         "youtube.com" | "m.youtube.com" | "youtu.be" | "vimeo.com" | "player.vimeo.com"
     ) {
-        Ok(normalized)
-    } else {
-        Err("Use a YouTube or Vimeo link.".into())
+        return Err("Use a YouTube or Vimeo link.".into());
     }
+    if crate::blocks::video_id(&normalized).is_none() {
+        return Err("Use a link to one YouTube or Vimeo video, not a channel or playlist.".into());
+    }
+    Ok(normalized)
 }
 
 /// Trims and checks a single-line text field.
@@ -444,10 +446,54 @@ mod tests {
             check_button_url("/\\evil").unwrap_err(),
             "Enter a path on this site that starts with a single /, such as /sponsors/."
         );
-        assert!(check_video_url("https://www.youtube.com/watch?v=abc").is_ok());
-        assert!(check_video_url("https://youtu.be/abc").is_ok());
-        assert!(check_video_url("https://vimeo.com/123").is_ok());
-        assert!(check_video_url("https://example.com/video.mp4").is_err());
+    }
+
+    #[test]
+    fn video_links_must_play_one_video() {
+        for (link, normalized) in [
+            (
+                " https://www.youtube.com/watch?v=dQw4w9WgXcQ ",
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            ),
+            (
+                "https://YouTu.be/dQw4w9WgXcQ?t=30",
+                "https://youtu.be/dQw4w9WgXcQ?t=30",
+            ),
+            (
+                "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+                "https://m.youtube.com/shorts/dQw4w9WgXcQ",
+            ),
+            ("https://vimeo.com/76979871", "https://vimeo.com/76979871"),
+            (
+                "https://player.vimeo.com/video/76979871",
+                "https://player.vimeo.com/video/76979871",
+            ),
+        ] {
+            assert_eq!(check_video_url(link).as_deref(), Ok(normalized), "{link}");
+        }
+        for channel in [
+            "https://www.youtube.com/@scottylabs",
+            "https://www.youtube.com/playlist?list=PL1234567",
+            "https://www.youtube.com/watch?v=abc",
+            "https://vimeo.com/scottylabs",
+        ] {
+            assert_eq!(
+                check_video_url(channel),
+                Err(
+                    "Use a link to one YouTube or Vimeo video, not a channel or playlist."
+                        .to_owned()
+                ),
+                "{channel}"
+            );
+        }
+        assert_eq!(
+            check_video_url("https://example.com/watch?v=dQw4w9WgXcQ"),
+            Err("Use a YouTube or Vimeo link.".to_owned())
+        );
+        assert_eq!(
+            check_video_url("http://youtu.be/dQw4w9WgXcQ"),
+            Err("Links must start with https://".to_owned())
+        );
     }
 
     #[test]

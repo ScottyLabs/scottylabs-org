@@ -704,6 +704,59 @@ async fn drafts_are_checked_cleaned_and_kept_from_visitors(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn video_links_must_play_one_video(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let base = full(Committee::Events, "Nova", json!({}));
+
+    // Channels and playlists save nothing the page could play.
+    for channel in [
+        "https://www.youtube.com/@scottylabs",
+        "https://www.youtube.com/playlist?list=PL1234567",
+        "https://vimeo.com/scottylabs",
+    ] {
+        let (status, body) = save(
+            &app,
+            &p.director,
+            nova,
+            with(&base, json!({ "videoUrl": channel })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{channel}");
+        assert_eq!(
+            body["error"]["fields"]["videoUrl"],
+            "Use a link to one YouTube or Vimeo video, not a channel or playlist.",
+            "{channel}"
+        );
+    }
+
+    // One video saves normalized, and its card links to it once published.
+    let (status, body) = save(
+        &app,
+        &p.director,
+        nova,
+        with(
+            &base,
+            json!({ "videoUrl": " https://YouTu.be/dQw4w9WgXcQ?t=42 " }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["project"]["draft"]["videoUrl"],
+        "https://youtu.be/dQw4w9WgXcQ?t=42"
+    );
+    let (status, _) = act(&app, &p.director, nova, "publish").await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, list) = testing::get(&app, "/api/public/projects", None).await;
+    assert_eq!(
+        list["projects"][0]["videoUrl"],
+        "https://youtu.be/dQw4w9WgXcQ?t=42"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn descriptions_with_too_much_markup_are_refused_at_once(db: PgPool) {
     let app = testing::app(db.clone()).await;
     let p = people(&db).await;
