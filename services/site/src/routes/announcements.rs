@@ -1107,7 +1107,7 @@ pub async fn apply_approval(
     if approval_too_late(snapshot.expires_at, now) {
         return Err(AppError::field(
             "expiresAt",
-            "The time this announcement was set to leave the ticker has passed. Send it back and ask the lead to pick a new time.",
+            "This announcement leaves the ticker in less than 5 minutes, or already has. Send it back and ask the lead to pick a later time.",
         ));
     }
     let valid = validate(&snapshot, now)?;

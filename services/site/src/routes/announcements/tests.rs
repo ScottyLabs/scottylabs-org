@@ -1103,7 +1103,11 @@ async fn approving_needs_a_free_slot_and_a_future_expiry(db: PgPool) {
     .unwrap();
     let err = decide(&db, late, &director, true).await.unwrap_err();
     assert_eq!(err.code(), "validation_failed");
-    assert!(err.to_string().contains("pick a new time"), "{err}");
+    // Two minutes are left, so the message must not say the time has passed.
+    assert_eq!(
+        err.to_string(),
+        "This announcement leaves the ticker in less than 5 minutes, or already has. Send it back and ask the lead to pick a later time."
+    );
 
     let admin = viewer(&c.admin, Role::Admin, None);
     decide(&db, full, &admin, true).await.unwrap();
