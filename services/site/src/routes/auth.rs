@@ -152,7 +152,7 @@ async fn login(State(state): State<AppState>, RawQuery(query): RawQuery) -> Resp
     let authorization = match oidc.authorize(&callback_url(&state.config)).await {
         Ok(authorization) => authorization,
         Err(error) => {
-            tracing::error!(error = ?error, "could not start a Keycloak sign-in");
+            tracing::error!(error = %format!("{error:#}"), "could not start a Keycloak sign-in");
             return sign_in_error("failed");
         }
     };
@@ -171,7 +171,7 @@ async fn login(State(state): State<AppState>, RawQuery(query): RawQuery) -> Resp
     .execute(&state.db)
     .await;
     if let Err(error) = stored {
-        tracing::error!(error = ?error, "could not store a sign-in attempt");
+        tracing::error!(error = %error, "could not store a sign-in attempt");
         return sign_in_error("failed");
     }
     let mut response = redirect(authorization.url.as_str());

@@ -31,6 +31,9 @@ pub enum AppError {
     UnsupportedMediaType(String),
     #[error("Too many requests. Wait a minute and try again.")]
     RateLimited,
+    /// A service this one depends on, such as the governance repository, is down or answered with something unusable. The request itself was fine.
+    #[error("{0}")]
+    Upstream(String),
     /// One of the error codes in the contract, which the web client understands. Sign-in answers with redirects instead today, so nothing builds it yet.
     #[allow(dead_code)]
     #[error("Sign-in with ScottyLabs is not set up for this site yet.")]
@@ -66,6 +69,7 @@ impl AppError {
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::RateLimited => "rate_limited",
+            Self::Upstream(_) => "upstream_failed",
             Self::AuthNotConfigured => "auth_not_configured",
             Self::Internal(_) => "internal",
         }
@@ -83,6 +87,7 @@ impl AppError {
             Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::AuthNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

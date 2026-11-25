@@ -47,6 +47,7 @@ export interface ApiErrorBody {
       | "payload_too_large"
       | "unsupported_media_type"
       | "rate_limited"
+      | "upstream_failed"
       | "auth_not_configured"
       | "internal";
     message: string;
