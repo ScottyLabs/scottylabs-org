@@ -14,7 +14,7 @@ use uuid::Uuid;
 use crate::audit::{self, ActivityEntry};
 use crate::auth::{PortalViewer, Viewer};
 use crate::error::AppResult;
-use crate::models::{Committee, ImageRef, TickerSource};
+use crate::models::{Committee, ImageRef, PersonRef, TickerSource};
 use crate::permissions;
 use crate::state::AppState;
 
@@ -161,6 +161,8 @@ struct CommitteesOverview {
     with_unpublished_changes: Vec<Committee>,
     editable: Vec<Committee>,
     covers: Vec<CommitteeCover>,
+    /// When each page the viewer edits was last saved, and by whom.
+    last_edited: Vec<PageEdit>,
 }
 
 #[derive(Serialize)]
@@ -169,12 +171,42 @@ struct CommitteeCover {
     cover: Option<ImageRef>,
 }
 
+#[derive(Serialize)]
+struct PageEdit {
+    slug: Committee,
+    at: DateTime<Utc>,
+    by: Option<PersonRef>,
+}
+
 #[derive(FromRow)]
 struct PageRow {
     slug: Committee,
     published: bool,
     changed: bool,
     cover: Option<serde_json::Value>,
+    edited_at: Option<DateTime<Utc>>,
+    editor_id: Option<Uuid>,
+    editor_andrew_id: Option<String>,
+    editor_name: Option<String>,
+}
+
+impl PageRow {
+    /// The last save of the draft. Publishing copies the draft and is not an edit.
+    fn last_edit(&self) -> Option<PageEdit> {
+        let editor = match (self.editor_id, &self.editor_andrew_id) {
+            (Some(id), Some(andrew_id)) => Some(PersonRef::new(
+                id,
+                andrew_id.clone(),
+                self.editor_name.clone().unwrap_or_default(),
+            )),
+            _ => None,
+        };
+        self.edited_at.map(|at| PageEdit {
+            slug: self.slug,
+            at,
+            by: editor,
+        })
+    }
 }
 
 /// An image stored in a document, if it is one the site may show.
@@ -197,8 +229,12 @@ async fn committees_overview(
                  FROM jsonb_array_elements(
                      CASE WHEN jsonb_typeof(cp.published->'blocks') = 'array'
                           THEN cp.published->'blocks' ELSE '[]'::jsonb END) AS b
-                 WHERE b->>'type' = 'cover' LIMIT 1) AS cover
-         FROM committees c LEFT JOIN committee_pages cp ON cp.committee = c.slug
+                 WHERE b->>'type' = 'cover' LIMIT 1) AS cover,
+                cp.draft_updated_at AS edited_at,
+                u.id AS editor_id, u.andrew_id AS editor_andrew_id, u.name AS editor_name
+         FROM committees c
+         LEFT JOIN committee_pages cp ON cp.committee = c.slug
+         LEFT JOIN users u ON u.id = cp.draft_updated_by
          ORDER BY c.sort_order",
     )
     .fetch_all(conn)
@@ -215,6 +251,11 @@ async fn committees_overview(
             .iter()
             .filter(|row| row.changed && editable.contains(&row.slug))
             .map(|row| row.slug)
+            .collect(),
+        last_edited: rows
+            .iter()
+            .filter(|row| editable.contains(&row.slug))
+            .filter_map(PageRow::last_edit)
             .collect(),
         editable,
         covers: rows

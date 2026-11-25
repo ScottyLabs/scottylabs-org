@@ -4,6 +4,7 @@
   // person, and recent activity, all scoped to their roles. /portal/?review=<approvalId> opens
   // the review dialog for that submission.
   import { onMount, tick, untrack } from "svelte";
+  import { MediaQuery } from "svelte/reactivity";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import { get, isApiError } from "#lib/api/client.ts";
@@ -34,6 +35,11 @@
 
   /** How many of a lead's own submissions the overview lists. */
   const SUBMISSIONS_SHOWN = 6;
+
+  // Phones show what needs the person above the section cards (Figma 112:9558), wider screens
+  // below them. The order is changed in the document, not only on screen, so keyboard and screen
+  // reader order follows what is seen. Matches the breakpoint in the styles below.
+  const narrow = new MediaQuery("(max-width: 899px)", false);
 
   const session = getPortalSession();
   const toasts = getToasts();
@@ -180,18 +186,30 @@
     {:else if overview === null}
       <OverviewSkeleton />
     {:else}
-      <div class="overview__grid">
+      {@const data = overview}
+      {#snippet cards()}
         <div class="overview__cards">
-          <TickerCard ticker={overview.ticker} {permissions} {now} />
-          <CommitteesCard committees={overview.committees} {permissions} />
-          <ProjectsCard projects={overview.projects} {permissions} />
+          <TickerCard ticker={data.ticker} {permissions} {now} />
+          <CommitteesCard committees={data.committees} {permissions} viewerId={me.user.id} {now} />
+          <ProjectsCard projects={data.projects} {permissions} />
         </div>
+      {/snippet}
+      {#snippet needs()}
         <div class="overview__main">
-          <AttentionList items={overview.attention} bind:heading={attentionHeading} />
+          <AttentionList items={data.attention} bind:heading={attentionHeading} />
           {#if submissions.length > 0}<SubmissionsList {submissions} {now} />{/if}
         </div>
+      {/snippet}
+      <div class="overview__grid">
+        {#if narrow.current}
+          {@render needs()}
+          {@render cards()}
+        {:else}
+          {@render cards()}
+          {@render needs()}
+        {/if}
         <div class="overview__side">
-          <ActivityList entries={overview.activity} viewerId={me.user.id} {now} />
+          <ActivityList entries={data.activity} viewerId={me.user.id} {now} />
         </div>
       </div>
     {/if}
@@ -230,7 +248,7 @@
   .overview__main {
     grid-column: span 2;
   }
-  /* Phones put what needs the person first, then the sections, then activity (Figma 112:9558). */
+  /* Phones stack what needs the person, the sections, then activity, in document order. */
   @media (max-width: 899px) {
     .overview {
       margin-top: 20px;
@@ -241,11 +259,7 @@
     }
     .overview__main {
       grid-column: auto;
-      order: -1;
       gap: 16px;
-    }
-    .overview__side {
-      order: 1;
     }
   }
 </style>

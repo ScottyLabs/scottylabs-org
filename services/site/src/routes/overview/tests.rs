@@ -286,6 +286,14 @@ async fn admins_see_everything_that_needs_them(db: PgPool) {
     assert_eq!(o["committees"]["published"], 3);
     assert_eq!(o["committees"]["withUnpublishedChanges"], json!(["tech"]));
     assert_eq!(o["committees"]["editable"].as_array().unwrap().len(), 7);
+    // Only pages that exist have been edited.
+    let edited: Vec<&str> = o["committees"]["lastEdited"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|edit| edit["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(edited, ["events", "tech", "finance"]);
     let covers = o["committees"]["covers"].as_array().unwrap();
     assert_eq!(covers.len(), 7);
     assert_eq!(covers[0]["slug"], "events");
@@ -392,6 +400,13 @@ async fn directors_see_their_committee(db: PgPool) {
     );
     assert_eq!(o["committees"]["editable"], json!(["events"]));
     assert_eq!(o["committees"]["withUnpublishedChanges"], json!([]));
+    // The card says when the page was last saved and by whom (Figma 106:4591).
+    let edits = o["committees"]["lastEdited"].as_array().unwrap();
+    assert_eq!(edits.len(), 1);
+    assert_eq!(edits[0]["slug"], "events");
+    assert_eq!(edits[0]["by"]["id"], w.events_director.id.to_string());
+    assert_eq!(edits[0]["by"]["name"], "Evan Foster");
+    assert!(edits[0]["at"].is_string());
     assert_eq!(o["projects"]["inScope"], 2);
     assert_eq!(o["projects"]["published"], 2);
     assert_eq!(o["projects"]["drafts"], 0);
@@ -422,6 +437,7 @@ async fn leads_see_their_own_work(db: PgPool) {
     assert_eq!(o["ticker"]["mineLive"], 0);
     assert_eq!(o["ticker"]["nextToExpire"], Value::Null);
     assert_eq!(o["committees"]["editable"], json!([]));
+    assert_eq!(o["committees"]["lastEdited"], json!([]));
     assert_eq!(o["projects"]["total"], 3);
     assert_eq!(o["projects"]["inScope"], 1);
     assert_eq!(o["projects"]["published"], 1);

@@ -11,8 +11,11 @@ import type {
 import { committeeName, committeeNames } from "../committees.ts";
 import { formatRelative, formatShortDate, formatTime, partOfDay } from "../dates.ts";
 
-/** Where to add a project. The projects track serves the form there. */
-export const NEW_PROJECT_HREF = "/portal/projects/new/";
+/**
+ * Where to add a project: the projects list, whose "Add project" dialog `?add=1` asks it to open
+ * (contract Changes). Without that, the list is still where the Add project button is.
+ */
+export const NEW_PROJECT_HREF = "/portal/projects/?add=1";
 
 export interface CardAction {
   label: string;
@@ -121,9 +124,39 @@ export interface CommitteesCopy extends CardCopy {
   single: boolean;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "just now", "2 hours ago", "3 days ago", "3 weeks ago", then "on Sep 14". */
+export function editedAgo(at: string, now: Date = new Date()): string {
+  const age = now.getTime() - new Date(at).getTime();
+  if (!Number.isFinite(age)) return "";
+  // The service's clock can run a moment ahead of this one.
+  if (age < 0) return "just now";
+  const days = Math.round(age / DAY_MS);
+  if (days < 14) return formatRelative(at, now);
+  if (days < 60) return `${Math.round(days / 7)} weeks ago`;
+  return `on ${formatShortDate(at, now)}`;
+}
+
+/** "Last edited 3 weeks ago, by you." (Figma 106:4591), or null when the page was never saved. */
+export function lastEditedText(
+  committees: OverviewResponse["committees"],
+  slug: CommitteeSlug,
+  viewerId: string,
+  now: Date = new Date(),
+): string | null {
+  const edit = committees.lastEdited.find((entry) => entry.slug === slug);
+  if (edit === undefined) return null;
+  const when = editedAgo(edit.at, now);
+  if (edit.by === null) return `Last edited ${when}.`;
+  return `Last edited ${when}, by ${edit.by.id === viewerId ? "you" : edit.by.name}.`;
+}
+
 export function committeesCopy(
   committees: OverviewResponse["committees"],
   permissions: Permissions,
+  viewerId: string,
+  now: Date = new Date(),
 ): CommitteesCopy {
   const pagesMeta = plural(committees.total, "page");
   const allPublished =
@@ -136,13 +169,16 @@ export function committeesCopy(
   if (editsOne && ownSlug !== undefined) {
     const name = committeeName(ownSlug);
     const changed = committees.withUnpublishedChanges.includes(ownSlug);
+    const edited = lastEditedText(committees, ownSlug, viewerId, now);
+    const next = changed
+      ? "Publish the changes when they are ready."
+      : "Visitors see the latest version.";
     return {
       title: "Your committee page",
       meta: `/committees/${ownSlug}`,
       headline: changed ? `${name} page has unpublished changes` : `${name} page is published`,
-      text: changed
-        ? "Publish them when they are ready. Visitors see the last published version."
-        : "Visitors see the latest version.",
+      // The design shows only the last edit when the page is up to date.
+      text: edited === null ? next : changed ? `${edited} ${next}` : edited,
       primary: { label: `Edit the ${name} page`, href: `/portal/committees/${ownSlug}/` },
       secondary: null,
       covers: committees.covers.filter((entry) => entry.slug === ownSlug),

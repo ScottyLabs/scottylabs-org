@@ -28,7 +28,9 @@ import {
 import {
   activityText,
   activityTime,
+  NEW_PROJECT_HREF,
   committeesCopy,
+  editedAgo,
   greeting,
   overviewDescription,
   projectsCopy,
@@ -251,10 +253,11 @@ const COMMITTEES: OverviewResponse["committees"] = {
     { slug: "events", cover: null },
     { slug: "tech", cover: null },
   ],
+  lastEdited: [{ slug: "events", at: "2026-11-03T18:00:00Z", by: EVAN }],
 };
 
 Deno.test("the committee card speaks to what the viewer edits", () => {
-  const admin = committeesCopy(COMMITTEES, ADMIN);
+  const admin = committeesCopy(COMMITTEES, ADMIN, "u-thomas", NOW);
   assert.equal(admin.title, "Committee pages");
   assert.equal(admin.headline, "7 pages published");
   assert.equal(admin.text, "Tech has changes that are not published yet.");
@@ -263,10 +266,14 @@ Deno.test("the committee card speaks to what the viewer edits", () => {
   const own = committeesCopy(
     { ...COMMITTEES, editable: ["events"], withUnpublishedChanges: [] },
     DIRECTOR,
+    "u-evan",
+    NOW,
   );
   assert.equal(own.title, "Your committee page");
   assert.equal(own.meta, "/committees/events");
   assert.equal(own.headline, "Events page is published");
+  // Figma 106:4591.
+  assert.equal(own.text, "Last edited 3 weeks ago, by you.");
   assert.equal(own.primary?.label, "Edit the Events page");
   assert.equal(own.primary?.href, "/portal/committees/events/");
   assert.deepEqual(
@@ -276,14 +283,46 @@ Deno.test("the committee card speaks to what the viewer edits", () => {
   assert.ok(own.single);
 
   const changed = committeesCopy(
-    { ...COMMITTEES, editable: ["events"], withUnpublishedChanges: ["events"] },
+    {
+      ...COMMITTEES,
+      editable: ["events"],
+      withUnpublishedChanges: ["events"],
+      lastEdited: [{ slug: "events", at: "2026-11-24T18:00:00Z", by: SARA }],
+    },
     DIRECTOR,
+    "u-evan",
+    NOW,
   );
   assert.equal(changed.headline, "Events page has unpublished changes");
+  assert.equal(
+    changed.text,
+    "Last edited 2 hours ago, by Sara Chokshi. Publish the changes when they are ready.",
+  );
+  const unknown = committeesCopy(
+    {
+      ...COMMITTEES,
+      editable: ["events"],
+      withUnpublishedChanges: [],
+      lastEdited: [{ slug: "events", at: "2026-11-24T19:59:00Z", by: null }],
+    },
+    DIRECTOR,
+    "u-evan",
+    NOW,
+  );
+  assert.equal(unknown.text, "Last edited 1 min ago.");
+  const neverSaved = committeesCopy(
+    { ...COMMITTEES, editable: ["events"], withUnpublishedChanges: [], lastEdited: [] },
+    DIRECTOR,
+    "u-evan",
+    NOW,
+  );
+  assert.equal(neverSaved.text, "Visitors see the latest version.");
 
   const lead = committeesCopy(
-    { ...COMMITTEES, published: 6, editable: [], withUnpublishedChanges: [] },
+    { ...COMMITTEES, published: 6, editable: [], withUnpublishedChanges: [], lastEdited: [] },
     LEAD,
+    "u-sara",
+    NOW,
   );
   assert.equal(lead.headline, "6 of 7 pages published");
   assert.match(lead.text, /^Directors edit/u);
@@ -297,12 +336,23 @@ const PROJECTS: OverviewResponse["projects"] = {
   covers: [],
 };
 
+Deno.test("edit times read naturally", () => {
+  assert.equal(editedAgo("2026-11-24T20:00:30Z", NOW), "just now");
+  assert.equal(editedAgo("2026-11-24T19:30:00Z", NOW), "30 min ago");
+  assert.equal(editedAgo("2026-11-21T20:00:00Z", NOW), "3 days ago");
+  assert.equal(editedAgo("2026-11-03T20:00:00Z", NOW), "3 weeks ago");
+  assert.equal(editedAgo("2026-08-01T20:00:00Z", NOW), "on Aug 1");
+});
+
 Deno.test("the projects card counts what is published", () => {
   const admin = projectsCopy(PROJECTS, ADMIN);
   assert.equal(admin.meta, "16 projects");
   assert.equal(admin.headline, "14 published, 2 drafts");
   assert.equal(admin.text, "2 drafts are not on the site yet.");
   assert.equal(admin.primary?.label, "Add project");
+  // The projects list opens its Add project dialog; no route serves /portal/projects/new/.
+  assert.equal(admin.primary?.href, "/portal/projects/?add=1");
+  assert.equal(NEW_PROJECT_HREF, "/portal/projects/?add=1");
 
   const director = projectsCopy({ ...PROJECTS, published: 2, drafts: 0, inScope: 2 }, DIRECTOR);
   assert.equal(director.headline, "2 Events projects");

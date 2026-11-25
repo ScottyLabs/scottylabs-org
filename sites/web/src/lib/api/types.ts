@@ -569,6 +569,8 @@ export interface OverviewResponse {
     withUnpublishedChanges: CommitteeSlug[];
     editable: CommitteeSlug[];
     covers: { slug: CommitteeSlug; cover: ImageRef | null }[];
+    /** When each page the viewer edits was last saved, and by whom. */
+    lastEdited: { slug: CommitteeSlug; at: string; by: PersonRef | null }[];
   };
   projects: {
     total: number;

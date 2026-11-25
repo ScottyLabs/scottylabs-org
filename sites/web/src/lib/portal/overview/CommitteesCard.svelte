@@ -11,9 +11,16 @@
   let {
     committees,
     permissions,
-  }: { committees: OverviewResponse["committees"]; permissions: Permissions } = $props();
+    viewerId,
+    now,
+  }: {
+    committees: OverviewResponse["committees"];
+    permissions: Permissions;
+    viewerId: string;
+    now: Date;
+  } = $props();
 
-  const copy = $derived(committeesCopy(committees, permissions));
+  const copy = $derived(committeesCopy(committees, permissions, viewerId, now));
   const thumbs = $derived(
     copy.covers.map((entry) => ({
       key: entry.slug,
