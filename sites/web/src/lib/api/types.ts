@@ -317,7 +317,10 @@ export interface ProjectDetail extends ProjectCard {
   publishedAt: string;
 }
 
-/** GET /api/public/projects?committee= */
+/**
+ * GET /api/public/projects?committee=&q=. With `q`, only the projects where every word appears,
+ * ignoring case and accents, in the name, summary, whole description, committee, kind or status.
+ */
 export interface PublicProjectsResponse {
   projects: ProjectCard[];
 }

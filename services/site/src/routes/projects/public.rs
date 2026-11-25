@@ -1,4 +1,6 @@
 //! What visitors see: GET /api/public/projects and GET /api/public/projects/:slug. Only published projects, read from their published version.
+//!
+//! The list takes `committee` and `q` (see `search`), each optional.
 
 use axum::extract::{Path, RawQuery, State};
 use axum::http::HeaderValue;
@@ -13,9 +15,10 @@ use sqlx::{FromRow, PgExecutor};
 use uuid::Uuid;
 
 use super::doc::{ProjectDoc, ProjectKind, ProjectStatus, check_slug};
+use super::search;
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, ImageRef};
-use crate::routes::common::query_param;
+use crate::routes::common::{blocking, query_param};
 use crate::state::AppState;
 
 const PUBLIC_CACHE: &str = "public, max-age=60, stale-while-revalidate=600";
@@ -114,6 +117,14 @@ pub async fn published_cards<'e>(
     db: impl PgExecutor<'e>,
     committee: Option<Committee>,
 ) -> AppResult<Vec<ProjectCard>> {
+    let rows = published_rows(db, committee).await?;
+    Ok(rows.iter().map(PublishedRow::card).collect())
+}
+
+async fn published_rows<'e>(
+    db: impl PgExecutor<'e>,
+    committee: Option<Committee>,
+) -> AppResult<Vec<PublishedRow>> {
     let rows = sqlx::query_as::<_, PublishedRow>(&format!(
         "SELECT {PUBLISHED_COLUMNS} FROM projects
          WHERE state = 'published' AND published IS NOT NULL
@@ -123,9 +134,29 @@ pub async fn published_cards<'e>(
     .bind(committee)
     .fetch_all(db)
     .await?;
+    Ok(rows)
+}
+
+/// The rows that match a search, in their order.
+async fn search_rows(
+    state: &AppState,
+    q: &str,
+    rows: Vec<PublishedRow>,
+) -> AppResult<Vec<PublishedRow>> {
+    // Reading every description as plain text parses its HTML, which is CPU work.
+    let (rows, texts) = blocking(move || {
+        let texts = rows
+            .iter()
+            .map(|row| search::searchable_text(&row.published))
+            .collect();
+        (rows, texts)
+    })
+    .await?;
+    let hits = search::matches(&state.db, q, texts).await?;
     Ok(rows
-        .iter()
-        .map(|row| ProjectCard::new(row.id, row.slug.clone(), row.featured, &row.published))
+        .into_iter()
+        .zip(hits)
+        .filter_map(|(row, hit)| hit.then_some(row))
         .collect())
 }
 
@@ -153,7 +184,12 @@ async fn list_projects(state: &AppState, query: Option<&str>) -> AppResult<Respo
                 AppError::field("committee", "Choose one of the seven committees.")
             })?),
         };
-    let projects = published_cards(&state.db, committee).await?;
+    let q = query_param(query, "q").map(|q| search::capped(&q));
+    let mut rows = published_rows(&state.db, committee).await?;
+    if let Some(q) = q {
+        rows = search_rows(state, &q, rows).await?;
+    }
+    let projects = rows.iter().map(PublishedRow::card).collect();
     Ok(Json(PublicProjectsResponse { projects }).into_response())
 }
 

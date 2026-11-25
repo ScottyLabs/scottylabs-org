@@ -33,6 +33,33 @@ text_enum!(
     }
 );
 
+impl ProjectStatus {
+    /// The words on the card, as `PROJECT_STATUS_LABELS` in sites/web/src/lib/projects/labels.ts.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Live => "Live",
+            Self::InDevelopment => "In development",
+            Self::Annual => "Annual",
+            Self::Ongoing => "Ongoing",
+        }
+    }
+}
+
+impl ProjectKind {
+    /// The words on the card, as `PROJECT_KIND_LABELS` in sites/web/src/lib/projects/labels.ts.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::App => "App",
+            Self::Event => "Event",
+            Self::Tool => "Tool",
+            Self::Brand => "Brand",
+            Self::Program => "Program",
+            Self::Fundraiser => "Fundraiser",
+            Self::Other => "Other",
+        }
+    }
+}
+
 text_enum!(
     /// Whether visitors can see the project.
     ProjectState {

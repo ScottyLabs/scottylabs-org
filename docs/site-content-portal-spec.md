@@ -664,7 +664,7 @@ This section summarizes the routes. `docs/implementation/contract.md` is the aut
 | -- | -- |
 | GET `/api/health` | 200 when ready. Required by kennel |
 | GET `/api/public/ticker` | Live announcements in order |
-| GET `/api/public/projects` | Published projects, with a `committee` filter. The Projects page searches the list in the browser, so its `?q=` stays in the page address and the API takes no `q` |
+| GET `/api/public/projects` | Published projects, with `committee` and `q` filters. The Projects page filters its loaded list in the browser as you type and asks the API with `q` for matches deeper in the descriptions; its `?q=` stays in the page address |
 | GET `/api/public/projects/:slug` | One published project |
 | GET `/api/public/committees` | The seven committees with index content |
 | GET `/api/public/committees/:slug` | Published blocks for one committee page |

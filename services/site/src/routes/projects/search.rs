@@ -1,0 +1,175 @@
+//! Searching published projects for the Projects page (spec P-5). It mirrors `matchesSearch` in sites/web/src/lib/projects/filter.ts, which filters the cards the page has loaded: every word of the search must appear, ignoring case and accents, in the name, summary, description, committee, kind or status. Cards carry only the start of the description, so the page also asks the service, which looks through the whole of it.
+
+use sqlx::PgExecutor;
+
+use super::doc::ProjectDoc;
+use crate::error::AppResult;
+use crate::richtext;
+
+/// The longest search read; the rest is ignored. The Projects page keeps at most 80 characters.
+pub const MAX_QUERY_CHARS: usize = 100;
+
+/// A search text cut to [`MAX_QUERY_CHARS`].
+pub fn capped(q: &str) -> String {
+    q.chars().take(MAX_QUERY_CHARS).collect()
+}
+
+/// Everything a search looks through, joined as `searchableText` joins it, with the whole description as plain text where the page has only the excerpt. Parses the description, so callers run it off the async runtime.
+pub fn searchable_text(doc: &ProjectDoc) -> String {
+    [
+        doc.name.as_str(),
+        doc.summary.as_str(),
+        &richtext::plain_text(&doc.description),
+        doc.committee.name(),
+        doc.kind.label(),
+        doc.status.label(),
+    ]
+    .join(" ")
+}
+
+/// Which of `texts` (from [`searchable_text`]) hold every word of `q`, in order. Everything matches a search without words.
+pub async fn matches<'e>(
+    db: impl PgExecutor<'e>,
+    q: &str,
+    texts: Vec<String>,
+) -> AppResult<Vec<bool>> {
+    if texts.is_empty() {
+        return Ok(Vec::new());
+    }
+    let count = texts.len();
+    let mut folded = fold_all(db, [q.to_owned()].into_iter().chain(texts).collect()).await?;
+    let texts = folded.split_off(1);
+    let words: Vec<&str> = folded
+        .first()
+        .map(|q| q.split(is_space).filter(|word| !word.is_empty()).collect())
+        .unwrap_or_default();
+    debug_assert_eq!(texts.len(), count);
+    Ok(texts
+        .iter()
+        .map(|text| words.iter().all(|word| text.contains(word)))
+        .collect())
+}
+
+/// `fold` in filter.ts for many texts at once: compatibility decomposition (NFKD), then diacritics removed, then lowercase, so "cafe" finds "Caf\u{e9}". Postgres has the Unicode decomposition tables (`normalize`, which needs a UTF-8 database), so it decomposes; the rest happens here. Postgres's `lower` follows the database's collation, which may leave letters outside ASCII alone.
+async fn fold_all<'e>(db: impl PgExecutor<'e>, texts: Vec<String>) -> AppResult<Vec<String>> {
+    let decomposed: Vec<String> = sqlx::query_scalar(
+        "SELECT normalize(t, NFKD) FROM unnest($1::text[]) WITH ORDINALITY AS input(t, n) ORDER BY n",
+    )
+    .bind(texts)
+    .fetch_all(db)
+    .await?;
+    Ok(decomposed.iter().map(|text| finish_fold(text)).collect())
+}
+
+/// The part of [`fold_all`] after decomposition.
+fn finish_fold(decomposed: &str) -> String {
+    decomposed
+        .chars()
+        .filter(|c| !is_diacritic(*c))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// What `\s` matches in JavaScript, which splits the page's search into words.
+fn is_space(c: char) -> bool {
+    matches!(
+        c,
+        '\t' | '\n' | '\u{b}' | '\u{c}' | '\r' | ' ' | '\u{a0}' | '\u{1680}' | '\u{2000}'
+            ..='\u{200a}'
+                | '\u{2028}'
+                | '\u{2029}'
+                | '\u{202f}'
+                | '\u{205f}'
+                | '\u{3000}'
+                | '\u{feff}'
+    )
+}
+
+/// Whether a character has the Unicode `Diacritic` property, which `fold` removes with `/\p{Diacritic}/u`.
+fn is_diacritic(c: char) -> bool {
+    DIACRITIC_BOUNDS.partition_point(|bound| *bound <= u32::from(c)) % 2 == 1
+}
+
+/// The code points where the `Diacritic` property starts or stops, in order: the first of each run of diacritics, then the first code point after it. A code point is a diacritic when an odd number of bounds are at or below it. Listed from what `/\p{Diacritic}/u` matches in Deno 2.9, so the service folds text as the page does; regenerate it the same way if a newer Unicode version changes the property.
+const DIACRITIC_BOUNDS: [u32; 428] = [
+    0x005E, 0x005F, 0x0060, 0x0061, 0x00A8, 0x00A9, 0x00AF, 0x00B0, 0x00B4, 0x00B5, 0x00B7, 0x00B9,
+    0x02B0, 0x034F, 0x0350, 0x0358, 0x035D, 0x0363, 0x0374, 0x0376, 0x037A, 0x037B, 0x0384, 0x0386,
+    0x0483, 0x0488, 0x0559, 0x055A, 0x0591, 0x05A2, 0x05A3, 0x05BE, 0x05BF, 0x05C0, 0x05C1, 0x05C3,
+    0x05C4, 0x05C5, 0x064B, 0x0653, 0x0657, 0x0659, 0x06DF, 0x06E1, 0x06E5, 0x06E7, 0x06EA, 0x06ED,
+    0x0730, 0x074B, 0x07A6, 0x07B1, 0x07EB, 0x07F6, 0x0818, 0x081A, 0x0898, 0x08A0, 0x08C9, 0x08D3,
+    0x08E3, 0x08FF, 0x093C, 0x093D, 0x094D, 0x094E, 0x0951, 0x0955, 0x0971, 0x0972, 0x09BC, 0x09BD,
+    0x09CD, 0x09CE, 0x0A3C, 0x0A3D, 0x0A4D, 0x0A4E, 0x0ABC, 0x0ABD, 0x0ACD, 0x0ACE, 0x0AFD, 0x0B00,
+    0x0B3C, 0x0B3D, 0x0B4D, 0x0B4E, 0x0B55, 0x0B56, 0x0BCD, 0x0BCE, 0x0C3C, 0x0C3D, 0x0C4D, 0x0C4E,
+    0x0CBC, 0x0CBD, 0x0CCD, 0x0CCE, 0x0D3B, 0x0D3D, 0x0D4D, 0x0D4E, 0x0DCA, 0x0DCB, 0x0E3A, 0x0E3B,
+    0x0E47, 0x0E4D, 0x0E4E, 0x0E4F, 0x0EBA, 0x0EBB, 0x0EC8, 0x0ECD, 0x0F18, 0x0F1A, 0x0F35, 0x0F36,
+    0x0F37, 0x0F38, 0x0F39, 0x0F3A, 0x0F3E, 0x0F40, 0x0F82, 0x0F85, 0x0F86, 0x0F88, 0x0FC6, 0x0FC7,
+    0x1037, 0x1038, 0x1039, 0x103B, 0x1063, 0x1065, 0x1069, 0x106E, 0x1087, 0x108E, 0x108F, 0x1090,
+    0x109A, 0x109C, 0x135D, 0x1360, 0x1714, 0x1716, 0x1734, 0x1735, 0x17C9, 0x17D4, 0x17DD, 0x17DE,
+    0x1939, 0x193C, 0x1A60, 0x1A61, 0x1A75, 0x1A7D, 0x1A7F, 0x1A80, 0x1AB0, 0x1ABF, 0x1AC1, 0x1ACC,
+    0x1B34, 0x1B35, 0x1B44, 0x1B45, 0x1B6B, 0x1B74, 0x1BAA, 0x1BAC, 0x1BE6, 0x1BE7, 0x1BF2, 0x1BF4,
+    0x1C36, 0x1C38, 0x1C78, 0x1C7E, 0x1CD0, 0x1CE9, 0x1CED, 0x1CEE, 0x1CF4, 0x1CF5, 0x1CF7, 0x1CFA,
+    0x1D2C, 0x1D6B, 0x1DC4, 0x1DD0, 0x1DF5, 0x1E00, 0x1FBD, 0x1FBE, 0x1FBF, 0x1FC2, 0x1FCD, 0x1FD0,
+    0x1FDD, 0x1FE0, 0x1FED, 0x1FF0, 0x1FFD, 0x1FFF, 0x2CEF, 0x2CF2, 0x2E2F, 0x2E30, 0x302A, 0x3030,
+    0x3099, 0x309D, 0x30FC, 0x30FD, 0xA66F, 0xA670, 0xA67C, 0xA67E, 0xA67F, 0xA680, 0xA69C, 0xA69E,
+    0xA6F0, 0xA6F2, 0xA700, 0xA722, 0xA788, 0xA78B, 0xA7F8, 0xA7FA, 0xA806, 0xA807, 0xA82C, 0xA82D,
+    0xA8C4, 0xA8C5, 0xA8E0, 0xA8F2, 0xA92B, 0xA92F, 0xA953, 0xA954, 0xA9B3, 0xA9B4, 0xA9C0, 0xA9C1,
+    0xA9E5, 0xA9E6, 0xAA7B, 0xAA7E, 0xAABF, 0xAAC3, 0xAAF6, 0xAAF7, 0xAB5B, 0xAB60, 0xAB69, 0xAB6C,
+    0xABEC, 0xABEE, 0xFB1E, 0xFB1F, 0xFE20, 0xFE30, 0xFF3E, 0xFF3F, 0xFF40, 0xFF41, 0xFF70, 0xFF71,
+    0xFF9E, 0xFFA0, 0xFFE3, 0xFFE4, 0x102E0, 0x102E1, 0x10780, 0x10786, 0x10787, 0x107B1, 0x107B2,
+    0x107BB, 0x10A38, 0x10A3B, 0x10A3F, 0x10A40, 0x10AE5, 0x10AE7, 0x10D22, 0x10D28, 0x10D4E,
+    0x10D4F, 0x10D69, 0x10D6E, 0x10EFD, 0x10F00, 0x10F46, 0x10F51, 0x10F82, 0x10F86, 0x11046,
+    0x11047, 0x11070, 0x11071, 0x110B9, 0x110BB, 0x11133, 0x11135, 0x11173, 0x11174, 0x111C0,
+    0x111C1, 0x111CA, 0x111CD, 0x11235, 0x11237, 0x112E9, 0x112EB, 0x1133B, 0x1133D, 0x1134D,
+    0x1134E, 0x11366, 0x1136D, 0x11370, 0x11375, 0x113CE, 0x113D1, 0x113D2, 0x113D4, 0x113E1,
+    0x113E3, 0x11442, 0x11443, 0x11446, 0x11447, 0x114C2, 0x114C4, 0x115BF, 0x115C1, 0x1163F,
+    0x11640, 0x116B6, 0x116B8, 0x1172B, 0x1172C, 0x11839, 0x1183B, 0x1193D, 0x1193F, 0x11943,
+    0x11944, 0x119E0, 0x119E1, 0x11A34, 0x11A35, 0x11A47, 0x11A48, 0x11A99, 0x11A9A, 0x11C3F,
+    0x11C40, 0x11D42, 0x11D43, 0x11D44, 0x11D46, 0x11D97, 0x11D98, 0x11F41, 0x11F43, 0x11F5A,
+    0x11F5B, 0x13447, 0x13456, 0x1612F, 0x16130, 0x16AF0, 0x16AF5, 0x16B30, 0x16B37, 0x16D6B,
+    0x16D6D, 0x16F8F, 0x16FA0, 0x16FF0, 0x16FF2, 0x1AFF0, 0x1AFF4, 0x1AFF5, 0x1AFFC, 0x1AFFD,
+    0x1AFFF, 0x1CF00, 0x1CF2E, 0x1CF30, 0x1CF47, 0x1D167, 0x1D16A, 0x1D16D, 0x1D173, 0x1D17B,
+    0x1D183, 0x1D185, 0x1D18C, 0x1D1AA, 0x1D1AE, 0x1E030, 0x1E06E, 0x1E130, 0x1E137, 0x1E2AE,
+    0x1E2AF, 0x1E2EC, 0x1E2F0, 0x1E5EE, 0x1E5F0, 0x1E8D0, 0x1E8D7, 0x1E944, 0x1E947, 0x1E948,
+    0x1E94B,
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn diacritics_are_found_like_the_page_finds_them() {
+        for diacritic in [
+            '^', '`', '\u{a8}', '\u{b4}', '\u{b7}', '\u{301}', '\u{308}', '\u{3099}',
+        ] {
+            assert!(is_diacritic(diacritic), "{diacritic:?}");
+        }
+        for letter in ['a', 'Z', '_', '\u{e9}', '\u{f8}', '\u{3042}', '\u{1f600}'] {
+            assert!(!is_diacritic(letter), "{letter:?}");
+        }
+        assert!(DIACRITIC_BOUNDS.windows(2).all(|pair| pair[0] < pair[1]));
+    }
+
+    #[test]
+    fn decomposed_text_loses_its_accents_and_case() {
+        // "Caf\u{e9} \u{c5}NGSTR\u{d6}M" after NFKD.
+        assert_eq!(
+            finish_fold("Cafe\u{301} A\u{30a}NGSTRO\u{308}M"),
+            "cafe angstrom"
+        );
+        assert_eq!(
+            finish_fold("\u{3a3}\u{39f}\u{3a3}"),
+            "\u{3c3}\u{3bf}\u{3c2}"
+        );
+    }
+
+    #[test]
+    fn words_are_split_on_javascript_white_space() {
+        let words: Vec<&str> = "a\u{feff}b\u{3000}c\td"
+            .split(is_space)
+            .filter(|word| !word.is_empty())
+            .collect();
+        assert_eq!(words, ["a", "b", "c", "d"]);
+        assert_eq!(capped(&"x".repeat(150)).len(), MAX_QUERY_CHARS);
+    }
+}

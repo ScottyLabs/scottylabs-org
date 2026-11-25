@@ -161,6 +161,106 @@ async fn visitors_see_published_projects_featured_first(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn searches_look_through_whole_descriptions(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    // The last paragraph starts far past the 240 characters of the card's excerpt.
+    let description = format!(
+        "<p>{}</p><p>Built with <strong>Zephyrine</strong> tiles, tested at the Caf\u{e9} on Forbes.</p>",
+        "Find any room on campus in a few taps. ".repeat(8)
+    );
+    testing::published_project(
+        &db,
+        Committee::Tech,
+        "cmu-maps",
+        full(
+            Committee::Tech,
+            "CMU Maps",
+            json!({ "description": description }),
+        ),
+    )
+    .await;
+    testing::published_project(
+        &db,
+        Committee::Events,
+        "tartanhacks",
+        full(
+            Committee::Events,
+            "TartanHacks",
+            json!({ "kind": "event", "status": "annual" }),
+        ),
+    )
+    .await;
+    testing::published_project(
+        &db,
+        Committee::Design,
+        "lookbook",
+        full(Committee::Design, "Lookbook", json!({ "kind": "brand" })),
+    )
+    .await;
+    let search = |query: &str| {
+        let app = app.clone();
+        let path = format!("/api/public/projects?{query}");
+        async move {
+            let res = Req::get(&path).send(&app).await;
+            assert_eq!(res.status, StatusCode::OK, "{path}: {}", res.text());
+            assert_eq!(
+                res.header("cache-control"),
+                Some("public, max-age=60, stale-while-revalidate=600")
+            );
+            names(&res.json)
+        }
+    };
+    let q = |text: &str| {
+        url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("q", text)
+            .finish()
+    };
+
+    let (_, all) = testing::get(&app, "/api/public/projects", None).await;
+    let excerpt = all["projects"][0]["excerpt"].as_str().unwrap();
+    assert!(!excerpt.contains("Zephyrine"), "{excerpt}");
+    // A word only in the description, past the excerpt, in any case.
+    assert_eq!(search(&q("zephyrine")).await, ["CMU Maps"]);
+    assert_eq!(search(&q("  ZEPHYRINE  ")).await, ["CMU Maps"]);
+    // Every word must match somewhere: here the description and the name.
+    assert_eq!(search(&q("zephyrine maps")).await, ["CMU Maps"]);
+    assert!(search(&q("zephyrine tartanhacks")).await.is_empty());
+    assert!(search(&q("nothing like this")).await.is_empty());
+    // Accents are ignored both ways, as on the page.
+    assert_eq!(search(&q("cafe forbes")).await, ["CMU Maps"]);
+    assert_eq!(search(&q("CAF\u{c9}")).await, ["CMU Maps"]);
+    // Committee names and the kind and status on the card match too.
+    assert_eq!(search(&q("events")).await, ["TartanHacks"]);
+    assert_eq!(search(&q("annual event")).await, ["TartanHacks"]);
+    assert_eq!(search(&q("brand")).await, ["Lookbook"]);
+    // With the committee filter.
+    assert_eq!(
+        search(&format!("committee=events&{}", q("event"))).await,
+        ["TartanHacks"]
+    );
+    assert!(
+        search(&format!("committee=tech&{}", q("events")))
+            .await
+            .is_empty()
+    );
+    // Blank and control-only searches show everything; long ones are cut, not refused.
+    assert_eq!(search(&q(" ")).await.len(), 3);
+    assert_eq!(search("q=%00%07").await.len(), 3);
+    assert_eq!(
+        search(&q(&format!("maps {}", "x".repeat(300)))).await,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        search(&q(&format!("{}maps", " ".repeat(200)))).await,
+        ["CMU Maps"]
+    );
+    assert_eq!(
+        search(&q(&format!("maps{}", " ".repeat(200)))).await,
+        ["CMU Maps"]
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn a_move_shows_on_committee_lists_only_once_published(db: PgPool) {
     let app = testing::app(db.clone()).await;
     let admin = UserSpec::new("admin").admin().create(&db).await;

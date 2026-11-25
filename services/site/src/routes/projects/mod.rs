@@ -7,6 +7,7 @@ mod approval;
 mod doc;
 mod portal;
 pub(super) mod public;
+mod search;
 #[cfg(test)]
 mod tests;
 

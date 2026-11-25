@@ -197,7 +197,7 @@ All bodies are JSON unless stated. Types are in `sites/web/src/lib/api/types.ts`
 | -- | -- |
 | GET `/api/health` | `200 ok` (plain text). Checks the database |
 | GET `/api/public/ticker` | `PublicTickerResponse`: live, unexpired, ordered by `position` then `starts_at` |
-| GET `/api/public/projects` | `PublicProjectsResponse`: published, featured first, then by name |
+| GET `/api/public/projects?committee=&q=` | `PublicProjectsResponse`: published, featured first, then by name. `committee` keeps one committee's projects. `q` keeps those where every word appears, ignoring case and accents, in the name, summary, whole description, committee name, kind or status (the words on the card); it is trimmed, cut to 100 characters, and control characters are dropped. Blank means no search |
 | GET `/api/public/projects/:slug` | `PublicProjectResponse`; 404 when unknown or not published |
 | GET `/api/public/committees` | `PublicCommitteesResponse`, in `sort_order` |
 | GET `/api/public/committees/:slug` | `PublicCommitteePageResponse`; 404 for unknown slugs |
@@ -345,6 +345,7 @@ Record changes to this contract here, newest first, with the reason.
 What the final backend and web fixers left for each other.
 
 - **`ProjectCard.videoUrl: string | null`** is required and filled from the published version, so the Projects page's featured card shows "Watch video" (to `/projects/<slug>/#watch`) and committee pages' project cards carry it too. `ProjectDetail` gets it from the card it flattens and no longer has its own field, so it is sent once. Draft and approval previews (`draftCard`, `projectCardFromDoc`) set it from the doc. Project pages go to the part their address points to once the project has loaded (the browser looked before it was on the page) and focus it, so `#watch` lands on the click-to-load video below the sticky header.
+- **Search over whole descriptions** (spec P-5 and section 11, which said the API takes no `q`): `GET /api/public/projects` takes `q` (see Public). It mirrors `matchesSearch` in `src/lib/projects/filter.ts`: the same fields joined with spaces, the description as `richtext::plain_text`, the status label too, words split on what JavaScript's `\s` matches, and every word must appear. Folding matches `fold`: Postgres decomposes the texts (`normalize(t, NFKD)`, which needs a UTF-8 database), then the service drops characters with the Unicode `Diacritic` property (a table listed from Deno's `/\p{Diacritic}/u`) and lowercases in Rust, since Postgres's `lower` follows the collation. `routes/projects/search.rs` holds it; descriptions are read on the blocking pool. The answer keeps the public cache headers.
 
 ### 2026-11-25, final backend review fixes
 
