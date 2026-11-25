@@ -6,49 +6,41 @@ use uuid::Uuid;
 
 use crate::error::{AppResult, Problems};
 use crate::models::{
-    Committee, ImageRef, MAX_ALT_LEN, check_https_url, check_line, check_video_url,
+    Committee, ImageRef, MAX_ALT_LEN, check_https_url, check_line, check_video_url, text_enum,
 };
 use crate::richtext;
 
-pub use enums::{ProjectKind, ProjectState, ProjectStatus};
+text_enum!(
+    /// Shown on the card: how the project is doing.
+    ProjectStatus {
+        Live => "live",
+        InDevelopment => "in_development",
+        Annual => "annual",
+        Ongoing => "ongoing",
+    }
+);
 
-// `text_enum!` also gives each enum an `ALL` list, which nothing about projects needs to walk.
-#[allow(dead_code)]
-mod enums {
-    use crate::models::text_enum;
+text_enum!(
+    /// Shown on the card: what sort of thing it is.
+    ProjectKind {
+        App => "app",
+        Event => "event",
+        Tool => "tool",
+        Brand => "brand",
+        Program => "program",
+        Fundraiser => "fundraiser",
+        Other => "other",
+    }
+);
 
-    text_enum!(
-        /// Shown on the card: how the project is doing.
-        ProjectStatus {
-            Live => "live",
-            InDevelopment => "in_development",
-            Annual => "annual",
-            Ongoing => "ongoing",
-        }
-    );
-
-    text_enum!(
-        /// Shown on the card: what sort of thing it is.
-        ProjectKind {
-            App => "app",
-            Event => "event",
-            Tool => "tool",
-            Brand => "brand",
-            Program => "program",
-            Fundraiser => "fundraiser",
-            Other => "other",
-        }
-    );
-
-    text_enum!(
-        /// Whether visitors can see the project.
-        ProjectState {
-            Draft => "draft",
-            Published => "published",
-            Archived => "archived",
-        }
-    );
-}
+text_enum!(
+    /// Whether visitors can see the project.
+    ProjectState {
+        Draft => "draft",
+        Published => "published",
+        Archived => "archived",
+    }
+);
 
 pub const MAX_NAME_CHARS: usize = 60;
 pub const MAX_SUMMARY_CHARS: usize = 48;
