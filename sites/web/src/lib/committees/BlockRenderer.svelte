@@ -24,6 +24,7 @@
   // and `freeSlot` fills rows that have columns to spare.
   import "./committees.css";
   import type { CommitteeSettings, ProjectCard } from "../api/types.ts";
+  import type RichTextEditor from "../editor/RichTextEditor.svelte";
   import { freeSlots, type FreeSlot } from "./layout.ts";
   import CoverBlock from "./render/CoverBlock.svelte";
   import CtaBlock from "./render/CtaBlock.svelte";
@@ -48,6 +49,7 @@
     onblockchange,
     frame,
     freeSlot,
+    textEditor,
     class: className,
   }: {
     blocks: readonly Block[];
@@ -61,6 +63,8 @@
     frame?: Snippet<[BlockFrame]>;
     /** Shown in the free columns at the end of a row. */
     freeSlot?: Snippet<[FreeSlot]>;
+    /** Edits text blocks in place. The editor passes it in, so public pages never load it. */
+    textEditor?: typeof RichTextEditor;
     class?: string;
   } = $props();
 
@@ -88,7 +92,7 @@
       onchange={(props) => change({ ...block, props })}
     />
   {:else if block.type === "text"}
-    <TextBlock props={block.props} {editor} {editable} onchange={(props) => change({ ...block, props })} />
+    <TextBlock props={block.props} {editor} {editable} {textEditor} onchange={(props) => change({ ...block, props })} />
   {:else if block.type === "image"}
     <ImageBlock
       props={block.props}

@@ -1,6 +1,10 @@
 <script lang="ts">
-  // For people who signed in but have no role yet (spec S-4).
+  // For people who signed in but have no role yet (spec S-4). A role given to them applies at
+  // their next request (S-7), so "Check again", or coming back to the tab, looks again; once they
+  // have one, the portal shell moves them on to the overview.
+  import { onMount } from "svelte";
   import Lock from "@lucide/svelte/icons/lock";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import LogOut from "@lucide/svelte/icons/log-out";
   import { isApiError } from "#lib/api/client.ts";
   import { getPortalSession } from "#lib/portal/session.svelte.ts";
@@ -12,6 +16,31 @@
   const me = $derived(session.me);
 
   let signingOut = $state(false);
+  let checking = $state(false);
+  let checkedNote = $state("");
+
+  async function checkAgain() {
+    checking = true;
+    checkedNote = "";
+    try {
+      const latest = await session.refresh();
+      if (session.error !== null) checkedNote = session.error.message;
+      else if (latest !== null && !latest.permissions.canUsePortal) {
+        checkedNote = "Still nothing to edit. Once your director adds you, check again.";
+      }
+    } finally {
+      checking = false;
+    }
+  }
+
+  function onVisible() {
+    if (document.visibilityState === "visible" && !checking) void session.refresh();
+  }
+
+  onMount(() => {
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  });
 
   async function signOut() {
     signingOut = true;
@@ -38,8 +67,8 @@
       You are signed in, but there is nothing for you to edit yet.
     </h1>
     <p class="no-access__body">
-      Editing is for committee leads and directors. Ask the director of your committee to add you,
-      and it will show up here the next time you sign in.
+      Editing is for committee leads and directors. Ask the director of your committee to add you.
+      Once they do, choose Check again or reload this page.
     </p>
     {#if me}
       <p class="no-access__who">
@@ -47,9 +76,11 @@
       </p>
     {/if}
     <div class="no-access__actions">
-      <Button href="/team/">See who the directors are</Button>
+      <Button icon={RefreshCw} loading={checking} onclick={() => void checkAgain()}>Check again</Button>
+      <Button variant="outline" href="/team/">See who the directors are</Button>
       <Button variant="outline" icon={LogOut} loading={signingOut} onclick={signOut}>Sign out</Button>
     </div>
+    <p class="no-access__checked" role="status">{checkedNote}</p>
   </Card>
 </div>
 
@@ -98,6 +129,17 @@
   .no-access__id {
     font-family: var(--p-mono);
     font-size: 0.75rem;
+  }
+  .no-access__checked {
+    margin: 0;
+    color: var(--p-text-secondary);
+    font-size: 0.875rem;
+    line-height: 20px;
+
+    /* Kept in place while empty so screen readers hear it when it fills; no gap meanwhile. */
+    &:empty {
+      margin-top: -18px;
+    }
   }
   .no-access__actions {
     display: flex;

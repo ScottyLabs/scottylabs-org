@@ -3,14 +3,17 @@
   // live, waiting and expired announcements, with extend, end, reorder and post again.
   import Archive from "@lucide/svelte/icons/archive";
   import Hourglass from "@lucide/svelte/icons/hourglass";
+  import Lock from "@lucide/svelte/icons/lock";
   import Megaphone from "@lucide/svelte/icons/megaphone";
   import Plus from "@lucide/svelte/icons/plus";
+  import { tick } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import { page } from "$app/state";
   import { isAbortError, isApiError } from "#lib/api/client.ts";
   import type { Announcement, AnnouncementListResponse, AnnouncementTab } from "#lib/api/types.ts";
   import { formatDateTimeLong, getPortalSession, getToasts } from "#lib/portal/index.ts";
   import { Button, Callout, Dialog, EmptyState, PageHeader, Skeleton, Tabs, type TabItem } from "#lib/portal/ui/index.ts";
+  import { focusPageHeading } from "#lib/portal/ui/focus.ts";
   import AnnouncementList from "#lib/ticker/portal/AnnouncementList.svelte";
   import LivePreview from "#lib/ticker/portal/LivePreview.svelte";
   import {
@@ -160,9 +163,12 @@
         toasts.success("Deleted.");
       }
       confirmOpen = false;
-      reload();
-      // The row that opened the dialog is gone, so focus starts again from the page heading.
-      document.querySelector<HTMLElement>("#portal-main h1")?.focus();
+      // The row that opened the dialog goes once the list reloads, taking the focus the dialog
+      // gives back to its menu button with it. Wait for the new list, then carry on from the
+      // page heading. While the dialog was open the page behind it was inert and could not take focus.
+      await load(tab, new AbortController().signal);
+      await tick();
+      focusPageHeading();
     } catch (error) {
       toasts.error(failure(error, kind === "end" ? "We could not end it. Try again." : "We could not delete it. Try again."));
     } finally {
@@ -223,6 +229,12 @@
             </p>
           {/if}
         </div>
+      {:else if permissions !== null}
+        <!-- Leads whose director has not let them post (spec O-2: a lock and the reason). -->
+        <p class="ticker-page__locked">
+          <Lock size={16} strokeWidth={2} aria-hidden="true" />
+          <span>You can&rsquo;t post to the ticker yet. Ask the director of your committee.</span>
+        </p>
       {/if}
     {/snippet}
   </PageHeader>
@@ -259,7 +271,11 @@
     />
     <p class="p-table-footnote">
       Announcements leave the ticker on their own when they expire.
-      {#if tab === "live" && reorderable}Drag the handle to change the order, or focus it and use the arrow keys.{/if}
+      {#if tab === "live" && reorderable}
+        <!-- The cards that replace the table on narrow screens have no handle, only the row menu. -->
+        <span class="ticker-page__order ticker-page__order--wide">Drag the handle to change the order, or focus it and use the arrow keys.</span>
+        <span class="ticker-page__order ticker-page__order--narrow">Use Move up and Move down in a row&rsquo;s menu to change the order.</span>
+      {/if}
       Up to {MAX_LIVE} can be live at once.
     </p>
   {/if}
@@ -304,6 +320,21 @@
     line-height: 16px;
     text-align: right;
   }
+  .ticker-page__locked {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    max-width: 280px;
+    margin: 0;
+    color: var(--p-text-secondary);
+    font-size: 0.875rem;
+    line-height: 20px;
+
+    & :global(svg) {
+      flex: none;
+      margin-top: 2px;
+    }
+  }
   .ticker-page__loading {
     display: flex;
     flex-direction: column;
@@ -311,6 +342,18 @@
   }
   .ticker-page :global(.p-table-footnote) {
     margin-top: -12px;
+  }
+  .ticker-page__order--narrow {
+    display: none;
+  }
+  /* Where AnnouncementList swaps its table for cards. */
+  @media (max-width: 720px) {
+    .ticker-page__order--wide {
+      display: none;
+    }
+    .ticker-page__order--narrow {
+      display: inline;
+    }
   }
   @media (max-width: 600px) {
     .ticker-page {
@@ -338,6 +381,11 @@
     }
     .ticker-page__reason {
       max-width: 168px;
+    }
+    .ticker-page__locked {
+      max-width: 168px;
+      font-size: 0.75rem;
+      line-height: 16px;
     }
   }
 </style>

@@ -126,6 +126,8 @@
     name="description"
     content="Apps, hackathons, brand work and ventures from all seven ScottyLabs committees."
   />
+  <!-- Asked for from the HTML, so the projects and the featured picture do not wait for the app. -->
+  <link rel="preload" as="fetch" crossorigin="anonymous" href="/api/public/projects" />
 </svelte:head>
 
 <div class="projects">
@@ -203,8 +205,9 @@
         {#if visible.length > 0}
           <h2 class="p-sr-only">{featured === null ? "Projects" : "More projects"}</h2>
           <ul class={["grid", featured !== null && "grid--after-featured"]} role="list" bind:this={grid}>
-            {#each visible as project, position (project.id)}
-              <li><ProjectCard {project} headingLevel={3} loading={position < 4 ? "eager" : "lazy"} /></li>
+            {#each visible as project (project.id)}
+              <!-- Below the featured project, the cards start under the fold on every screen. -->
+              <li><ProjectCard {project} headingLevel={3} /></li>
             {/each}
           </ul>
         {/if}

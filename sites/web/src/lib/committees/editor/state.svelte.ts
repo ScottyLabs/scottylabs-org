@@ -331,6 +331,8 @@ export class PageEditor {
   async start(): Promise<void> {
     if (!this.canEdit) return;
     await this.#claim();
+    // Left while the lock was being taken: no heartbeat for an editor that is gone.
+    if (this.#destroyed) return;
     this.#heartbeat ??= setInterval(() => {
       if (this.#lockClock.due) void this.#claim();
     }, HEARTBEAT_MS);
@@ -351,6 +353,11 @@ export class PageEditor {
     this.#lockClock.claimed(Date.now());
     try {
       const lock = await takeLock(this.slug);
+      if (this.#destroyed) {
+        // The editor closed while asking, and `leave` saw no lock to let go of.
+        void this.#releaseQuietly();
+        return;
+      }
       if (this.readOnlyReason !== null) {
         // Someone else was editing: start from what they saved.
         await this.refresh();
@@ -360,6 +367,10 @@ export class PageEditor {
         // Someone may have edited while the lock was free.
         await this.#catchUp();
       }
+      if (this.#destroyed) {
+        void this.#releaseQuietly();
+        return;
+      }
       this.lock = lock;
     } catch (error) {
       if (!isApiError(error)) throw error;
@@ -367,6 +378,14 @@ export class PageEditor {
         this.readOnlyReason = error.message;
         await this.refresh();
       }
+    }
+  }
+
+  async #releaseQuietly(): Promise<void> {
+    try {
+      await releaseLock(this.slug);
+    } catch {
+      // The lock expires by itself after five minutes.
     }
   }
 

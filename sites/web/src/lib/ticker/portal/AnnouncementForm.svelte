@@ -341,7 +341,8 @@
     padding: 0 11px 0 10px;
     border: 1.5px solid transparent;
     border-radius: var(--p-radius-pill);
-    background: var(--source-tint);
+    /* Figma 109:5091: neutral until chosen, then the committee's tint with a dark border. */
+    background: var(--p-surface-muted);
     color: var(--p-text);
     font-size: 0.75rem;
     font-weight: 500;
@@ -358,6 +359,7 @@
   }
   .composer__source--selected {
     border-color: var(--p-text);
+    background: var(--source-tint);
   }
   .composer__dot {
     width: 6px;

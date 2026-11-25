@@ -62,6 +62,7 @@
         fallbackWidth={960}
         fit="cover"
         {loading}
+        fetchpriority={loading === "eager" ? "high" : undefined}
       />
       {#if images.length > 1}
         <span class="gallery__counter" aria-hidden="true">

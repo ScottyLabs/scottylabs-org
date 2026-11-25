@@ -28,6 +28,10 @@
   const redirectTarget = $derived(portalRedirect(page.url, session));
   // Render the page only when the person may see it, so pages never flash before a redirect.
   const showShell = $derived(session.status === "ready" && redirectTarget === null);
+  // The announcement composer and the project editor take the whole phone screen, with their own
+  // app bar and the main action docked at the bottom (Figma 112:9849, 112:10399), as the
+  // committee page editor does.
+  const fullScreenOnPhone = $derived(/^\/portal\/(?:ticker|projects)\/[^/]+\/?$/u.test(page.url.pathname));
 
   $effect(() => {
     if (!bare && session.status === "idle") void session.load();
@@ -73,7 +77,7 @@
 {:else if session.status === "error"}
   <SessionError error={session.error} onretry={() => void session.load()} />
 {:else if showShell}
-  <div class="portal">
+  <div class={["portal", fullScreenOnPhone && "portal--full-screen"]}>
     <a class="portal__skip" href="#portal-main">Skip to content</a>
     <div class="portal__desktop">
       <TopBar {sections} locked={!hasRole} />
@@ -151,6 +155,16 @@
     }
     .portal__main--locked {
       padding-bottom: 40px;
+    }
+  }
+  @media (max-width: 600px) {
+    /* No portal bars: the page's own app bar is the top, and what docks above the tab bar docks
+       at the bottom edge instead. */
+    .portal--full-screen {
+      --p-tabbar-height: 0px;
+    }
+    .portal--full-screen .portal__mobile {
+      display: none;
     }
   }
 </style>

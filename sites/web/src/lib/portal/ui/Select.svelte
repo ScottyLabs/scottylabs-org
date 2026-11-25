@@ -63,8 +63,8 @@
     background: var(--p-surface);
     color: var(--p-text);
     font-family: var(--p-font);
-    font-size: 0.875rem;
-    line-height: 20px;
+    font-size: var(--p-field-font);
+    line-height: var(--p-field-line);
     cursor: pointer;
 
     &:hover:not(:disabled) {
@@ -82,12 +82,19 @@
     }
   }
   .p-select--md select {
-    height: 40px;
+    height: var(--p-field-height);
   }
   .p-select--sm select {
     height: 32px;
     font-size: 0.8125rem;
+    line-height: 20px;
     padding-left: 10px;
+  }
+  /* Below 16 px, iOS Safari zooms the page into a field when it gets focus. */
+  @media (max-width: 768px) {
+    .p-select--sm select {
+      font-size: 1rem;
+    }
   }
   .p-select--invalid select {
     border-color: var(--p-danger);

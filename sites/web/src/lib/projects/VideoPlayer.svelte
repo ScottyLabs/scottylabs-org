@@ -7,7 +7,7 @@
   import Play from "@lucide/svelte/icons/play";
   import type { ImageRef } from "../api/types.ts";
   import Img from "../media/Img.svelte";
-  import { videoEmbed } from "./video.ts";
+  import { videoEmbed } from "../media/video.ts";
 
   let {
     url,

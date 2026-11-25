@@ -75,6 +75,8 @@
     name="description"
     content="Seven committees run ScottyLabs. See what each one builds, hosts or funds, and how to join."
   />
+  <!-- Asked for from the HTML, so the committees and the first picture do not wait for the app. -->
+  <link rel="preload" as="fetch" crossorigin="anonymous" href="/api/public/committees" />
 </svelte:head>
 
 <div class="index cb-scope">
@@ -144,6 +146,7 @@
                 sizes="(min-width: 1280px) 696px, (min-width: 900px) 55vw, 100vw"
                 fit="cover"
                 loading={index === 0 ? "eager" : "lazy"}
+                fetchpriority={index === 0 ? "high" : undefined}
               />
             {:else}
               <div class="row__no-cover" style:background={committee.tint}></div>
@@ -509,8 +512,15 @@
     .index {
       --pad: 20px;
     }
+    /* Figma 82:7402: 40 px from the chips to the first picture (24 + the row's 16) and 48 px
+       between rows (16 + 2 x 16); the rows keep their padding for the hover box. */
     .intro {
       padding-top: 40px;
+      padding-bottom: 24px;
+    }
+    .rows {
+      gap: 16px;
+      padding-top: 0;
     }
     .intro__title {
       font-size: 2.25rem;

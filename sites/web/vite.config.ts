@@ -11,7 +11,16 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       // Pages that are not prerendered (project pages and the portal) load from 200.html, which the site service returns for those paths.
-      sveltekit({ adapter: adapter({ fallback: "200.html" }) }),
+      sveltekit({
+        adapter: adapter({ fallback: "200.html" }),
+        prerender: {
+          // Prerendered pages preload their content from the site service (/api/...), which the build does not run, so the crawler finds nothing there. Anything else still fails.
+          handleHttpError: ({ path, status, message }) => {
+            if (status === 404 && path.startsWith("/api/")) return;
+            throw new Error(message);
+          },
+        },
+      }),
       ViteImageOptimizer({
         jpg: {
           quality: 90,

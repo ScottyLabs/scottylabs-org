@@ -1,4 +1,4 @@
-// Ticker helpers that need no DOM: link hosts, expiry presets and the sentences around them.
+// Ticker helpers that need no DOM: expiry presets and the sentences around them.
 // Dates are read and written in Pittsburgh time, like the rest of the portal.
 
 import type { Announcement, TickerSource } from "../api/types.ts";
@@ -22,16 +22,6 @@ export const SOON_DAYS = 3;
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
-
-/** "collegecart.org" for "https://www.collegecart.org/x", or null without a readable link. */
-export function linkHost(url: string | null | undefined): string | null {
-  if (url === null || url === undefined || url === "") return null;
-  try {
-    return new URL(url).hostname.replace(/^www\./u, "");
-  } catch {
-    return null;
-  }
-}
 
 /** Sources in the order the composer shows them: the committees, then ScottyLabs as a whole. */
 export function sourceOrder(sources: readonly TickerSource[]): TickerSource[] {

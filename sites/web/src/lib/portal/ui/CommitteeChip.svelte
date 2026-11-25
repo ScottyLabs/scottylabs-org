@@ -6,6 +6,7 @@
     committee,
     size = "md",
     count,
+    countLabel,
     selectable = false,
     selected = false,
     disabled = false,
@@ -17,6 +18,8 @@
     size?: "sm" | "md";
     /** A number after the name, for filters. */
     count?: number;
+    /** What screen readers hear for the count, such as "7 projects"; the bare number otherwise. */
+    countLabel?: string;
     /** Renders a toggle button; `selected` sets its pressed state. */
     selectable?: boolean;
     selected?: boolean;
@@ -41,7 +44,10 @@
 {#snippet content()}
   <span class="p-chip__dot" aria-hidden="true"></span>
   <span>{text}</span>
-  {#if count !== undefined}<span class="p-chip__count">{count}</span>{/if}
+  {#if count !== undefined}
+    <span class="p-chip__count" aria-hidden={countLabel === undefined ? undefined : "true"}>{count}</span>
+    {#if countLabel !== undefined}<span class="p-sr-only">, {countLabel}</span>{/if}
+  {/if}
 {/snippet}
 
 {#if selectable}

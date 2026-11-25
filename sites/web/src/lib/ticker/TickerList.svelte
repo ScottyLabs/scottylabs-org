@@ -4,7 +4,7 @@
   // back to the button.
   import type { PublicAnnouncement } from "../api/types.ts";
   import CommitteeChip from "../portal/ui/CommitteeChip.svelte";
-  import { linkHost } from "./format.ts";
+  import { linkHost } from "../site/links.ts";
   import { kindIcon } from "./kinds.ts";
 
   type Item = Pick<PublicAnnouncement, "id" | "kind" | "committee" | "message" | "linkUrl">;
@@ -72,7 +72,7 @@
     <h2 id={headingId} class="ticker-list__title" tabindex="-1" bind:this={heading}>Announcements</h2>
     <span class="ticker-list__count">{items.length} live now</span>
   </div>
-  <ul class="ticker-list__items">
+  <ul class="ticker-list__items" role="list">
     {#each items as item (item.id)}
       {@const Icon = kindIcon(item.kind)}
       {@const host = linkHost(item.linkUrl)}

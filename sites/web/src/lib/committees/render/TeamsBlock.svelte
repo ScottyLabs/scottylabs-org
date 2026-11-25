@@ -5,6 +5,7 @@
   import slackMark from "../../assets/icons/socials/slack.svg";
   import EditableText from "../EditableText.svelte";
   import { LIMITS } from "../limits.ts";
+  import { headingTag } from "./types.ts";
 
   let {
     props,
@@ -33,7 +34,7 @@
 <section class={["teams", expanded && "teams--expanded"]}>
   <div class="teams__heading">
     <EditableText
-      as="h2"
+      as={headingTag(2, editor)}
       class="cb-heading"
       value={props.heading}
       {editor}
@@ -59,7 +60,7 @@
       {#each props.teams as team, index (index)}
         <li class={["teams__card", index >= PHONE_LIMIT && "teams__card--more"]}>
           <EditableText
-            as="h3"
+            as={headingTag(3, editor)}
             class="teams__name"
             value={team.name}
             {editor}
@@ -131,11 +132,13 @@
     padding: 0;
     list-style: none;
   }
+  /* Figma 74:4293: 142 px tall, with the channel at the bottom. */
   .teams__card {
     display: flex;
     flex-direction: column;
     gap: 6px;
     box-sizing: border-box;
+    min-height: 142px;
     padding: 20px;
     border: 1px solid var(--cb-border);
     border-radius: 12px;
@@ -158,7 +161,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    margin: 0;
+    margin: auto 0 0;
     padding-top: 8px;
     color: var(--cb-text-tertiary);
     font-family: var(--p-mono);
@@ -187,6 +190,10 @@
     .teams__grid {
       grid-template-columns: minmax(0, 1fr);
       gap: 12px;
+    }
+    /* One card per row: each takes the height of its own text. */
+    .teams__card {
+      min-height: 0;
     }
   }
   @container committee-page (width < 640px) {

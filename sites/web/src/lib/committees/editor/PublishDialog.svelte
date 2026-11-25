@@ -3,6 +3,7 @@
   // the last published version, and lists anything that blocks publishing, such as a photo
   // without alt text, with a way to go to it.
   import { untrack } from "svelte";
+  import { goto } from "$app/navigation";
   import Check from "@lucide/svelte/icons/check";
   import CircleAlert from "@lucide/svelte/icons/circle-alert";
   import { isAbortError, isApiError } from "../../api/client.ts";
@@ -78,6 +79,8 @@
         href: committeePath(editor.slug),
         external: true,
       });
+      // Back to the list with the page marked Published (spec F7). Leaving the editor lets go of the lock.
+      await goto(`/portal/committees/?highlight=${encodeURIComponent(editor.slug)}`);
     } catch (error) {
       if (!isApiError(error)) throw error;
       failure = error.message;
@@ -97,7 +100,7 @@
 <Dialog
   bind:open
   title={`Publish the ${editor.committee.name} page?`}
-  description={`Your changes go live at ${displayPath(editor.slug)} right away. You can keep editing after you publish.`}
+  description={`Your changes go live at ${displayPath(editor.slug)} right away, and you go back to the list of committee pages.`}
   dismissible={!publishing}
 >
   {#if blocked}

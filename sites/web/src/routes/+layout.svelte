@@ -3,7 +3,6 @@
   import "../app.css";
   import "#lib/portal/ui/tokens.css";
   import { onMount, type Snippet } from "svelte";
-  import posthog from "posthog-js";
   import { browser } from "$app/env";
   import { page } from "$app/state";
   import { PUBLIC_POSTHOG_HOST, PUBLIC_POSTHOG_KEY } from "$app/env/public";
@@ -11,7 +10,6 @@
   import satoshiFontBold from "#lib/assets/fonts/Satoshi-Bold.woff2";
   import satoshiFontMedium from "#lib/assets/fonts/Satoshi-Medium.woff2";
   import satoshiFontBlack from "#lib/assets/fonts/Satoshi-Black.woff2";
-  import jetbrainsMono from "#lib/assets/fonts/JetBrainsMono-Regular.ttf";
   import { removeInjectedHeadTags } from "#lib/site/head.ts";
 
   let { children }: { children: Snippet } = $props();
@@ -20,12 +18,16 @@
   // writes its own head, so there is one description and it follows client-side navigation.
   if (browser) removeInjectedHeadTags(document.head);
 
+  // Analytics load after the page, in their own chunk, so they never hold up its content.
   onMount(() => {
-    if (PUBLIC_POSTHOG_KEY === undefined) return;
-    posthog.init(PUBLIC_POSTHOG_KEY, {
-      api_host: PUBLIC_POSTHOG_HOST,
-      ui_host: "https://us.posthog.com",
-      defaults: "2025-05-24",
+    const key = PUBLIC_POSTHOG_KEY;
+    if (key === undefined) return;
+    void import("posthog-js").then(({ default: posthog }) => {
+      posthog.init(key, {
+        api_host: PUBLIC_POSTHOG_HOST,
+        ui_host: "https://us.posthog.com",
+        defaults: "2025-05-24",
+      });
     });
   });
 </script>
@@ -36,7 +38,8 @@
   {#if page.data.ownDescription !== true}
     <meta name="description" content="The landing page for Scottylabs" />
   {/if}
-  {#each [satoshiFont, satoshiFontBold, satoshiFontMedium, satoshiFontBlack, jetbrainsMono] as font (font)}
+  <!-- The text faces only. The monospace face is small and loads when a page uses it. -->
+  {#each [satoshiFont, satoshiFontBold, satoshiFontMedium, satoshiFontBlack] as font (font)}
     <link rel="preload" href={font} as="font" type="font/woff2" crossorigin="anonymous" />
   {/each}
 </svelte:head>

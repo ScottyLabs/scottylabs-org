@@ -11,7 +11,6 @@ import {
   expirySentence,
   latestExpiry,
   leavesLabel,
-  linkHost,
   listNames,
   presetExpiry,
   presetFor,
@@ -26,14 +25,6 @@ import { actionNote, composerRole, submitLabel } from "../src/lib/ticker/portal/
 
 // Tuesday, November 24, 2026, 12:00 PM in Pittsburgh.
 const NOW = new Date("2026-11-24T17:00:00Z");
-
-Deno.test("link hosts drop the scheme, www and path", () => {
-  assert.equal(linkHost("https://www.collegecart.org/shop?x=1"), "collegecart.org");
-  assert.equal(linkHost("https://maps.scottylabs.org"), "maps.scottylabs.org");
-  assert.equal(linkHost(null), null);
-  assert.equal(linkHost(""), null);
-  assert.equal(linkHost("not a link"), null);
-});
 
 Deno.test("sources list committees first and ScottyLabs last", () => {
   assert.deepEqual(sourceOrder(["club", "events", "tech"]), ["events", "tech", "club"]);

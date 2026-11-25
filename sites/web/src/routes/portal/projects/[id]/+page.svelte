@@ -8,6 +8,7 @@
   import { page } from "$app/state";
   import Archive from "@lucide/svelte/icons/archive";
   import ArrowUpRight from "@lucide/svelte/icons/arrow-up-right";
+  import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import Ellipsis from "@lucide/svelte/icons/ellipsis";
   import Eye from "@lucide/svelte/icons/eye";
   import RotateCcw from "@lucide/svelte/icons/rotate-ccw";
@@ -83,6 +84,16 @@
     server?.state === "published" ? (upToDate ? "Published" : "Publish changes") : "Publish",
   );
   const saveLabel = $derived(describeSave());
+  // Only saves made on this visit are announced, not the time of the last one before it.
+  let savedHere = $state(false);
+  const saveAnnouncement = $derived.by(() => {
+    if (saver === null) return "";
+    if (saver.status === "invalid" || (saver.status === "failed" && saver.retrying)) return saveLabel?.text ?? "";
+    return saver.status === "saved" && savedHere ? "Saved" : "";
+  });
+  $effect(() => {
+    if (saver !== null && (saver.status === "pending" || saver.status === "saving")) savedHere = true;
+  });
 
   const menuItems = $derived.by((): MenuItem[] => {
     if (server === null) return [];
@@ -157,6 +168,7 @@
   /** Shows the server's draft in the form and saves changes to it from here on. */
   function startEditing(project: Project): void {
     saver?.destroy();
+    savedHere = false;
     server = project;
     doc = structuredClone(project.draft);
     saver = project.canEdit
@@ -351,8 +363,13 @@
     </ol>
   </nav>
 
+  <!-- On phones this is the app bar of Figma 112:10399: back, the title and the status. -->
   <header class="header">
     <div class="header__title">
+      <a class="header__back" href="/portal/projects/">
+        <ChevronLeft size={20} strokeWidth={2} aria-hidden="true" />
+        <span class="p-sr-only">Back to projects</span>
+      </a>
       <h1 class="title" tabindex="-1">{canEdit ? "Edit project" : name}</h1>
       {#if status !== null}<Badge tone={status.tone === "success" ? "success" : status.tone === "warning" ? "warning" : "neutral"}>{status.label}</Badge>{/if}
     </div>
@@ -360,10 +377,9 @@
       {#if saveLabel !== null}
         <span class={["save", `save--${saveLabel.tone}`]}>{saveLabel.text}</span>
       {/if}
-      <!-- A save that stopped for good is announced by its message below. -->
-      <span class="p-sr-only" aria-live="polite">
-        {saver?.status === "invalid" || (saver?.status === "failed" && saver.retrying) ? saveLabel?.text : ""}
-      </span>
+      <!-- A save that stopped for good is announced by its message below. "Saving" stays quiet;
+           each finished save says "Saved" once, since the text empties while the next one runs. -->
+      <span class="p-sr-only" aria-live="polite">{saveAnnouncement}</span>
       <span class="header__desktop">
         <Button variant="outline" size="lg" icon={Eye} loading={busy === "preview"} onclick={() => void preview()}>
           Preview page
@@ -381,6 +397,9 @@
       {/if}
     </div>
   </header>
+  {#if saveLabel !== null}
+    <p class={["save", "save-line", `save--${saveLabel.tone}`]} aria-hidden="true">{saveLabel.text}</p>
+  {/if}
 
   <div class="notices">
     {#if !canEdit}
@@ -656,6 +675,10 @@
   .mobile-bar {
     display: none;
   }
+  .header__back,
+  .save-line {
+    display: none;
+  }
 
   @media (max-width: 1100px) {
     .layout,
@@ -685,6 +708,65 @@
       padding: 12px 16px;
       border-top: 1px solid var(--p-border);
       background: var(--p-surface);
+    }
+  }
+  /* The portal's bars are hidden here on phones (see the portal layout), so the header is the
+     app bar, edge to edge past the main area's 20 px and 16 px padding. */
+  @media (max-width: 600px) {
+    .crumbs {
+      display: none;
+    }
+    .header {
+      position: sticky;
+      top: 0;
+      z-index: 6;
+      flex-wrap: nowrap;
+      gap: 8px;
+      box-sizing: border-box;
+      height: 56px;
+      margin: -20px -16px 0;
+      padding: 0 8px 0 4px;
+      border-bottom: 1px solid var(--p-border);
+      background: var(--p-surface);
+    }
+    .header__title {
+      flex-wrap: nowrap;
+      gap: 6px;
+    }
+    .header__back {
+      display: inline-grid;
+      flex: none;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: var(--p-radius-sm);
+      color: var(--p-text);
+
+      &:focus-visible {
+        outline: 2px solid var(--p-focus);
+        outline-offset: -2px;
+      }
+    }
+    .title {
+      overflow: hidden;
+      font-size: 1rem;
+      font-weight: 500;
+      line-height: 24px;
+      letter-spacing: 0;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .header__actions .save {
+      display: none;
+    }
+    .more {
+      width: 40px;
+      height: 40px;
+      border: 0;
+    }
+    .save-line {
+      display: block;
+      margin: 12px 0 0;
     }
   }
 </style>

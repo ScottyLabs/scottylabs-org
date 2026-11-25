@@ -8,6 +8,7 @@
   import type { Approval } from "../../api/types.ts";
   import { RichText } from "../../editor/index.ts";
   import ProjectCard, { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS } from "../../projects/ProjectCard.svelte";
+  import { linkHost } from "../../site/links.ts";
   import { committeeName, committeeNames } from "../committees.ts";
   import { formatDateTimeLong } from "../dates.ts";
   import { Button, Callout, Dialog, Field, TextArea } from "../ui/index.ts";
@@ -16,7 +17,6 @@
   import {
     ANNOUNCEMENT_KIND_LABELS,
     MAX_NOTE_LENGTH,
-    linkHost,
     projectCardFromDoc,
     reviewDescription,
     reviewTitle,
@@ -116,7 +116,7 @@
   {#if approval !== null}
     {#if approval.announcement !== null}
       {@const announcement = approval.announcement}
-      {@const host = linkHost(announcement.linkUrl)}
+      {@const host = linkHost(announcement.linkUrl, { httpsOnly: true })}
       <AnnouncementPreview {announcement} />
       <dl class="approval-facts">
         <div><dt>Type</dt><dd>{ANNOUNCEMENT_KIND_LABELS[announcement.kind]}</dd></div>
@@ -137,8 +137,8 @@
       </dl>
     {:else if approval.project !== null}
       {@const project = approval.project}
-      {@const site = linkHost(project.siteUrl)}
-      {@const repo = linkHost(project.repoUrl)}
+      {@const site = linkHost(project.siteUrl, { httpsOnly: true })}
+      {@const repo = linkHost(project.repoUrl, { httpsOnly: true })}
       <div class="approval-card">
         <ProjectCard project={projectCardFromDoc(approval.subjectId, project)} href={null} headingLevel={3} loading="eager" />
       </div>

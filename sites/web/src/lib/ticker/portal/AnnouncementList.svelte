@@ -15,7 +15,8 @@
   import type { Announcement, AnnouncementTab } from "../../api/types.ts";
   import { formatAbsolute, formatRelative, formatShortDate } from "../../portal/dates.ts";
   import { Avatar, Badge, Button, CommitteeChip, Menu, StatusDot, type MenuItem } from "../../portal/ui/index.ts";
-  import { leavesLabel, linkHost, quoted, timeLeft } from "../format.ts";
+  import { linkHost } from "../../site/links.ts";
+  import { leavesLabel, quoted, timeLeft } from "../format.ts";
   import { kindIcon, kindLabel } from "../kinds.ts";
   import TimeLeft from "./TimeLeft.svelte";
 

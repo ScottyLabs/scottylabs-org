@@ -2,19 +2,22 @@
   // The featured project at the top of the Projects page (Figma 52:8705): a large cover, the
   // name and description, its facts and links. Narrow screens show the usual card instead.
   import ArrowUpRight from "@lucide/svelte/icons/arrow-up-right";
+  import Play from "@lucide/svelte/icons/play";
   import type { ProjectCard as Card } from "../api/types.ts";
   import Img from "../media/Img.svelte";
   import { COMMITTEES } from "../portal/committees.ts";
   import CommitteeChip from "../portal/ui/CommitteeChip.svelte";
   import SelectionBox from "../site/SelectionBox.svelte";
   import ProjectCard from "./ProjectCard.svelte";
-  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, linkHost, projectPath } from "./labels.ts";
+  import { linkHost } from "../site/links.ts";
+  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, projectPath } from "./labels.ts";
 
   let { project }: { project: Card } = $props();
 
   const href = $derived(projectPath(project.slug));
   const style = $derived(COMMITTEES[project.committee]);
   const description = $derived(project.excerpt.trim() === "" ? project.summary : project.excerpt);
+  const hasVideo = $derived(project.videoUrl !== undefined && project.videoUrl !== null);
 </script>
 
 <section class="featured" aria-labelledby="featured-label">
@@ -30,6 +33,7 @@
           fallbackWidth={960}
           fit="cover"
           loading="eager"
+          fetchpriority="high"
         />
       {:else}
         <span class="featured__monogram" aria-hidden="true">{project.name}</span>
@@ -65,9 +69,16 @@
               target="_blank"
               rel="noopener noreferrer"
             >
-              {linkHost(project.siteUrl)}
+              {linkHost(project.siteUrl) ?? "Website"}
               <ArrowUpRight size={16} strokeWidth={2} aria-hidden="true" />
               <span class="p-sr-only">(opens in a new tab)</span>
+            </a>
+          {/if}
+          {#if hasVideo}
+            <!-- To the video on the project page, which plays it there (Figma 52:8705). -->
+            <a class="featured__button featured__button--ghost" href={`${href}#watch`}>
+              <Play size={16} strokeWidth={2} aria-hidden="true" />
+              Watch video<span class="p-sr-only"> about {project.name}</span>
             </a>
           {/if}
         </div>
@@ -248,6 +259,16 @@
 
     &:hover {
       border-color: var(--p-text-secondary);
+    }
+  }
+  .featured__button--ghost {
+    position: relative;
+    z-index: 2;
+    background: transparent;
+    color: var(--p-text);
+
+    &:hover {
+      background: var(--p-surface-strong);
     }
   }
   .featured__narrow {

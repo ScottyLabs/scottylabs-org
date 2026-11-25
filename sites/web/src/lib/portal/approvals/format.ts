@@ -85,18 +85,6 @@ export function sentBackMessage(approval: Approval): string {
   return `Sent back to ${submitterFirstName(approval)} with your note.`;
 }
 
-/** "tartanhacks.com" from "https://www.tartanhacks.com/volunteer". Null when it is not a link. */
-export function linkHost(url: string | null): string | null {
-  if (url === null || url.trim() === "") return null;
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== "https:") return null;
-    return parsed.hostname.replace(/^www\./u, "");
-  } catch {
-    return null;
-  }
-}
-
 /** The submitted project as its card will look, for the preview. Drafts have no page yet. */
 export function projectCardFromDoc(id: string, doc: ProjectDoc): ProjectCard {
   return {

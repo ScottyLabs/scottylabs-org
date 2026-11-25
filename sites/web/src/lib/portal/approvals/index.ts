@@ -9,7 +9,6 @@ export {
   ANNOUNCEMENT_KIND_LABELS,
   MAX_NOTE_LENGTH,
   approvedMessage,
-  linkHost,
   projectCardFromDoc,
   reviewDescription,
   reviewTitle,

@@ -12,7 +12,8 @@
   import ProjectGallery from "./ProjectGallery.svelte";
   import ProjectTile from "./ProjectTile.svelte";
   import VideoPlayer from "./VideoPlayer.svelte";
-  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, linkHost, linkLabel } from "./labels.ts";
+  import { linkHost } from "../site/links.ts";
+  import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS, linkLabel } from "./labels.ts";
 
   let {
     project,
@@ -83,7 +84,7 @@
           <div class="details__links">
             {#if project.siteUrl !== null}
               <a class="site-link" href={project.siteUrl} target="_blank" rel="noopener noreferrer">
-                Visit {linkHost(project.siteUrl)}
+                Visit {linkHost(project.siteUrl) ?? "the website"}
                 <ArrowUpRight size={20} strokeWidth={2} aria-hidden="true" />
                 <span class="p-sr-only">(opens in a new tab)</span>
               </a>
@@ -281,6 +282,8 @@
     padding-top: 4px;
   }
   .site-link {
+    /* The public site has no global border-box rule; without it the padding adds to the 48 px. */
+    box-sizing: border-box;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -305,6 +308,7 @@
     }
   }
   .repo-link {
+    box-sizing: border-box;
     display: flex;
     align-items: center;
     gap: 12px;
