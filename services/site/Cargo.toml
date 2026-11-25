@@ -65,6 +65,8 @@ tower-http = { version = "0.6", features = [
 ] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+# Already built for sqlx (through stringprep); the Projects search folds accents with it.
+unicode-normalization = "0.1"
 url = "2"
 uuid = { version = "1", features = ["serde", "v4", "v7"] }
 

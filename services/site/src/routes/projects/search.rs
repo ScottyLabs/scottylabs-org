@@ -1,9 +1,8 @@
 //! Searching published projects for the Projects page (spec P-5). It mirrors `matchesSearch` in sites/web/src/lib/projects/filter.ts, which filters the cards the page has loaded: every word of the search must appear, ignoring case and accents, in the name, summary, description, committee, kind or status. Cards carry only the start of the description, so the page also asks the service, which looks through the whole of it.
 
-use sqlx::PgExecutor;
+use unicode_normalization::UnicodeNormalization;
 
 use super::doc::ProjectDoc;
-use crate::error::AppResult;
 use crate::richtext;
 
 /// The longest search read; the rest is ignored. The Projects page keeps at most 80 characters.
@@ -28,43 +27,21 @@ pub fn searchable_text(doc: &ProjectDoc) -> String {
 }
 
 /// Which of `texts` (from [`searchable_text`]) hold every word of `q`, in order. Everything matches a search without words.
-pub async fn matches<'e>(
-    db: impl PgExecutor<'e>,
-    q: &str,
-    texts: Vec<String>,
-) -> AppResult<Vec<bool>> {
-    if texts.is_empty() {
-        return Ok(Vec::new());
-    }
-    let count = texts.len();
-    let mut folded = fold_all(db, [q.to_owned()].into_iter().chain(texts).collect()).await?;
-    let texts = folded.split_off(1);
-    let words: Vec<&str> = folded
-        .first()
-        .map(|q| q.split(is_space).filter(|word| !word.is_empty()).collect())
-        .unwrap_or_default();
-    debug_assert_eq!(texts.len(), count);
-    Ok(texts
+pub fn matches(q: &str, texts: &[String]) -> Vec<bool> {
+    let q = fold(q);
+    let words: Vec<&str> = q.split(is_space).filter(|word| !word.is_empty()).collect();
+    texts
         .iter()
-        .map(|text| words.iter().all(|word| text.contains(word)))
-        .collect())
+        .map(|text| {
+            let text = fold(text);
+            words.iter().all(|word| text.contains(word))
+        })
+        .collect()
 }
 
-/// `fold` in filter.ts for many texts at once: compatibility decomposition (NFKD), then diacritics removed, then lowercase, so "cafe" finds "Caf\u{e9}". Postgres has the Unicode decomposition tables (`normalize`, which needs a UTF-8 database), so it decomposes; the rest happens here. Postgres's `lower` follows the database's collation, which may leave letters outside ASCII alone.
-async fn fold_all<'e>(db: impl PgExecutor<'e>, texts: Vec<String>) -> AppResult<Vec<String>> {
-    let decomposed: Vec<String> = sqlx::query_scalar(
-        "SELECT normalize(t, NFKD) FROM unnest($1::text[]) WITH ORDINALITY AS input(t, n) ORDER BY n",
-    )
-    .bind(texts)
-    .fetch_all(db)
-    .await?;
-    Ok(decomposed.iter().map(|text| finish_fold(text)).collect())
-}
-
-/// The part of [`fold_all`] after decomposition.
-fn finish_fold(decomposed: &str) -> String {
-    decomposed
-        .chars()
+/// `fold` in filter.ts: compatibility decomposition (NFKD), then diacritics removed, then lowercase, so "cafe" finds "Caf\u{e9}". Done here rather than with Postgres's `normalize`, which works only in a UTF-8 database.
+fn fold(text: &str) -> String {
+    text.nfkd()
         .filter(|c| !is_diacritic(*c))
         .collect::<String>()
         .to_lowercase()
@@ -151,16 +128,26 @@ mod tests {
     }
 
     #[test]
-    fn decomposed_text_loses_its_accents_and_case() {
-        // "Caf\u{e9} \u{c5}NGSTR\u{d6}M" after NFKD.
-        assert_eq!(
-            finish_fold("Cafe\u{301} A\u{30a}NGSTRO\u{308}M"),
-            "cafe angstrom"
-        );
-        assert_eq!(
-            finish_fold("\u{3a3}\u{39f}\u{3a3}"),
-            "\u{3c3}\u{3bf}\u{3c2}"
-        );
+    fn text_loses_its_accents_and_case() {
+        assert_eq!(fold("Caf\u{e9} \u{c5}NGSTR\u{d6}M"), "cafe angstrom");
+        // Already decomposed text folds the same way.
+        assert_eq!(fold("Cafe\u{301} A\u{30a}NGSTRO\u{308}M"), "cafe angstrom");
+        assert_eq!(fold("\u{3a3}\u{39f}\u{3a3}"), "\u{3c3}\u{3bf}\u{3c2}");
+        // Compatibility forms, as NFKD in the page: the fi ligature and full-width letters.
+        assert_eq!(fold("\u{fb01}le \u{ff21}\u{ff22}"), "file ab");
+    }
+
+    #[test]
+    fn every_word_must_match_somewhere() {
+        let texts = [
+            "CMU Maps Room-level directions across campus".to_owned(),
+            "Caf\u{e9} finder Tech".to_owned(),
+        ];
+        assert_eq!(matches("maps campus", &texts), [true, false]);
+        assert_eq!(matches("CAFE tech", &texts), [false, true]);
+        assert_eq!(matches("maps tech", &texts), [false, false]);
+        assert_eq!(matches(" \t ", &texts), [true, true]);
+        assert!(matches("maps", &[]).is_empty());
     }
 
     #[test]

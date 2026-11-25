@@ -138,26 +138,20 @@ async fn published_rows<'e>(
 }
 
 /// The rows that match a search, in their order.
-async fn search_rows(
-    state: &AppState,
-    q: &str,
-    rows: Vec<PublishedRow>,
-) -> AppResult<Vec<PublishedRow>> {
-    // Reading every description as plain text parses its HTML, which is CPU work.
-    let (rows, texts) = blocking(move || {
-        let texts = rows
+async fn search_rows(q: String, rows: Vec<PublishedRow>) -> AppResult<Vec<PublishedRow>> {
+    // Reading every description as plain text parses its HTML, and folding it walks every character: CPU work.
+    blocking(move || {
+        let texts: Vec<String> = rows
             .iter()
             .map(|row| search::searchable_text(&row.published))
             .collect();
-        (rows, texts)
+        let hits = search::matches(&q, &texts);
+        rows.into_iter()
+            .zip(hits)
+            .filter_map(|(row, hit)| hit.then_some(row))
+            .collect()
     })
-    .await?;
-    let hits = search::matches(&state.db, q, texts).await?;
-    Ok(rows
-        .into_iter()
-        .zip(hits)
-        .filter_map(|(row, hit)| hit.then_some(row))
-        .collect())
+    .await
 }
 
 /// Public answers can be cached for a minute and read from any site, errors included.
@@ -187,7 +181,7 @@ async fn list_projects(state: &AppState, query: Option<&str>) -> AppResult<Respo
     let q = query_param(query, "q").map(|q| search::capped(&q));
     let mut rows = published_rows(&state.db, committee).await?;
     if let Some(q) = q {
-        rows = search_rows(state, &q, rows).await?;
+        rows = search_rows(q, rows).await?;
     }
     let projects = rows.iter().map(PublishedRow::card).collect();
     Ok(Json(PublicProjectsResponse { projects }).into_response())
