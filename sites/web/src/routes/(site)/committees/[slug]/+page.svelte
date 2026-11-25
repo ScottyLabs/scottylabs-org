@@ -48,6 +48,9 @@
 <svelte:head>
   <title>{style.name} - ScottyLabs</title>
   <meta name="description" content={description} />
+  <!-- The page is prerendered without its content. Asking for it from the HTML, before the app
+       has loaded, has the content and then the cover photo, the largest paint, arrive sooner. -->
+  <link rel="preload" as="fetch" crossorigin="anonymous" href={`/api/public/committees/${data.slug}`} />
 </svelte:head>
 
 <div class="page cb-scope" style:--cb-accent={style.color}>

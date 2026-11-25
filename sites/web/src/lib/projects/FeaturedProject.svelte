@@ -31,6 +31,7 @@
           fallbackWidth={960}
           fit="cover"
           loading="eager"
+          fetchpriority="high"
         />
       {:else}
         <span class="featured__monogram" aria-hidden="true">{project.name}</span>
