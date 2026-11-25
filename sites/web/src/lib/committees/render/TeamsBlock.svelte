@@ -132,11 +132,13 @@
     padding: 0;
     list-style: none;
   }
+  /* Figma 74:4293: 142 px tall, with the channel at the bottom. */
   .teams__card {
     display: flex;
     flex-direction: column;
     gap: 6px;
     box-sizing: border-box;
+    min-height: 142px;
     padding: 20px;
     border: 1px solid var(--cb-border);
     border-radius: 12px;
@@ -159,7 +161,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    margin: 0;
+    margin: auto 0 0;
     padding-top: 8px;
     color: var(--cb-text-tertiary);
     font-family: var(--p-mono);
@@ -188,6 +190,10 @@
     .teams__grid {
       grid-template-columns: minmax(0, 1fr);
       gap: 12px;
+    }
+    /* One card per row: each takes the height of its own text. */
+    .teams__card {
+      min-height: 0;
     }
   }
   @container committee-page (width < 640px) {
