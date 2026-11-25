@@ -14,6 +14,7 @@ export { default as DogMark } from "./DogMark.svelte";
 export { default as EmptyState } from "./EmptyState.svelte";
 export { default as Field } from "./Field.svelte";
 export { default as IconButton } from "./IconButton.svelte";
+export { default as KeptChangesNotice } from "./KeptChangesNotice.svelte";
 export { default as Menu, type MenuTriggerProps } from "./Menu.svelte";
 export { default as PageHeader } from "./PageHeader.svelte";
 export { default as PersonPicker } from "./PersonPicker.svelte";

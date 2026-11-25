@@ -96,6 +96,12 @@ export class PageEditor {
     return this.writable && this.doc.blocks.length < MAX_BLOCKS;
   }
 
+  /** The page and the version it builds on, while the service does not have all of it yet. */
+  unsaved(): { doc: CommitteePageDoc; version: number } | null {
+    if (!this.canEdit || this.#revision === this.#savedRevision) return null;
+    return { doc: this.doc, version: this.version };
+  }
+
   /** True while changes wait to be saved or are being saved. */
   get hasPendingChanges(): boolean {
     return (

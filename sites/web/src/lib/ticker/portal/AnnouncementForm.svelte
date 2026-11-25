@@ -4,7 +4,7 @@
   // Admins and directors publish; leads send it to their director for approval. On phones the
   // main button stays in view at the bottom.
   import Link from "@lucide/svelte/icons/link";
-  import { tick } from "svelte";
+  import { onMount, tick } from "svelte";
   import { isApiError } from "../../api/client.ts";
   import type {
     Announcement,
@@ -14,12 +14,21 @@
     PersonRef,
     TickerSource,
   } from "../../api/types.ts";
-  import { committeeName, getPortalSession } from "../../portal/index.ts";
-  import { Button, Callout, Field, TextArea, TextInput } from "../../portal/ui/index.ts";
+  import {
+    committeeName,
+    forgetChanges,
+    getPortalSession,
+    getToasts,
+    keepChanges,
+    keptChanges,
+    restorePlan,
+  } from "../../portal/index.ts";
+  import { Button, Callout, Field, KeptChangesNotice, TextArea, TextInput } from "../../portal/ui/index.ts";
   import { COMMITTEES } from "../../portal/committees.ts";
   import { MESSAGE_MAX, expiryProblem, presetExpiry, sourceOrder } from "../format.ts";
   import { KINDS } from "../kinds.ts";
   import { approversOf, postsDirectly } from "./api.ts";
+  import { type ComposerValues, isComposerValues } from "./composer-values.ts";
   import { actionNote, composerRole, submitLabel, type ComposerRole } from "./wording.ts";
   import ExpiryField from "./ExpiryField.svelte";
   import ComposerPreview from "./ComposerPreview.svelte";
@@ -30,6 +39,7 @@
     editing = null,
     live,
     now,
+    keepAs,
     onsave,
   }: {
     /** Starting values, for posting an expired announcement again. */
@@ -40,11 +50,17 @@
     live: AnnouncementListResponse | null;
     /** The current time, kept fresh by the page. */
     now: Date;
+    /**
+     * Where what is typed is kept if the session ends before it is saved (composerKey), and what
+     * it is written on top of: the edited announcement's update time, or "" for a new one.
+     */
+    keepAs: { key: string; base: string };
     /** Saves the announcement. Throws an ApiError the form shows beside its fields. */
     onsave: (input: AnnouncementInput, role: ComposerRole, approvers: PersonRef[]) => Promise<void>;
   } = $props();
 
   const session = getPortalSession();
+  const toasts = getToasts();
   const permissions = $derived(session.current.permissions);
   const sources = $derived(sourceOrder(permissions.tickerSources));
 
@@ -53,15 +69,35 @@
     return editing?.[key] ?? initial?.[key] ?? fallback;
   }
 
-  let kind = $state<AnnouncementKind>(start("kind", "event"));
-  let committee = $state<TickerSource>(start("committee", sourceOrder(session.current.permissions.tickerSources)[0] ?? "club"));
-  let message = $state(start("message", ""));
-  let linkUrl = $state(start("linkUrl", null) ?? "");
   function startExpiry(): string {
     return editing?.expiresAt ?? presetExpiry("1w", now);
   }
 
-  let expiresAt = $state<string | null>(startExpiry());
+  const startingValues: ComposerValues = {
+    kind: start("kind", "event"),
+    committee: start("committee", sourceOrder(session.current.permissions.tickerSources)[0] ?? "club"),
+    message: start("message", ""),
+    linkUrl: start("linkUrl", null) ?? "",
+    expiresAt: startExpiry(),
+  };
+
+  // What was typed before the session ended comes back: on its own when the announcement has not
+  // changed since, otherwise when the person chooses to (spec S-5).
+  const userId = session.current.user.id;
+  // svelte-ignore state_referenced_locally
+  const keptKey = keepAs.key;
+  const kept = keptChanges(keptKey, userId, isComposerValues);
+  // svelte-ignore state_referenced_locally
+  const plan = restorePlan(kept, { base: keepAs.base, value: startingValues });
+  const first = plan === "restore" && kept !== null ? kept.value : startingValues;
+  if (plan !== "ask") forgetChanges(keptKey);
+  let keptValues = $state.raw(plan === "ask" ? kept : null);
+
+  let kind = $state<AnnouncementKind>(first.kind);
+  let committee = $state<TickerSource>(first.committee);
+  let message = $state(first.message);
+  let linkUrl = $state(first.linkUrl);
+  let expiresAt = $state<string | null>(first.expiresAt);
   let picking = $state(false);
 
   let errors = $state<Record<string, string>>({});
@@ -89,6 +125,41 @@
   const note = $derived(actionNote(role, committeeName(committee), approvers.map((person) => person.name)));
 
   const draft = $derived({ kind, committee, message: message.trim() || "Your announcement", linkUrl: linkUrl.trim() || null });
+
+  onMount(() => {
+    if (plan === "restore") toasts.info("What you wrote before your session ended is back.");
+    return session.onEnd(keepUnsaved);
+  });
+
+  function current(): ComposerValues {
+    return { kind, committee, message, linkUrl, expiresAt };
+  }
+
+  /** Keeps what was typed when the session ends, unless nothing changed. */
+  function keepUnsaved() {
+    const values = current();
+    if (JSON.stringify(values) === JSON.stringify(startingValues)) return;
+    keepChanges(keptKey, { userId, base: keepAs.base, value: values });
+  }
+
+  /**
+   * The choice in the kept changes notice. Its buttons go with it, so focus moves to the message.
+   */
+  async function chooseKept(restore: boolean) {
+    if (restore && keptValues !== null) {
+      const values = keptValues.value;
+      kind = values.kind;
+      committee = values.committee;
+      message = values.message;
+      linkUrl = values.linkUrl;
+      expiresAt = values.expiresAt;
+      errors = {};
+    }
+    forgetChanges(keptKey);
+    keptValues = null;
+    await tick();
+    messageInput?.focus();
+  }
 
   function onMessageInput() {
     // One line only: pasted line breaks become spaces.
@@ -160,6 +231,9 @@
   </div>
 
   <div class="composer__card">
+    {#if keptValues !== null}
+      <KeptChangesNotice subject="this announcement" onrestore={() => void chooseKept(true)} ondiscard={() => void chooseKept(false)} />
+    {/if}
     <fieldset class="composer__group">
       <legend class="composer__legend">Type</legend>
       <div class="composer__pills">

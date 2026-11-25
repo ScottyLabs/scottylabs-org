@@ -45,6 +45,11 @@ export class DraftSaver {
     return JSON.stringify(this.#latest) !== this.#savedJson;
   }
 
+  /** True when the server already has exactly this draft. */
+  isSaved(doc: ProjectDoc): boolean {
+    return JSON.stringify(doc) === this.#savedJson;
+  }
+
   /** Call after every edit with a plain copy of the draft. */
   change(doc: ProjectDoc): void {
     this.#latest = doc;

@@ -5,8 +5,10 @@ import {
   type Block,
   type BlockType,
   type BlockWidth,
+  type CommitteePageDoc,
   MAX_BLOCKS,
 } from "../api/types.ts";
+import { isRecord } from "../portal/kept-changes.ts";
 import { JOIN_URL } from "./links.ts";
 
 export const BLOCK_LABELS: Readonly<Record<BlockType, string>> = {
@@ -167,4 +169,29 @@ export function duplicateBlock(block: Block): Block {
 
 export function canMove(block: Block): boolean {
   return block.type !== "cover";
+}
+
+/**
+ * True for a value shaped like a page, such as one kept in this tab when the session ended: blocks
+ * of known types and widths with their props, and the settings. The service checks everything else
+ * when it is saved.
+ */
+export function isPageDoc(value: unknown): value is CommitteePageDoc {
+  return (
+    isRecord(value) &&
+    isRecord(value.settings) &&
+    Array.isArray(value.blocks) &&
+    value.blocks.every(
+      (block) =>
+        isRecord(block) &&
+        typeof block.id === "string" &&
+        isBlockType(block.type) &&
+        BLOCK_WIDTHS[block.type].some((width) => width === block.width) &&
+        isRecord(block.props),
+    )
+  );
+}
+
+function isBlockType(value: unknown): value is BlockType {
+  return typeof value === "string" && Object.hasOwn(BLOCK_WIDTHS, value);
 }

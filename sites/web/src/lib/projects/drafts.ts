@@ -8,6 +8,9 @@ import type {
   ProjectState,
 } from "../api/types.ts";
 import { plainText } from "../editor/sanitize.ts";
+import { isCommitteeSlug } from "../portal/committees.ts";
+import { isRecord } from "../portal/kept-changes.ts";
+import { PROJECT_KIND_LABELS, PROJECT_STATUS_LABELS } from "./labels.ts";
 
 /** Longest card excerpt; matches EXCERPT_CHARS in services/site/src/routes/projects/doc.rs. */
 export const EXCERPT_CHARS = 240;
@@ -118,4 +121,33 @@ function blankToNull(value: string | null): string | null {
 /** Two drafts with the same content, for knowing whether there is anything to save. */
 export function sameDoc(a: ProjectDoc, b: ProjectDoc): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * True for a value shaped like a draft, such as one kept in this tab when the session ended. The
+ * service checks everything else when it is saved.
+ */
+export function isProjectDoc(value: unknown): value is ProjectDoc {
+  if (!isRecord(value)) return false;
+  const text = (key: string) => typeof value[key] === "string";
+  const link = (key: string) => value[key] === null || typeof value[key] === "string";
+  return (
+    text("name") &&
+    text("summary") &&
+    text("description") &&
+    isCommitteeSlug(value.committee) &&
+    Array.isArray(value.builtWith) &&
+    value.builtWith.every(isCommitteeSlug) &&
+    typeof value.status === "string" &&
+    Object.hasOwn(PROJECT_STATUS_LABELS, value.status) &&
+    typeof value.kind === "string" &&
+    Object.hasOwn(PROJECT_KIND_LABELS, value.kind) &&
+    link("siteUrl") &&
+    link("repoUrl") &&
+    link("videoUrl") &&
+    Array.isArray(value.media) &&
+    value.media.every(
+      (image) => isRecord(image) && typeof image.src === "string" && typeof image.alt === "string",
+    )
+  );
 }

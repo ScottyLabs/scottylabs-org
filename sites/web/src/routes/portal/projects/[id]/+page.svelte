@@ -17,6 +17,13 @@
   import type { ProjectDoc, ProjectEditorResponse } from "#lib/api/types.ts";
   import { COMMITTEES } from "#lib/portal/committees.ts";
   import { formatUpdated } from "#lib/portal/dates.ts";
+  import {
+    type KeptChanges,
+    forgetChanges,
+    keepChanges,
+    keptChanges,
+    restorePlan,
+  } from "#lib/portal/kept-changes.ts";
   import PortalError from "#lib/portal/PortalError.svelte";
   import { getPortalSession } from "#lib/portal/session.svelte.ts";
   import { getToasts } from "#lib/portal/toasts.svelte.ts";
@@ -25,11 +32,12 @@
     Button,
     Callout,
     Dialog,
+    KeptChangesNotice,
     Menu,
     type MenuItem,
     Skeleton,
   } from "#lib/portal/ui/index.ts";
-  import { draftCard, draftDetail, stateLabel } from "#lib/projects/drafts.ts";
+  import { draftCard, draftDetail, isProjectDoc, stateLabel } from "#lib/projects/drafts.ts";
   import ApprovalNotice from "#lib/projects/editor/ApprovalNotice.svelte";
   import { DraftSaver } from "#lib/projects/editor/draft-saver.svelte.ts";
   import LivePreview from "#lib/projects/editor/LivePreview.svelte";
@@ -43,6 +51,8 @@
 
   const session = getPortalSession();
   const toasts = getToasts();
+  // The page shows only while signed in; this is who made any changes kept when the session ends.
+  const userId = session.current.user.id;
 
   const id = $derived(page.params.id ?? "");
   let server = $state.raw<Project | null>(null);
@@ -56,6 +66,8 @@
   let discardOpen = $state(false);
   let archiveOpen = $state(false);
   let now = $state(new Date());
+  /** Changes kept when the session ended, waiting for a choice because the project changed since. */
+  let keptDraft = $state.raw<KeptChanges<ProjectDoc> | null>(null);
 
   const canEdit = $derived(server?.canEdit ?? false);
   const isAdmin = $derived(session.permissions?.isAdmin ?? false);
@@ -128,6 +140,62 @@
 
   onDestroy(() => saver?.destroy());
 
+  // When the session ends, the shell closes this page and sends the person to sign in. Whatever
+  // the server does not have yet is kept in this tab and put back when they return (spec S-5).
+  onMount(() => session.onEnd(keepUnsaved));
+
+  const keptKey = (projectId: string) => `project:${projectId}`;
+
+  function keepUnsaved(): void {
+    if (saver === null || server === null || doc === null) return;
+    const latest = $state.snapshot(doc);
+    if (saver.isSaved(latest)) return;
+    keepChanges(keptKey(server.id), { userId, base: server.updatedAt, value: latest });
+  }
+
+  /**
+   * Puts back changes kept when the session ended. They go straight back when nobody saved the
+   * project since; otherwise the person chooses.
+   */
+  function offerKeptChanges(project: Project): void {
+    keptDraft = null;
+    if (!project.canEdit) return;
+    const key = keptKey(project.id);
+    const kept = keptChanges(key, userId, isProjectDoc);
+    const plan = restorePlan(kept, { base: project.updatedAt, value: project.draft });
+    if (kept === null || plan === "none") {
+      forgetChanges(key);
+    } else if (plan === "restore") {
+      putBack(kept.value);
+    } else {
+      keptDraft = kept;
+    }
+  }
+
+  /** Puts kept changes in the form; the saver then saves them like any edit. */
+  function putBack(value: ProjectDoc): void {
+    if (server === null) return;
+    forgetChanges(keptKey(server.id));
+    keptDraft = null;
+    doc = structuredClone(value);
+    toasts.info("Your changes that were not saved when your session ended are back.");
+  }
+
+  /**
+   * The choice in the kept changes notice. Its buttons go with it, so focus starts again from the
+   * heading.
+   */
+  function chooseKept(restore: boolean): void {
+    if (restore && keptDraft !== null) putBack(keptDraft.value);
+    else discardKept();
+    void focusHeading();
+  }
+
+  function discardKept(): void {
+    if (server !== null) forgetChanges(keptKey(server.id));
+    keptDraft = null;
+  }
+
   // Leaving with a save on its way sends it right away. Leaving with changes the server refused
   // asks first, since they would be lost.
   beforeNavigate(({ cancel, willUnload }) => {
@@ -162,6 +230,7 @@
       const response = await get<ProjectEditorResponse>(`/projects/${encodeURIComponent(current)}`);
       if (current !== id) return;
       startEditing(response.project);
+      offerKeptChanges(response.project);
     } catch (error) {
       if (isApiError(error)) loadError = error;
     }
@@ -259,6 +328,7 @@
     saver?.destroy();
     try {
       const response = await post<ProjectEditorResponse>(`/projects/${server.id}/discard`);
+      discardKept();
       startEditing(response.project);
       discardOpen = false;
       toasts.success("Your changes are discarded. The draft matches the published page again.");
@@ -404,6 +474,13 @@
   {/if}
 
   <div class="notices">
+    {#if keptDraft !== null && canEdit}
+      <KeptChangesNotice
+        subject="this project"
+        onrestore={() => chooseKept(true)}
+        ondiscard={() => chooseKept(false)}
+      />
+    {/if}
     {#if !canEdit}
       <Callout tone="info">
         You can view this project. Admins, the director of {COMMITTEES[server.draft.committee].name}

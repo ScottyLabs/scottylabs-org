@@ -12,6 +12,7 @@
   import ComposerHeading from "#lib/ticker/portal/ComposerHeading.svelte";
   import { createAnnouncement, getAnnouncement, listAnnouncements } from "#lib/ticker/portal/api.ts";
   import { Clock } from "#lib/ticker/portal/clock.svelte.ts";
+  import { composerKey } from "#lib/ticker/portal/composer-values.ts";
   import type { ComposerRole } from "#lib/ticker/portal/wording.ts";
 
   const session = getPortalSession();
@@ -86,7 +87,7 @@
     {#if loadError !== null}
       <Callout tone="warning">{loadError} You can still write a new one below.</Callout>
     {/if}
-    <AnnouncementForm {initial} {live} now={clock.now} onsave={save} />
+    <AnnouncementForm {initial} {live} now={clock.now} keepAs={{ key: composerKey(null, from), base: "" }} onsave={save} />
   {/if}
 </div>
 

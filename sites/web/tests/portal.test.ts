@@ -33,6 +33,14 @@ import {
   isNoAccessPath,
   portalRedirect,
 } from "../src/lib/portal/access.ts";
+import {
+  KEPT_FOR_MS,
+  type KeptStore,
+  forgetChanges,
+  keepChanges,
+  keptChanges,
+  restorePlan,
+} from "../src/lib/portal/kept-changes.ts";
 import { replaceLocation } from "../src/lib/portal/navigation.ts";
 import { safeReturnTo, signInHref } from "../src/lib/portal/paths.ts";
 import { describeRoles, firstName, primaryRoleLabel } from "../src/lib/portal/roles.ts";
@@ -386,4 +394,88 @@ Deno.test("a closing dialog gives focus back to its opener, or to the page headi
   assert.equal(focusAfterDialog({ isConnected: false }, body, true), "heading");
   // The page already moved focus on closing, so it stays where the page put it.
   assert.equal(focusAfterDialog({ isConnected: false }, body, false), null);
+});
+
+/** A stand-in for sessionStorage. */
+function memoryStore(): KeptStore & { items: Map<string, string> } {
+  const items = new Map<string, string>();
+  return {
+    items,
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => void items.set(key, value),
+    removeItem: (key) => void items.delete(key),
+  };
+}
+
+const isText = (value: unknown): value is string => typeof value === "string";
+
+Deno.test("work kept when the session ends comes back only to the person who made it", () => {
+  const store = memoryStore();
+  const noon = Date.UTC(2026, 10, 25, 12);
+  keepChanges("project:p1", { userId: "u1", base: "v1", value: "Edited" }, noon, store);
+
+  assert.deepEqual(keptChanges("project:p1", "u1", isText, noon + 60_000, store), {
+    userId: "u1",
+    base: "v1",
+    value: "Edited",
+    keptAt: noon,
+  });
+  // Nothing under another key.
+  assert.equal(keptChanges("project:p2", "u1", isText, noon, store), null);
+  // Someone else signing in to this tab neither gets it nor leaves it for later.
+  assert.equal(keptChanges("project:p1", "u2", isText, noon, store), null);
+  assert.equal(store.items.size, 0);
+});
+
+Deno.test("kept work is dropped when it is too old, unreadable or the wrong shape", () => {
+  const store = memoryStore();
+  const noon = Date.UTC(2026, 10, 25, 12);
+  keepChanges("old", { userId: "u1", base: "", value: "x" }, noon, store);
+  assert.equal(keptChanges("old", "u1", isText, noon + KEPT_FOR_MS + 1, store), null);
+  // Kept "in the future" means the clock moved; do not trust it.
+  keepChanges("future", { userId: "u1", base: "", value: "x" }, noon + 60_000, store);
+  assert.equal(keptChanges("future", "u1", isText, noon, store), null);
+  store.setItem("sl:kept-changes:broken", "{not json");
+  assert.equal(keptChanges("broken", "u1", isText, noon, store), null);
+  keepChanges("shape", { userId: "u1", base: "", value: 42 }, noon, store);
+  assert.equal(keptChanges("shape", "u1", isText, noon, store), null);
+  store.setItem(
+    "sl:kept-changes:fields",
+    JSON.stringify({ userId: "u1", value: "x", keptAt: noon }),
+  );
+  assert.equal(keptChanges("fields", "u1", isText, noon, store), null);
+  assert.equal(store.items.size, 0);
+
+  keepChanges("gone", { userId: "u1", base: "", value: "x" }, noon, store);
+  forgetChanges("gone", store);
+  assert.equal(keptChanges("gone", "u1", isText, noon, store), null);
+});
+
+Deno.test("blocked or full storage never stops the editor", () => {
+  const failing: KeptStore = {
+    getItem: () => {
+      throw new DOMException("blocked", "SecurityError");
+    },
+    setItem: () => {
+      throw new DOMException("full", "QuotaExceededError");
+    },
+    removeItem: () => {
+      throw new DOMException("blocked", "SecurityError");
+    },
+  };
+  keepChanges("k", { userId: "u1", base: "", value: "x" }, Date.now(), failing);
+  assert.equal(keptChanges("k", "u1", isText, Date.now(), failing), null);
+  forgetChanges("k", failing);
+  keepChanges("k", { userId: "u1", base: "", value: "x" }, Date.now(), null);
+  assert.equal(keptChanges("k", "u1", isText, Date.now(), null), null);
+});
+
+Deno.test("kept work goes back on its own only when nothing changed underneath it", () => {
+  const kept = { userId: "u1", base: "7", value: { summary: "Edited" }, keptAt: 0 };
+  assert.equal(restorePlan(null, { base: "7", value: { summary: "Saved" } }), "none");
+  // Already saved after all: nothing to put back.
+  assert.equal(restorePlan(kept, { base: "8", value: { summary: "Edited" } }), "none");
+  assert.equal(restorePlan(kept, { base: "7", value: { summary: "Saved" } }), "restore");
+  // Someone saved since: putting it back would replace their work, so the person chooses.
+  assert.equal(restorePlan(kept, { base: "8", value: { summary: "Theirs" } }), "ask");
 });

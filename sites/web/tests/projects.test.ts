@@ -11,6 +11,7 @@ import {
   draftDetail,
   excerpt,
   filterAnnouncement,
+  isProjectDoc,
   isStateFilter,
   matchesRow,
   projectCount,
@@ -446,4 +447,19 @@ Deno.test("the portal list says how many projects its filters leave", () => {
   assert.equal(filterAnnouncement(15, 15), "Showing all 15 projects.");
   assert.equal(filterAnnouncement(1, 1), "Showing all 1 project.");
   assert.equal(filterAnnouncement(0, 15), "No projects match these filters.");
+});
+
+Deno.test("only values shaped like a draft are put back into the editor", () => {
+  assert.equal(isProjectDoc(structuredClone(DOC)), true);
+  assert.equal(isProjectDoc(JSON.parse(JSON.stringify(DOC))), true);
+  assert.equal(isProjectDoc(null), false);
+  assert.equal(isProjectDoc([]), false);
+  assert.equal(isProjectDoc({ ...DOC, name: 3 }), false);
+  assert.equal(isProjectDoc({ ...DOC, committee: "marketing" }), false);
+  assert.equal(isProjectDoc({ ...DOC, builtWith: ["tech", "nope"] }), false);
+  assert.equal(isProjectDoc({ ...DOC, status: "sunset" }), false);
+  assert.equal(isProjectDoc({ ...DOC, kind: "toString" }), false);
+  assert.equal(isProjectDoc({ ...DOC, siteUrl: 1 }), false);
+  assert.equal(isProjectDoc({ ...DOC, media: "cover.jpg" }), false);
+  assert.equal(isProjectDoc({ ...DOC, media: [{ src: "/media/a" }] }), false);
 });

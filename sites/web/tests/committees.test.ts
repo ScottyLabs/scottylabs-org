@@ -12,6 +12,7 @@ import {
   blockName,
   defaultWidth,
   duplicateBlock,
+  isPageDoc,
   newBlock,
   newBlockId,
   widthHint,
@@ -521,4 +522,18 @@ Deno.test("the page's headings sit one level lower on the editor canvas", () => 
   assert.equal(headingTag(1, true), "h2");
   assert.equal(headingTag(2, true), "h3");
   assert.equal(headingTag(3, true), "h4");
+});
+
+Deno.test("only values shaped like a page are put back into the editor", () => {
+  const page = doc([cover(), text("what", 8), stats()]);
+  assert.equal(isPageDoc(JSON.parse(JSON.stringify(page))), true);
+  assert.equal(isPageDoc(null), false);
+  assert.equal(isPageDoc({ blocks: page.blocks }), false);
+  assert.equal(isPageDoc({ ...page, blocks: "none" }), false);
+  assert.equal(isPageDoc({ ...page, blocks: [{ ...stats(), type: "marquee" }] }), false);
+  assert.equal(isPageDoc({ ...page, blocks: [{ ...stats(), type: "constructor" }] }), false);
+  // Stats are never a third wide.
+  assert.equal(isPageDoc({ ...page, blocks: [{ ...stats(), width: 4 }] }), false);
+  assert.equal(isPageDoc({ ...page, blocks: [{ ...stats(), id: 1 }] }), false);
+  assert.equal(isPageDoc({ ...page, blocks: [{ ...stats(), props: null }] }), false);
 });

@@ -12,6 +12,7 @@
   import ComposerHeading from "#lib/ticker/portal/ComposerHeading.svelte";
   import { getAnnouncement, listAnnouncements, updateAnnouncement } from "#lib/ticker/portal/api.ts";
   import { Clock } from "#lib/ticker/portal/clock.svelte.ts";
+  import { composerKey } from "#lib/ticker/portal/composer-values.ts";
   import type { ComposerRole } from "#lib/ticker/portal/wording.ts";
 
   const session = getPortalSession();
@@ -118,7 +119,13 @@
       </Callout>
     {/if}
     {#key announcement.id}
-      <AnnouncementForm editing={announcement} {live} now={clock.now} onsave={save} />
+      <AnnouncementForm
+        editing={announcement}
+        {live}
+        now={clock.now}
+        keepAs={{ key: composerKey(announcement.id), base: announcement.updatedAt }}
+        onsave={save}
+      />
     {/key}
   {/if}
 </div>

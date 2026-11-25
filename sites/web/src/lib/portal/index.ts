@@ -5,6 +5,7 @@
 export * from "./access.ts";
 export * from "./committees.ts";
 export * from "./dates.ts";
+export * from "./kept-changes.ts";
 export * from "./navigation.ts";
 export * from "./paths.ts";
 export * from "./roles.ts";

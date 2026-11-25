@@ -22,6 +22,7 @@ import {
 } from "../src/lib/ticker/format.ts";
 import { offersList, reservesSpace, tickerMode } from "../src/lib/ticker/mode.ts";
 import type { Announcement, AnnouncementListResponse } from "../src/lib/api/types.ts";
+import { composerKey, isComposerValues } from "../src/lib/ticker/portal/composer-values.ts";
 import { addedMessage, appendPage } from "../src/lib/ticker/portal/paging.ts";
 import { actionNote, composerRole, submitLabel } from "../src/lib/ticker/portal/wording.ts";
 
@@ -234,4 +235,26 @@ Deno.test("show more says how many it added and how many are shown", () => {
   // The total may lag behind what is shown.
   assert.equal(addedMessage(20, 120, 118), "Added 20 more announcements. Showing all 120.");
   assert.equal(addedMessage(0, 50, 50), "No more announcements. Showing all 50.");
+});
+
+Deno.test("the composer keeps what was typed under its own key, and puts back only real values", () => {
+  assert.equal(composerKey(null), "announcement:new");
+  assert.equal(composerKey(null, "a1"), "announcement:new:a1");
+  assert.equal(composerKey("a2"), "announcement:a2");
+  assert.equal(composerKey("a2", "a1"), "announcement:a2");
+
+  const values = {
+    kind: "event",
+    committee: "club",
+    message: "Work sessions run every Saturday.",
+    linkUrl: "",
+    expiresAt: "2026-12-01T04:59:00.000Z",
+  };
+  assert.equal(isComposerValues(values), true);
+  assert.equal(isComposerValues({ ...values, committee: "tech", expiresAt: null }), true);
+  assert.equal(isComposerValues({ ...values, kind: "rumor" }), false);
+  assert.equal(isComposerValues({ ...values, committee: "everyone" }), false);
+  assert.equal(isComposerValues({ ...values, linkUrl: null }), false);
+  assert.equal(isComposerValues({ ...values, expiresAt: 5 }), false);
+  assert.equal(isComposerValues("event"), false);
 });

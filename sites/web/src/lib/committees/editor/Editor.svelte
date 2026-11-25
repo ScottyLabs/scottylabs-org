@@ -6,12 +6,20 @@
   import { onDestroy, onMount, tick } from "svelte";
   import { MediaQuery } from "svelte/reactivity";
   import { isApiError } from "../../api/client.ts";
-  import type { Block, CommitteePageEditorResponse } from "../../api/types.ts";
-  import { getPortalSession, getToasts } from "../../portal/index.ts";
-  import { Button, Callout, Dialog, lockScroll } from "../../portal/ui/index.ts";
+  import type { Block, CommitteePageDoc, CommitteePageEditorResponse } from "../../api/types.ts";
+  import {
+    type KeptChanges,
+    forgetChanges,
+    getPortalSession,
+    getToasts,
+    keepChanges,
+    keptChanges,
+    restorePlan,
+  } from "../../portal/index.ts";
+  import { Button, Callout, Dialog, KeptChangesNotice, lockScroll } from "../../portal/ui/index.ts";
   import { focusIsLost } from "../../portal/ui/focus.ts";
   import { discardChanges, loadEditor, releaseLockOnExit } from "../api.ts";
-  import { MAX_BLOCKS, blockName } from "../blocks.ts";
+  import { MAX_BLOCKS, blockName, isPageDoc } from "../blocks.ts";
   import { moveSentence } from "../layout.ts";
   import { savedLabel } from "../status.ts";
   import BlockLibrary from "./BlockLibrary.svelte";
@@ -49,16 +57,77 @@
   let checking = $state(false);
   let root: HTMLElement | undefined = $state();
 
+  // When the session ends, the shell closes the editor and sends the person to sign in. Changes
+  // the service does not have yet are kept in this tab and put back when they return (spec S-5).
+  // The editor opens only while signed in, so this is who made them.
+  const userId = session.current.user.id;
+  const keptKey = `committee-page:${editor.slug}`;
+  /** Changes kept when the session ended, waiting for a choice because the page changed since. */
+  let keptPage = $state.raw<KeptChanges<CommitteePageDoc> | null>(null);
+  /** Set when the session ended; plain, so the teardown below reads it as it is now. */
+  let sessionGone = false;
+  let closed = false;
+
   onMount(() => {
     const unlock = lockScroll();
-    void editor.start();
-    return unlock;
+    const stopKeeping = session.onEnd(keepUnsaved);
+    void editor.start().then(offerKeptChanges);
+    return () => {
+      stopKeeping();
+      unlock();
+    };
   });
 
   onDestroy(() => {
-    // Saving and letting go of the lock carry on after the editor closes.
-    void editor.leave();
+    closed = true;
+    // Without a session nothing can be saved or let go of; the lock lapses after five minutes.
+    if (sessionGone) editor.destroy();
+    // Otherwise saving and letting go of the lock carry on after the editor closes.
+    else void editor.leave();
   });
+
+  function keepUnsaved() {
+    sessionGone = true;
+    const unsaved = editor.unsaved();
+    if (unsaved === null) return;
+    keepChanges(keptKey, { userId, base: String(unsaved.version), value: unsaved.doc });
+  }
+
+  /**
+   * Puts back changes kept when the session ended, once this person holds the lock. They go
+   * straight back, as one step undo can take back, when nobody saved the page since; otherwise
+   * the person chooses.
+   */
+  function offerKeptChanges() {
+    // Closed while the lock was being taken: leave the changes kept for next time.
+    if (closed || !editor.writable) return;
+    const kept = keptChanges(keptKey, userId, isPageDoc);
+    const plan = restorePlan(kept, { base: String(editor.version), value: editor.doc });
+    if (kept === null || plan === "none") forgetChanges(keptKey);
+    else if (plan === "restore") putBack(kept.value);
+    else keptPage = kept;
+  }
+
+  function putBack(doc: CommitteePageDoc) {
+    forgetChanges(keptKey);
+    keptPage = null;
+    editor.change(doc);
+    toasts.info("Your changes that were not saved when your session ended are back.");
+  }
+
+  /**
+   * The choice in the kept changes notice. Its buttons go with it, so focus moves to the outline.
+   */
+  async function chooseKept(restore: boolean) {
+    if (restore && keptPage !== null) {
+      putBack(keptPage.value);
+    } else {
+      forgetChanges(keptKey);
+      keptPage = null;
+    }
+    await tick();
+    if (focusIsLost()) root?.querySelector<HTMLElement>(".outline__button, .mobile__toggle")?.focus();
+  }
 
   function notify(message: string) {
     noticeCount += 1;
@@ -119,6 +188,8 @@
     try {
       await editor.flush();
       editor.replace(await discardChanges(editor.slug));
+      forgetChanges(keptKey);
+      keptPage = null;
       discardOpen = false;
       toasts.success("Changes discarded. The draft matches the published page again.");
     } catch (error) {
@@ -142,6 +213,7 @@
     checking = true;
     try {
       await editor.retry();
+      offerKeptChanges();
     } finally {
       checking = false;
     }
@@ -193,6 +265,9 @@
 <svelte:window {onkeydown} {onbeforeunload} {onpagehide} onpointerdown={() => editor.noteActivity()} />
 
 {#snippet notices()}
+  {#if keptPage !== null && editor.writable}
+    <KeptChangesNotice subject="this page" onrestore={() => void chooseKept(true)} ondiscard={() => void chooseKept(false)} />
+  {/if}
   {#if editor.readOnlyReason !== null && editor.canEdit}
     <Callout tone="warning" title="Someone else is editing this page" role="status">
       {editor.readOnlyReason} You are looking at the latest saved draft.
@@ -250,7 +325,7 @@
         <Outline {editor} {onmoved} onselect={reveal} />
       </aside>
       <div class="editor__canvas">
-        {#if editor.readOnlyReason !== null || editor.saveState === "conflict" || editor.saveState === "invalid"}
+        {#if (keptPage !== null && editor.writable) || editor.readOnlyReason !== null || editor.saveState === "conflict" || editor.saveState === "invalid"}
           <div class="editor__notice">{@render notices()}</div>
         {/if}
         <Canvas {editor} {device} {showGrid} bind:drag {onmoved} onremoved={(block, index) => void onremoved(block, index)} />

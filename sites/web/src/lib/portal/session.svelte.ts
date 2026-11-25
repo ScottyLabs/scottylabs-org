@@ -21,6 +21,7 @@ export class PortalSession implements AccessState {
   signedOutReason = $state<SignedOutReason | null>(null);
 
   #inFlight: Promise<MeResponse | null> | null = null;
+  #onEnd = new Set<() => void>();
 
   /** The signed-in person. Only call inside the portal shell, which renders once this is ready. */
   get current(): MeResponse {
@@ -76,8 +77,32 @@ export class PortalSession implements AccessState {
     );
   }
 
+  /**
+   * Calls `keep` when the session ends by itself (it expired, or the server no longer knows it),
+   * before the shell closes the page and sends the person to sign in. Editors use it to keep work
+   * the server does not have yet. A page closing because of that change cannot do it as it
+   * closes: Svelte shows teardown code the state from before the change. Returns a function that
+   * stops it, to return from onMount.
+   */
+  onEnd(keep: () => void): () => void {
+    this.#onEnd.add(keep);
+    return () => {
+      this.#onEnd.delete(keep);
+    };
+  }
+
   /** Forgets the session locally, for example after a 401. */
   markSignedOut(reason: SignedOutReason): void {
+    if (reason === "expired" && this.me !== null) {
+      for (const keep of this.#onEnd) {
+        try {
+          keep();
+        } catch (error) {
+          // Signing out must go ahead; the error still reaches the console.
+          reportError(error);
+        }
+      }
+    }
     this.me = null;
     this.error = null;
     this.signedOutReason = reason;
