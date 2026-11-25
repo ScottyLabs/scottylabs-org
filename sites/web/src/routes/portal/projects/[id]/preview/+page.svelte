@@ -55,7 +55,7 @@
 
   <div class="canvas">
     {#if detail !== null}
-      <ProjectPage project={detail} indexHref="/projects/" />
+      <ProjectPage project={detail} preview />
     {:else}
       <p class="p-sr-only" role="status">Loading the preview</p>
       <Skeleton width="100%" height="480px" radius="20px" />

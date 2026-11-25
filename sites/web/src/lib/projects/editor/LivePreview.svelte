@@ -39,7 +39,7 @@
       tabindex="0"
     >
       <div class="preview__page" inert aria-hidden="true">
-        <ProjectPage project={detail} />
+        <ProjectPage project={detail} preview />
       </div>
     </div>
   {/if}

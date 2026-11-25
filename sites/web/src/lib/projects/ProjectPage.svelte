@@ -18,29 +18,39 @@
     project,
     related = [],
     indexHref = "/projects/",
+    preview = false,
   }: {
     project: ProjectDetail;
     /** Other projects to suggest at the bottom; none hides the section. */
     related?: readonly ProjectCard[];
     /** Where the "Projects" crumb leads, with the visitor's last filters. */
     indexHref?: string;
+    /**
+     * A draft shown in the portal, under the portal page's own h1: the name is an h2, and the
+     * links to other public pages, which show only what is published, become plain text.
+     */
+    preview?: boolean;
   } = $props();
 
   const committee = $derived(COMMITTEES[project.committee]);
   const committeeProjects = $derived(`/projects/?committee=${project.committee}`);
   const hasDescription = $derived(project.description.trim() !== "");
+  const nameTag = $derived(preview ? "h2" : "h1");
+  const sectionTag = $derived(preview ? "h3" : "h2");
+  /** A link to a public page, or no address in a preview. */
+  const publicHref = (href: string) => (preview ? undefined : href);
 </script>
 
 {#snippet committeeLink(slug: ProjectDetail["committee"])}
-  <a class="facts__link" href={`/committees/${slug}/`}>{COMMITTEES[slug].name}</a>
+  <a class="facts__link" href={publicHref(`/committees/${slug}/`)}>{COMMITTEES[slug].name}</a>
 {/snippet}
 
 <div class="project-page-host">
   <article class="project-page" style:--committee-color={committee.color}>
     <nav class="crumbs" aria-label="Breadcrumb">
       <ol>
-        <li><a href={indexHref}>Projects</a></li>
-        <li><a href={committeeProjects}>{committee.name}</a></li>
+        <li><a href={publicHref(indexHref)}>Projects</a></li>
+        <li><a href={publicHref(committeeProjects)}>{committee.name}</a></li>
         <li><span aria-current="page">{project.name}</span></li>
       </ol>
     </nav>
@@ -59,7 +69,7 @@
         </div>
 
         <div class="details__title">
-          <h1 class="details__name">{project.name}</h1>
+          <svelte:element this={nameTag} class="details__name">{project.name}</svelte:element>
           {#if project.summary !== ""}
             <p class="details__summary">{project.summary}</p>
           {/if}
@@ -119,7 +129,7 @@
 
     {#if project.videoUrl !== null}
       <section class="section" id="watch" aria-labelledby="watch-heading">
-        <h2 class="section__heading" id="watch-heading">Watch</h2>
+        <svelte:element this={sectionTag} class="section__heading" id="watch-heading">Watch</svelte:element>
         <div class="section__video">
           <VideoPlayer url={project.videoUrl} title={`${project.name} video`} poster={project.cover} />
         </div>
@@ -129,8 +139,10 @@
     {#if related.length > 0}
       <section class="section" aria-labelledby="related-heading">
         <div class="section__head">
-          <h2 class="section__heading" id="related-heading">Related projects</h2>
-          <a class="section__more" href={committeeProjects}>
+          <svelte:element this={sectionTag} class="section__heading" id="related-heading">
+            Related projects
+          </svelte:element>
+          <a class="section__more" href={publicHref(committeeProjects)}>
             All {committee.name} projects
             <ArrowUpRight size={16} strokeWidth={2} aria-hidden="true" />
           </a>
@@ -181,7 +193,7 @@
     text-decoration: none;
     border-radius: 4px;
 
-    &:hover {
+    &[href]:hover {
       color: var(--p-text);
       text-decoration: underline;
       text-underline-offset: 3px;
@@ -360,7 +372,7 @@
     text-decoration-color: var(--p-border);
     text-underline-offset: 3px;
 
-    &:hover {
+    &[href]:hover {
       text-decoration-color: currentColor;
     }
     &:focus-visible {
