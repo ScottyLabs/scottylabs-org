@@ -352,7 +352,7 @@ Record changes to this contract here, newest first, with the reason.
 
 - **The sync runs on its own** at startup and every six hours (see "Where roles come from"), switched by `GOVERNANCE_SYNC`. Unset, it is on everywhere except local development with open dev sign-in, so builders working side by side do not fetch governance at every start. Set `GOVERNANCE_SYNC=1` to try it locally. `Config` gains `governance_sync` (false in `testing::config()`), and `routes::spawn_governance_sync(state)` starts the task.
 
-- **Dev persona**: the Tech director persona is `apallati`, the Tech director's Andrew ID in governance, so a sync in development finds the persona instead of adding a second Tech director. Seeding renames an existing `anishp` user in place. The ticker seed's CMU Maps sample still names `anishp` and is seeded without an author until it is updated.
+- **Dev persona**: the Tech director persona is `apallati`, the Tech director's Andrew ID in governance, so a sync in development finds the persona instead of adding a second Tech director. Seeding renames an existing `anishp` user in place. The ticker seed's CMU Maps sample now names `apallati` too (a one-line change in `seed/ticker.rs`).
 
 - **Local development**: the pitchfork `site` process now loads the dev profile's secrets and logs at `info,site=debug` (kennel's shell sets `RUST_LOG` for a crate named `scottylabs_org`, which hides this crate's logs; a `cargo run -p site` by hand needs `RUST_LOG=info,site=debug`). Open the portal at `http://localhost:5173`.
 
