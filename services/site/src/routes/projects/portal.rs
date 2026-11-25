@@ -837,6 +837,7 @@ async fn discard(
         )));
     };
     if published != project.draft.0 {
+        require_move_back(&viewer, &project, &published)?;
         sqlx::query(
             "UPDATE projects SET draft = $2, committee = $3, updated_at = now(), updated_by = $4
              WHERE id = $1",
@@ -861,6 +862,23 @@ async fn discard(
         .await?;
     }
     finish(tx, &viewer, id).await
+}
+
+/// Discarding an unpublished move puts the project back in its published committee, which is a move like any other: only for those who can publish there.
+fn require_move_back(
+    viewer: &Viewer,
+    project: &ProjectRow,
+    published: &ProjectDoc,
+) -> AppResult<()> {
+    let back_to = published.committee;
+    if back_to == project.committee || permissions::can_publish_projects_for(viewer, back_to) {
+        return Ok(());
+    }
+    let committee = back_to.name();
+    Err(AppError::Forbidden(format!(
+        "Discarding would move {} back to {committee}, and only admins and the director of {committee} can move a project there.",
+        published.name
+    )))
 }
 
 // ---------------------------------------------------------------------------

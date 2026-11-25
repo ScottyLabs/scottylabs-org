@@ -644,6 +644,59 @@ async fn only_editors_save_and_only_publishers_move_projects(db: PgPool) {
     assert_eq!(project["canPublish"], true);
 }
 
+#[sqlx::test(migrations = "./migrations")]
+async fn discarding_a_move_is_for_those_who_can_move_it_back(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let owner = |db: PgPool| async move {
+        sqlx::query_scalar::<_, String>("SELECT committee FROM projects WHERE id = $1")
+            .bind(nova)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    };
+    let (status, _) = save(
+        &app,
+        &p.admin,
+        nova,
+        full(Committee::Tech, "Nova", json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The Tech director has the project now, but cannot hand it back to Events.
+    let (status, body) = act(&app, &p.tech_director, nova, "discard").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_eq!(
+        body["error"]["message"],
+        "Discarding would move Nova back to Events, and only admins and the director of Events can move a project there."
+    );
+    assert_eq!(owner(db.clone()).await, "tech");
+
+    // An admin can move it back.
+    let (status, body) = act(&app, &p.admin, nova, "discard").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["project"]["draft"]["committee"], "events");
+    assert_eq!(owner(db.clone()).await, "events");
+
+    // Discarding edits that keep the committee needs only edit access.
+    let (status, _) = save(
+        &app,
+        &p.director,
+        nova,
+        full(
+            Committee::Events,
+            "Nova",
+            json!({ "summary": "Teams and demos" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = act(&app, &p.director, nova, "discard").await;
+    assert_eq!(status, StatusCode::OK);
+}
+
 // ---------------------------------------------------------------------------
 // Publishing
 
