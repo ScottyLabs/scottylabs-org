@@ -3,7 +3,7 @@
   // role, change and remove roles and sync directors from governance (Figma 107:5980, 111:9332).
   // Directors see their committee's team and add or remove leads (Figma 111:8915, 111:9029,
   // 111:9202). The service decides every rule; its messages are shown as they come.
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import Plus from "@lucide/svelte/icons/plus";
   import RefreshCw from "@lucide/svelte/icons/refresh-cw";
   import Users from "@lucide/svelte/icons/users";
@@ -56,6 +56,7 @@
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
   let now = $state(new Date());
   let syncMessages = $state<string[]>([]);
+  let table = $state<ReturnType<typeof PeopleTable> | null>(null);
 
   const rows = $derived(
     people === null || me === null
@@ -134,15 +135,24 @@
 
   function saved(row: PersonRow, message: string, assignmentId: string | undefined) {
     people = withPerson(people ?? [], row);
+    // So a role added now reads "By you, just now".
+    now = new Date();
     toasts.success(message);
     mark(assignmentId);
     refreshIfMine(row.person.id);
   }
 
-  function removed(row: AssignmentRow, message: string) {
+  async function removed(row: AssignmentRow, message: string) {
+    const index = rows.findIndex((entry) => entry.assignment.id === row.assignment.id);
     people = withoutAssignment(people ?? [], row.assignment.id);
     toasts.success(message);
     refreshIfMine(row.person.id);
+    // The role button that opened the dialog went with the row, so the dialog cannot return focus
+    // to it. Carry on from the row that took its place, or from the heading.
+    await tick();
+    if (table?.focusRoleNear(Math.max(index, 0)) !== true) {
+      document.querySelector<HTMLElement>("#portal-main h1")?.focus();
+    }
   }
 
   function synced(result: GovernanceSyncResponse) {
@@ -224,6 +234,7 @@
         </div>
       {:else if me !== null}
         <PeopleTable
+          bind:this={table}
           {rows}
           {view}
           projectNames={names}
@@ -256,7 +267,7 @@
     bind:open={removeOpen}
     row={removing}
     actionLabel={isAdmin ? "Remove role" : "Remove lead"}
-    onremoved={removed}
+    onremoved={(row, message) => void removed(row, message)}
   />
   {#if isAdmin}<SyncDialog bind:open={syncOpen} onsynced={synced} />{/if}
 {/if}

@@ -41,6 +41,7 @@ import {
   appointedText,
   assignmentRows,
   canEditText,
+  clearedProjectsNote,
   matchingAssignment,
   nowHasRole,
   projectNames,
@@ -512,12 +513,30 @@ Deno.test("each role says what it can edit and who gave it", () => {
     "By Evan Foster, Sep 14",
   );
   assert.equal(appointedText(role({ source: "governance" }), "u-evan", NOW), "From governance");
+  // Figma 111:9202: a lead added a moment ago, even with the service's clock a little ahead.
+  const justAdded = role({ appointedBy: EVAN, appointedAt: "2026-11-24T20:00:05Z" });
+  assert.equal(appointedText(justAdded, "u-evan", NOW), "By you, just now");
+  assert.equal(
+    appointedText(role({ appointedBy: EVAN, appointedAt: "2026-11-24T19:48:00Z" }), "u-evan", NOW),
+    "By you, 12 min ago",
+  );
 
   assert.deepEqual(
     projectsFor(PROJECT_LIST, "events").map((p) => p.name),
     ["Nova", "TartanHacks"],
   );
   assert.deepEqual(projectsFor(PROJECT_LIST, null), []);
+});
+
+Deno.test("moving a lead up says why their projects go", () => {
+  assert.equal(
+    clearedProjectsNote("admin"),
+    "Admins edit every project, so the list of projects is cleared.",
+  );
+  assert.equal(
+    clearedProjectsNote("director"),
+    "Directors edit every project of their committee, so the list of projects is cleared.",
+  );
 });
 
 Deno.test("confirmations name the person and the role", () => {

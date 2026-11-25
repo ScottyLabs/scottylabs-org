@@ -36,7 +36,7 @@
     type SelectOption,
   } from "#lib/portal/ui/index.ts";
   import ProjectChecklist from "./ProjectChecklist.svelte";
-  import { ROLE_LABELS, matchingAssignment, nowHasRole, projectsFor, rolePhrase } from "./people.ts";
+  import { clearedProjectsNote, matchingAssignment, nowHasRole, projectsFor, rolePhrase } from "./people.ts";
 
   let {
     open = $bindable(false),
@@ -303,9 +303,7 @@
         />
       </fieldset>
     {:else if role !== "lead" && mode?.kind === "change" && mode.row.assignment.projectIds.length > 0}
-      <p class="role-form__note">
-        {ROLE_LABELS[role]}s edit every project of their committee, so the list of projects is cleared.
-      </p>
+      <p class="role-form__note">{clearedProjectsNote(role)}</p>
     {/if}
 
     {#if failure !== null}

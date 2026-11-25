@@ -9,7 +9,7 @@ import type {
 } from "../../../lib/api/types.ts";
 import { COMMITTEE_SLUGS } from "../../../lib/api/types.ts";
 import { committeeName } from "../../../lib/portal/committees.ts";
-import { formatShortDate } from "../../../lib/portal/dates.ts";
+import { formatUpdated } from "../../../lib/portal/dates.ts";
 
 /** One role of one person, as a table row. */
 export interface AssignmentRow {
@@ -105,7 +105,17 @@ function leadProjects(ids: readonly string[], names: ProjectNames | null): strin
     .toSorted((a, b) => a.localeCompare(b));
 }
 
-/** "By you, Sep 14", "By Evan Foster, Sep 14", "By an admin", "From governance". */
+const MINUTE_MS = 60 * 1000;
+
+/** "just now", "12 min ago", then "Sep 14", for the middle of a sentence. */
+function appointedWhen(at: string, now: Date): string {
+  const age = now.getTime() - new Date(at).getTime();
+  // A role added a moment ago carries the service's clock, which can run a little ahead.
+  if (age > -MINUTE_MS && age < MINUTE_MS) return "just now";
+  return formatUpdated(at, now);
+}
+
+/** "By you, just now", "By you, Sep 14", "By Evan Foster, Sep 14", "By an admin", "From governance". */
 export function appointedText(
   assignment: RoleAssignment,
   viewerId: string,
@@ -113,10 +123,16 @@ export function appointedText(
 ): string {
   if (assignment.source === "governance") return "From governance";
   if (assignment.source === "keycloak_group") return "From the admin group";
-  const when = formatShortDate(assignment.appointedAt, now);
   if (assignment.appointedBy === null) return "By an admin";
   const who = assignment.appointedBy.id === viewerId ? "you" : assignment.appointedBy.name;
-  return `By ${who}, ${when}`;
+  return `By ${who}, ${appointedWhen(assignment.appointedAt, now)}`;
+}
+
+/** Why a lead's projects go when they become a director or an admin. */
+export function clearedProjectsNote(role: Exclude<Role, "lead">): string {
+  return role === "admin"
+    ? "Admins edit every project, so the list of projects is cleared."
+    : "Directors edit every project of their committee, so the list of projects is cleared.";
 }
 
 /** The projects a lead in `committee` can be given: that committee's, not archived, by name. */
