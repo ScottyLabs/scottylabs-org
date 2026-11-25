@@ -216,7 +216,7 @@ Rules: message 1 to 90 characters on one line, trimmed. `linkUrl` optional, `htt
 | POST `/api/committee-pages/:slug/publish` | editors. Body `{ "draftVersion" }`. Validates for publishing (alt text) |
 | POST `/api/committee-pages/:slug/discard` | editors. Draft becomes the published version |
 
-Draft validation (saving): block types and widths per `BLOCK_WIDTHS`, the cover first and only once, at most 12 blocks, unique block ids, stats 2 to 4 items, gallery 3 to 6 images, text fields within limits, URLs `https` (or `mailto:` for buttons), images only `/media/<uuid>` or `/seed/...`, video URLs YouTube or Vimeo, rich text sanitized with `ammonia`. Publishing additionally requires alt text on every image.
+Draft validation (saving): block types and widths per `BLOCK_WIDTHS`, the cover first and only once, at most 12 blocks, unique block ids, stats 2 to 4 items, gallery 3 to 6 images, text fields within limits, URLs `https` (or `mailto:` for buttons), images only `/media/<uuid>` or `/seed/...`, video URLs that play one YouTube or Vimeo video, rich text sanitized with `ammonia`. Publishing additionally requires alt text on every image.
 
 ### Projects
 
@@ -310,6 +310,15 @@ Each builder owns the files of their track. Edit shared files only where this ta
 ## Changes
 
 Record changes to this contract here, newest first, with the reason.
+
+### 2026-11-24, committee pages review fixes
+
+No shape in `types.ts` changed.
+
+- **Video links play one video.** Saving answers 422 at `blocks.<index>.url` ("Use a link to one YouTube or Vimeo video, not a channel or playlist.") unless the link names one video the page can embed: YouTube watch, `youtu.be`, embed, shorts and live links, or a Vimeo link with a video number. `blocks::video_id` mirrors `videoEmbed` in `src/lib/committees/video.ts`; keep the two in step. Before, channel and playlist links saved and published, and the block then vanished from the public page. `models::check_video_url` is unchanged, so project video links keep their current rule.
+- **The edit lock follows activity.** The editor asks to keep the lock once a minute only when the person clicked, typed or changed something since its last request, and saves refresh the lock as before. An editor left open in a background tab therefore frees the page five to six minutes after the last activity, as spec F7 describes. Back after a lapse, the editor asks again at once and loads any draft saved in the meantime. No endpoint changed.
+- **Video posters are described.** The poster renders with its alt text, which publishing already required, so screen reader users hear it.
+- **Path errors are sentences.** `check_button_url` refuses unsafe site paths with "Enter a path on this site that starts with a single /, such as /sponsors/."
 
 ### 2026-11-24, committee pages
 
