@@ -15,6 +15,7 @@
   import TopBar from "#lib/portal/shell/TopBar.svelte";
   import { LOCKED_PREVIEW_SECTIONS, sectionsFor } from "#lib/portal/shell/sections.ts";
   import ToastRegion from "#lib/portal/ui/ToastRegion.svelte";
+  import { focusPageHeading } from "#lib/portal/ui/focus.ts";
 
   let { children }: { children: Snippet } = $props();
 
@@ -58,12 +59,7 @@
     if (navigation.type === "enter") return;
     if (navigation.from?.url.pathname === navigation.to?.url.pathname) return;
     await tick();
-    const main = document.querySelector<HTMLElement>("#portal-main");
-    const heading = main?.querySelector("h1");
-    const target = heading ?? main;
-    if (target === null || target === undefined) return;
-    if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
-    target.focus({ preventScroll: true });
+    focusPageHeading({ preventScroll: true });
   });
 </script>
 

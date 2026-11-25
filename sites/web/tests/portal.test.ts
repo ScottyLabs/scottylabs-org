@@ -37,6 +37,7 @@ import { replaceLocation } from "../src/lib/portal/navigation.ts";
 import { safeReturnTo, signInHref } from "../src/lib/portal/paths.ts";
 import { describeRoles, firstName, primaryRoleLabel } from "../src/lib/portal/roles.ts";
 import { signInNotice } from "../src/lib/portal/sign-in-messages.ts";
+import { focusAfterDialog } from "../src/lib/portal/ui/focus.ts";
 
 const NOW = "2026-11-24T17:00:00Z";
 
@@ -372,4 +373,17 @@ Deno.test("network failures and empty answers", async () => {
   const empty = stubFetch(() => new Response(null, { status: 204 }), calls);
   const result: unknown = await post<unknown>("/auth/logout", undefined, { fetch: empty });
   assert.equal(result, undefined);
+});
+
+Deno.test("a closing dialog gives focus back to its opener, or to the page heading when that is gone", () => {
+  const body = { isConnected: true };
+  const opener = { isConnected: true };
+  assert.equal(focusAfterDialog(opener, body, true), "opener");
+  assert.equal(focusAfterDialog(opener, body, false), "opener");
+  // Opened on arrival, as for the overview's Add project, focus was on the body or on a link the navigation removed.
+  assert.equal(focusAfterDialog(body, body, true), "heading");
+  assert.equal(focusAfterDialog(null, body, true), "heading");
+  assert.equal(focusAfterDialog({ isConnected: false }, body, true), "heading");
+  // The page already moved focus on closing, so it stays where the page put it.
+  assert.equal(focusAfterDialog({ isConnected: false }, body, false), null);
 });

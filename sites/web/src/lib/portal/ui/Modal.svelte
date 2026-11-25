@@ -1,9 +1,11 @@
 <script lang="ts">
   // Shared by Dialog and Sheet. A native modal <dialog> keeps focus inside and makes the page
-  // behind it inert; this adds Escape and backdrop rules, scroll locking and returning focus.
+  // behind it inert; this adds Escape and backdrop rules, scroll locking and returning focus, to
+  // the page heading when what opened the dialog is gone.
   import type { Snippet } from "svelte";
   import X from "@lucide/svelte/icons/x";
   import IconButton from "./IconButton.svelte";
+  import { focusAfterDialog, focusIsLost, focusPageHeading } from "./focus.ts";
   import { lockScroll } from "./scroll-lock.ts";
 
   let {
@@ -85,9 +87,11 @@
     unlock = null;
     open = false;
     onclose?.();
-    const target = returnFocusTo;
+    const opener = returnFocusTo;
     returnFocusTo = null;
-    if (target?.isConnected) target.focus();
+    const next = focusAfterDialog(opener, document.body, focusIsLost(dialog));
+    if (next === "opener") opener?.focus();
+    else if (next === "heading") focusPageHeading();
   }
 
   function handleCancel(event: Event) {
