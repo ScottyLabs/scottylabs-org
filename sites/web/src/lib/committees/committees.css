@@ -1,0 +1,186 @@
+/*
+ * Shared styles for committee pages: the public pages, the Committees index and the editor
+ * canvas all use them. Sizes follow the approved designs (Figma 77:4363 and 75:4160); the type is
+ * Satoshi. Classes start with "cb-". app.css unsets buttons and lists and sizes every p, so these
+ * rules set what they need explicitly.
+ */
+
+.cb-scope {
+  --cb-text: #1e1e1e;
+  --cb-text-secondary: #666666;
+  /* #808080 in the design is 3.9:1 on white; this passes AA. */
+  --cb-text-tertiary: var(--p-text-tertiary);
+  /* #666666 falls short of 4.5:1 on the committee tints, so text on them uses this. */
+  --cb-on-tint: #4d4d4d;
+  --cb-border: #d6d6d6;
+  --cb-image-border: rgba(0, 0, 0, 0.08);
+  --cb-accent: #1e1e1e;
+  --cb-tint: #f5f5f5;
+  color: var(--cb-text);
+  font-family: var(--p-font);
+  font-weight: 400;
+}
+
+.cb-inspector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--cb-text-tertiary);
+  font-family: var(--p-mono);
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 16px;
+}
+
+.cb-inspector::before {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--cb-accent);
+  content: "";
+}
+
+.cb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 38px;
+  padding: 9px 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-family: var(--p-font);
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 20px;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--p-duration) var(--p-ease),
+    border-color var(--p-duration) var(--p-ease);
+}
+
+.cb-btn:focus-visible {
+  outline: 2px solid var(--p-focus);
+  outline-offset: 2px;
+}
+
+.cb-btn--filled {
+  background: #1e1e1e;
+  color: #ffffff;
+}
+
+.cb-btn--filled:hover {
+  background: #383838;
+}
+
+.cb-btn--outline {
+  border-color: var(--cb-border);
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--cb-text);
+}
+
+.cb-btn--outline:hover {
+  border-color: #b8b8b8;
+  background: #ffffff;
+}
+
+.cb-btn--lg {
+  min-height: 48px;
+  padding: 14px 20px;
+}
+
+.cb-btn--sm {
+  min-height: 32px;
+  padding: 7px 16px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 16px;
+}
+
+.cb-btn__icon {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.cb-heading {
+  margin: 0;
+  color: var(--cb-text);
+  font-size: 1.875rem;
+  font-weight: 600;
+  line-height: 38px;
+  letter-spacing: 0;
+}
+
+@container committee-page (width < 640px) {
+  .cb-heading {
+    font-size: 1.5rem;
+    line-height: 32px;
+  }
+}
+
+.cb-caption {
+  margin: 12px 0 0;
+  color: var(--cb-text-tertiary);
+  font-size: 0.875rem;
+  line-height: 20px;
+}
+
+.cb-photo {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  border: 1px solid var(--cb-image-border);
+  border-radius: 16px;
+  background: var(--p-surface-muted);
+  object-fit: cover;
+}
+
+/* Fields with nothing in them yet, shown only in the editor. */
+.cb-placeholder {
+  color: var(--p-placeholder);
+}
+
+.cb-empty-media {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 160px;
+  padding: 16px;
+  border: 1px dashed #b8b8b8;
+  border-radius: 16px;
+  background: var(--p-surface-muted);
+  color: var(--p-text-secondary);
+  font-size: 0.875rem;
+  line-height: 20px;
+  text-align: center;
+}
+
+.cb-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cb-btn {
+    transition: none;
+  }
+}
