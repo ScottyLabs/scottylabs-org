@@ -57,7 +57,9 @@
                 editor.select(block.id);
               },
               onmove: (_from, to) => editor.moveBlock(block.id, to, dragKey),
-              onend: () => onmoved(block.id),
+              onend: (moved) => {
+                if (moved) onmoved(block.id);
+              },
             })}
           >
             <GripVertical size={16} strokeWidth={1.75} />

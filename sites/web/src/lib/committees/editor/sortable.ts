@@ -10,7 +10,8 @@ export interface SortableOptions {
   /** Move the item at `from` to `to`; the list re-renders with it there. */
   onmove: (from: number, to: number) => void;
   onstart?: () => void;
-  onend?: () => void;
+  /** Called when the pointer lets go. `moved` is false when the item ended where it started, such as after a click on the handle. */
+  onend?: (moved: boolean) => void;
 }
 
 function middle(element: Element): number {
@@ -21,6 +22,7 @@ function middle(element: Element): number {
 export function sortableHandle(options: SortableOptions): Attachment<HTMLElement> {
   return (handle) => {
     let current = -1;
+    let started = -1;
     let pointer: number | null = null;
     let list: HTMLElement | null = null;
 
@@ -45,7 +47,7 @@ export function sortableHandle(options: SortableOptions): Attachment<HTMLElement
       window.removeEventListener("pointermove", onmove);
       window.removeEventListener("pointerup", stop);
       window.removeEventListener("pointercancel", stop);
-      options.onend?.();
+      options.onend?.(current !== started);
     }
 
     function start(event: PointerEvent) {
@@ -55,6 +57,7 @@ export function sortableHandle(options: SortableOptions): Attachment<HTMLElement
       event.preventDefault();
       pointer = event.pointerId;
       current = options.index();
+      started = current;
       window.addEventListener("pointermove", onmove);
       window.addEventListener("pointerup", stop);
       window.addEventListener("pointercancel", stop);

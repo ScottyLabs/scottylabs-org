@@ -90,7 +90,9 @@
                   index: () => index,
                   onstart: () => (dragKey = `mobile-drag-${block.id}-${Date.now()}`),
                   onmove: (_from, to) => editor.moveBlock(block.id, to, dragKey),
-                  onend: () => onmoved(block.id),
+                  onend: (moved) => {
+                    if (moved) onmoved(block.id);
+                  },
                 })}
               >
                 <GripVertical size={18} strokeWidth={1.75} />
