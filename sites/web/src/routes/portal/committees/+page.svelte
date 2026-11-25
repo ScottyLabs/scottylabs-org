@@ -2,6 +2,7 @@
   // Committee pages in the portal (spec CP-1): the seven pages with their status, last edit and
   // director. People see "Edit page" only where they may edit; elsewhere a lock and "View".
   import Lock from "@lucide/svelte/icons/lock";
+  import { page as current } from "$app/state";
   import { isAbortError, isApiError } from "#lib/api/client.ts";
   import type { CommitteePageSummary } from "#lib/api/types.ts";
   import { loadPages } from "#lib/committees/api.ts";
@@ -11,6 +12,8 @@
   import { Avatar, Button, Callout, PageHeader, Skeleton, StatusDot } from "#lib/portal/ui/index.ts";
 
   const session = getPortalSession();
+  // The page just published from the editor (spec F7).
+  const highlight = $derived(current.url.searchParams.get("highlight"));
   let pages = $state.raw<CommitteePageSummary[] | null>(null);
   let problem = $state<string | null>(null);
   let attempt = $state(0);
@@ -59,14 +62,16 @@
 <PageHeader title="Committee pages" {description} />
 
 {#if problem !== null}
-  <Callout tone="error" title="We could not load the committee pages." role="alert">
-    {problem}
-    {#snippet actions()}
-      <Button variant="outline" size="sm" onclick={() => (attempt += 1)}>Try again</Button>
-    {/snippet}
-  </Callout>
+  <div class="pages__body">
+    <Callout tone="error" title="We could not load the committee pages." role="alert">
+      {problem}
+      {#snippet actions()}
+        <Button variant="outline" size="sm" onclick={() => (attempt += 1)}>Try again</Button>
+      {/snippet}
+    </Callout>
+  </div>
 {:else}
-  <div class="p-table-card">
+  <div class="p-table-card pages__body">
     <table class="p-table p-table--stack pages">
       <thead>
         <tr>
@@ -86,7 +91,7 @@
           {/each}
         {:else}
           {#each pages as page (page.slug)}
-            <tr>
+            <tr class={[page.slug === highlight && "p-table__row--highlight"]}>
               <td data-label="Page">
                 <span class="p-table__primary">
                   {#if page.cover}
@@ -131,7 +136,8 @@
                     Edit page
                   </Button>
                 {:else}
-                  <span class="pages__locked">
+                  <!-- The footnote under the table says why for everyone; the tooltip repeats it here. -->
+                  <span class="pages__locked" title={`Only the director of ${page.name} or an admin can edit this page.`}>
                     <Lock size={16} strokeWidth={2} aria-hidden="true" />
                     <span class="p-sr-only">Only the director of {page.name} or an admin can edit this page.</span>
                     <Button href={editorPath(page)} variant="subtle" size="sm" aria-label={`View the ${page.name} page`}>
@@ -150,6 +156,10 @@
 {/if}
 
 <style>
+  /* The gap between the page header and the table, as on the other portal lists (Figma 107:4464). */
+  .pages__body {
+    margin-top: 24px;
+  }
   .pages :global(.pages__thumb) {
     width: 88px;
     height: 56px;
