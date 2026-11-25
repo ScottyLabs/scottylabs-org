@@ -386,6 +386,13 @@ async fn announcements_are_validated(db: PgPool) {
         (input("events", &"x".repeat(91), in_days(3)), "message"),
         (input("events", "", in_days(3)), "message"),
         (input("events", "Two\nlines", in_days(3)), "message"),
+        // Tabs, bells and bidirectional overrides could make the home page show something else.
+        (input("events", "Tab\there", in_days(3)), "message"),
+        (input("events", "Bell \u{7}", in_days(3)), "message"),
+        (
+            input("events", "Reversed \u{202E}txet", in_days(3)),
+            "message",
+        ),
         (
             json!({ "kind": "event", "committee": "events", "message": "Hi", "linkUrl": "http://tartanhacks.com", "expiresAt": in_days(3) }),
             "linkUrl",
@@ -422,6 +429,21 @@ async fn announcements_are_validated(db: PgPool) {
     .await;
     assert_eq!(res.status, StatusCode::BAD_REQUEST);
 
+    // Postgres cannot store NUL; it is refused instead of failing as an internal error.
+    let res = post(
+        &c.app,
+        &c.lead,
+        input("events", "null \u{0} byte", in_days(3)),
+    )
+    .await;
+    assert_eq!(
+        res.status,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        res.text()
+    );
+    assert_eq!(res.code(), "validation_failed");
+
     let res = post(
         &c.app,
         &c.events_director,
@@ -430,6 +452,40 @@ async fn announcements_are_validated(db: PgPool) {
     .await;
     assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
     assert_eq!(res.json["announcement"]["linkUrl"], Value::Null);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn mangled_ids_and_methods_answer_in_the_error_shape(db: PgPool) {
+    let c = cast(&db).await;
+    for (method, path) in [
+        ("GET", "/api/announcements/not-a-uuid"),
+        ("PATCH", "/api/announcements/not-a-uuid"),
+        ("DELETE", "/api/announcements/not-a-uuid"),
+        ("POST", "/api/announcements/not-a-uuid/end"),
+    ] {
+        let request = match method {
+            "GET" => Req::get(path),
+            "PATCH" => Req::patch(path).json(json!({})),
+            "DELETE" => Req::delete(path),
+            _ => Req::post(path).json(json!({})),
+        };
+        let res = request.user(&c.events_director).send(&c.app).await;
+        assert_eq!(
+            res.status,
+            StatusCode::NOT_FOUND,
+            "{method} {path}: {}",
+            res.text()
+        );
+        assert_eq!(res.message(), "We couldn't find that announcement.");
+    }
+
+    let res = Req::put("/api/me")
+        .user(&c.events_director)
+        .send(&c.app)
+        .await;
+    assert_eq!(res.status, StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(res.code(), "method_not_allowed");
+    assert_eq!(res.header("allow"), Some("GET,HEAD"));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -1047,7 +1103,11 @@ async fn approving_needs_a_free_slot_and_a_future_expiry(db: PgPool) {
     .unwrap();
     let err = decide(&db, late, &director, true).await.unwrap_err();
     assert_eq!(err.code(), "validation_failed");
-    assert!(err.to_string().contains("pick a new time"), "{err}");
+    // Two minutes are left, so the message must not say the time has passed.
+    assert_eq!(
+        err.to_string(),
+        "This announcement leaves the ticker in less than 5 minutes, or already has. Send it back and ask the lead to pick a later time."
+    );
 
     let admin = viewer(&c.admin, Role::Admin, None);
     decide(&db, full, &admin, true).await.unwrap();

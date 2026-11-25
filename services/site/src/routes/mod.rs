@@ -5,6 +5,7 @@ mod announcements;
 mod approvals;
 mod auth;
 mod committee_pages;
+mod common;
 mod me;
 mod media;
 mod overview;
@@ -16,7 +17,8 @@ use axum::extract::{DefaultBodyLimit, State};
 use axum::http::StatusCode;
 use axum::middleware;
 use axum::routing::get;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnFailure, TraceLayer};
+use tracing::Level;
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -47,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .merge(approvals::router())
         .layer(DefaultBodyLimit::max(JSON_BODY_LIMIT))
         .merge(media::upload_router())
+        .method_not_allowed_fallback(api_method_not_allowed)
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
@@ -65,8 +68,22 @@ pub fn router(state: AppState) -> Router {
             state.clone(),
             crate::static_files::security_headers,
         ))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(request_span)
+                // Internal errors already log their cause; a second line per 500 only adds noise.
+                .on_failure(DefaultOnFailure::new().level(Level::DEBUG)),
+        )
         .with_state(state)
+}
+
+/// Every log line written while handling a request names its method and path. Not the query string, which can hold a sign-in code.
+fn request_span(request: &axum::http::Request<axum::body::Body>) -> tracing::Span {
+    tracing::info_span!(
+        "request",
+        method = %request.method(),
+        path = %request.uri().path(),
+    )
 }
 
 async fn health(State(state): State<AppState>) -> Result<&'static str, StatusCode> {
@@ -79,4 +96,9 @@ async fn health(State(state): State<AppState>) -> Result<&'static str, StatusCod
 
 async fn api_not_found() -> AppError {
     AppError::NotFound("There is no API endpoint at that address.".into())
+}
+
+/// The route exists but not for this method. axum adds the `Allow` header.
+async fn api_method_not_allowed() -> AppError {
+    AppError::MethodNotAllowed
 }

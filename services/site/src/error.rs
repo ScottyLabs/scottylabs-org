@@ -23,12 +23,17 @@ pub enum AppError {
     NotFound(String),
     #[error("{0}")]
     Conflict(String),
+    #[error("That address doesn't accept this kind of request.")]
+    MethodNotAllowed,
     #[error("{0}")]
     PayloadTooLarge(String),
     #[error("{0}")]
     UnsupportedMediaType(String),
     #[error("Too many requests. Wait a minute and try again.")]
     RateLimited,
+    /// A service this one depends on, such as the governance repository, is down or answered with something unusable. The request itself was fine.
+    #[error("{0}")]
+    Upstream(String),
     /// One of the error codes in the contract, which the web client understands. Sign-in answers with redirects instead today, so nothing builds it yet.
     #[allow(dead_code)]
     #[error("Sign-in with ScottyLabs is not set up for this site yet.")]
@@ -60,9 +65,11 @@ impl AppError {
             Self::Forbidden(_) => "forbidden",
             Self::NotFound(_) => "not_found",
             Self::Conflict(_) => "conflict",
+            Self::MethodNotAllowed => "method_not_allowed",
             Self::PayloadTooLarge(_) => "payload_too_large",
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::RateLimited => "rate_limited",
+            Self::Upstream(_) => "upstream_failed",
             Self::AuthNotConfigured => "auth_not_configured",
             Self::Internal(_) => "internal",
         }
@@ -76,9 +83,11 @@ impl AppError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Self::PayloadTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+            Self::Upstream(_) => StatusCode::BAD_GATEWAY,
             Self::AuthNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -130,7 +139,8 @@ struct ErrorDetail<'a> {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         if let Self::Internal(cause) = &self {
-            tracing::error!(error = ?cause, "internal error");
+            // `{:#}` puts the whole chain of causes on one line.
+            tracing::error!(error = %format!("{cause:#}"), "internal error");
         }
         let fields = match &self {
             Self::Validation { fields, .. } if !fields.is_empty() => Some(fields),

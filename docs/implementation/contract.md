@@ -30,13 +30,13 @@ Local development runs Vite on port 5173 and the service on 127.0.0.1:8080. Vite
 | Variable | Where it comes from | Required |
 | -- | -- | -- |
 | `DATABASE_URL`, `PGUSER` | kennel, or the dev shell | yes |
-| `APP_URL` | kennel; the dev shell sets `http://localhost:5173` | yes |
+| `APP_URL` | kennel; the dev shell sets `http://localhost:5173` | yes. The service refuses to start without it |
 | `PORT` | kennel. Binds `0.0.0.0:$PORT` | in deploys |
 | `SITE_BIND_ADDR` | dev shell, `127.0.0.1:8080` | local |
 | `STATIC_DIR` | flake `env`. Unset locally, where Vite serves pages | in deploys |
-| `S3_ENDPOINT`, `S3_REGION`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`, `S3_BUCKET` | kennel `garage` | optional. Without them media is stored in Postgres |
+| `S3_ENDPOINT`, `S3_BUCKET`, and the key as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | kennel `garage` provisioner in deploys; the dev shell names the key `S3_ACCESS_KEY` and `S3_SECRET_KEY`, which win when both are set. `S3_REGION` defaults to `garage` | optional. Without them media is stored in Postgres; a partial set logs which are missing, and startup logs where uploads go |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OAUTH_RELAY_URL`, `PROJECT_GROUP`, `PROJECT_ADMIN_GROUP` | governance `oidc_client` | optional. Sign-in through Keycloak is on only when all seven are set |
-| `PORTAL_DEV_LOGIN` | dev shell sets `1` | optional |
+| `PORTAL_DEV_LOGIN` | dev shell sets `1`; the preview profile defaults it to `1` | optional |
 | `GOVERNANCE_SYNC` | `1` or `0`; declared in `secretspec.toml` so a deployment can turn it off | optional. Unset, the governance sync runs everywhere except local development with open dev sign-in |
 | `PORTAL_DEV_LOGIN_KEY` | OpenBao, preview profile only | optional |
 | `SEED_DEMO_CONTENT` | dev shell and preview profile | optional |
@@ -51,7 +51,7 @@ Dev login rules, enforced in the service:
 
 ## Seed data
 
-Seeding runs at startup inside one transaction and only inserts what is missing, so it is safe on every restart and never overwrites edits.
+Seeding runs at startup inside one transaction and only inserts what is missing, so it is safe on every restart and never overwrites edits. The ticker is seeded once per database (recorded in `seed_markers`), so deleting its announcements sticks.
 
 Always seeded:
 
@@ -79,10 +79,10 @@ Bundled seed images live in `sites/web/static/seed/` and are referenced as `/see
 
 ### Rust
 
-- Edition 2024, nightly toolchain from kennel. Format with `cargo fmt`. `cargo clippy` clean.
+- Edition 2024, nightly toolchain from kennel. Format with `cargo fmt`. `cargo clippy` clean, on the dev shell's nightly and on the stable toolchain the Nix checks (`site-clippy`, `site-test`) use in CI. Files the tests read with `include_str!` must be listed in `extraSources` in `flake.nix`.
 - `sqlx` with runtime-checked queries (`query`, `query_as`, `query_scalar`). Do not use the `query!` macros, which need a database at compile time. `sqlx::migrate!` is fine.
 - IDs are `Uuid::now_v7()`.
-- Handlers return `Result<T, AppError>` (`src/error.rs`). Errors serialize as `{ "error": { "code", "message", "fields"? } }` with the matching status: `bad_request` 400, `validation_failed` 422, `unauthenticated` 401, `forbidden` 403, `not_found` 404, `conflict` 409, `payload_too_large` 413, `unsupported_media_type` 415, `rate_limited` 429, `auth_not_configured` 503, `internal` 500. Internal errors log the cause and never return it.
+- Handlers return `Result<T, AppError>` (`src/error.rs`). Errors serialize as `{ "error": { "code", "message", "fields"? } }` with the matching status: `bad_request` 400, `validation_failed` 422, `unauthenticated` 401, `forbidden` 403, `not_found` 404, `conflict` 409, `method_not_allowed` 405, `payload_too_large` 413, `unsupported_media_type` 415, `rate_limited` 429, `upstream_failed` 502, `auth_not_configured` 503, `internal` 500. Internal errors log the cause and never return it.
 - Messages are for people: plain sentences that say what to do. "Write a message of 90 characters or fewer." not "message: invalid length".
 - JSON structs use `#[serde(rename_all = "camelCase")]`. Enums serialize as their snake_case names (`"in_development"`), matching `sites/web/src/lib/api/types.ts`.
 - Every write that changes content or roles writes an audit entry with `audit::record` in the same transaction.
@@ -227,7 +227,7 @@ All bodies are JSON unless stated. Types are in `sites/web/src/lib/api/types.ts`
 | PUT `/api/announcements/order` | reorder | Body `{ "ids": [...] }`, the live ones in their new order |
 | DELETE `/api/announcements/:id` | creator of a pending or sent back one, or manager | 204 |
 
-Rules: message 1 to 90 characters on one line, trimmed. `linkUrl` optional, `https` only, at most 2048 characters. `expiresAt` in the future and at most 30 days after it goes live. At most 6 live at once; posting or approving a seventh fails with `conflict` and says to end one first. Approving keeps the lead's chosen `expiresAt`; if it has passed, approval fails with `validation_failed` and asks the lead to pick a new time.
+Rules: message 1 to 90 characters on one line, trimmed, without control characters, line separators or bidirectional overrides (true of every one-line field). `linkUrl` optional, `https` only, at most 2048 characters. `expiresAt` in the future and at most 30 days after it goes live. At most 6 live at once; posting or approving a seventh fails with `conflict` and says to end one first. Approving keeps the lead's chosen `expiresAt`; if it is less than 5 minutes away, approval fails with `validation_failed` and asks the approver to send it back for a later time.
 
 ### Committee pages
 
@@ -242,7 +242,7 @@ Rules: message 1 to 90 characters on one line, trimmed. `linkUrl` optional, `htt
 | POST `/api/committee-pages/:slug/publish` | editors. Body `{ "draftVersion" }`. Validates for publishing (alt text) |
 | POST `/api/committee-pages/:slug/discard` | editors. Draft becomes the published version |
 
-Draft validation (saving): block types and widths per `BLOCK_WIDTHS`, the cover first and only once, at most 12 blocks, unique block ids, stats 2 to 4 items, gallery 3 to 6 images, text fields within limits, URLs `https` (or `mailto:` for buttons), images only `/media/<uuid>` or `/seed/...`, video URLs that play one YouTube or Vimeo video, rich text sanitized with `ammonia`. Publishing additionally requires alt text on every image.
+Draft validation (saving): block types and widths per `BLOCK_WIDTHS`, the cover first and only once, at most 12 blocks, unique block ids, stats 2 to 4 items, gallery 3 to 6 images, text fields within limits, URLs `https` (or `mailto:` for buttons), images only `/media/<uuid>` or `/seed/...`, video URLs that play one YouTube or Vimeo video, rich text sanitized with `ammonia`. Publishing additionally requires alt text on every image and an uploaded cover at least 1200 pixels wide.
 
 ### Projects
 
@@ -258,14 +258,14 @@ Draft validation (saving): block types and widths per `BLOCK_WIDTHS`, the cover 
 | PATCH `/api/projects/:id/settings` | admin: `{ "slug"?, "featured"? }`. A slug change records a redirect |
 | PUT `/api/projects/:id/editors` | `{ "userIds": [...] }`, directors of the owner and admins |
 
-Rules: name 1 to 60 characters; summary 1 to 48; description up to 4000 characters of text after sanitizing; links `https`; `repoUrl` any https host; `videoUrl` YouTube or Vimeo; at most 8 media; `builtWith` excludes the owner. Publishing needs a cover with alt text and a summary.
+Rules: name 1 to 60 characters; summary 1 to 48; description up to 4000 characters of text after sanitizing; links `https`; `repoUrl` any https host; `videoUrl` YouTube or Vimeo; at most 8 media; `builtWith` excludes the owner. Publishing needs a cover with alt text and a summary; an uploaded cover must be at least 1200 pixels wide (`/seed/` images are exempt).
 
 ### Media
 
 `POST /api/media`, multipart with `file` and optional `alt`, any portal user.
 
 - At most 5 MB. JPEG, PNG or WebP, detected from the bytes, not the name or header.
-- Decode with limits (at most 12000 by 12000 pixels and 512 MB of allocation).
+- Decode with limits: at most 12000 pixels on each side, 40 megapixels in all (checked from the header before decoding), and 512 MB of allocation.
 - Re-encode, which strips metadata: JPEG at quality 82 for opaque images, PNG when the image has transparency. Make widths 480, 960 and 1920, never wider than the original.
 - Store under `media/<uuid>/<width>` in S3 when configured, otherwise in `media_blobs`.
 - Respond `201 UploadResponse`.
@@ -298,7 +298,7 @@ Approving calls `announcements::apply_approval` or `projects::apply_approval` in
 | Method and path | Who |
 | -- | -- |
 | GET `/api/overview` | portal, scoped to the viewer |
-| GET `/api/activity?limit=` | portal, scoped: admins see all; others see entries for their committees and their own actions |
+| GET `/api/activity?limit=` | portal, scoped: admins see all; others see their own actions, every entry for committees they direct, and entries for committees they only lead in that name nothing they cannot open (see Changes, 2026-11-25) |
 
 Attention items, in this order: approvals waiting for the viewer; the viewer's own sent back items; announcements the viewer can manage that expire within 3 days; committee pages they can edit with unpublished changes; projects they can edit missing a cover, summary or links; pages they can edit not published for 90 days.
 
@@ -317,8 +317,9 @@ Headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: 
 
 ## Limits on requests
 
-- JSON bodies at most 256 KB, uploads 6 MB.
-- Per IP: sign-in and dev login 20 a minute; writes 120 a minute; uploads 30 a minute.
+- JSON bodies at most 256 KB, uploads 6 MB. A NUL anywhere in a JSON string is refused with `validation_failed`, since Postgres cannot store it.
+- Rich text sources over 64,000 bytes or 4,000 tags are refused before sanitizing.
+- Per IP: sign-in and dev login 20 a minute; writes 120 a minute; uploads 30 a minute. Behind kennel's proxy (a loopback peer) the client is `CF-Connecting-IP`, then the right-most `X-Forwarded-For`; headers from other peers are ignored.
 
 ## Ownership of files
 
@@ -338,6 +339,25 @@ Each area keeps the files below; change another area's files only together with 
 ## Changes
 
 Record changes to this contract here, newest first, with the reason.
+
+### 2026-11-25, final backend review fixes
+
+- **Rich text is size-capped before sanitizing.** `richtext::clean` refuses sources over 64,000 bytes or 4,000 tags (`blocks.<i>.body` or `description`: "... has too much formatting to save"), because html5ever takes time that grows with the square of nested-table markup. Committee and project drafts are cleaned on the blocking pool (`routes::common::blocking`), a project's before its row is locked, and html5ever logs only errors.
+- **Uploads**: at most 40 megapixels, checked from the header before decoding (`413`, "That image has too many pixels..."). Large originals are first averaged down with the box filter, very tall ones skip the resampling filter, and each width is encoded as soon as it is made.
+- **Activity scope.** `permissions::activity_scope` decides what `audit::recent` (activity and the overview) shows: admins everything; everyone their own actions; every entry for committees the viewer directs; for committees they only lead in, announcement entries only while the announcement is open to them (`permissions::can_view_announcement`: not waiting for approval, or theirs) and project entries only for projects they may open (`can_view_project`). Other entries (people, committee pages) are unchanged. The query reads index-backed branches instead of one filter over the log.
+- **One-line fields** (`models::check_line`) also refuse control characters such as tab and NUL, U+2028, U+2029 and the bidirectional embeddings, overrides and isolates: "Remove the special characters from <label>." `crate::json::Json` refuses a NUL in any string with `validation_failed`, and `routes::common::query_param` drops control characters from filters and searches.
+- **Configuration.** `APP_URL` is required. S3 credentials come from `S3_ACCESS_KEY`/`S3_SECRET_KEY` or kennel's `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, so deployments store uploads in their Garage bucket instead of Postgres. Partly set S3 or Keycloak settings log which variables are missing; startup logs the sign-in mode and where uploads go. `Config::from_vars(lookup)` reads settings through a function, for tests.
+- **Covers at least 1200 pixels wide** (spec section 12): publishing refuses an uploaded project cover (`media.0`) or committee cover (`blocks.0.image`) narrower than 1200 pixels: "Use a cover photo at least 1,200 pixels wide. This one is <n> pixels wide." Bundled `/seed/` images are exempt. `ProjectChecklist` gains `coverWide` (true without a cover). The web checklists still need the matching item.
+- **Approving too late** now says "This announcement leaves the ticker in less than 5 minutes, or already has. Send it back and ask the lead to pick a later time."
+- **Indexes.** Migration `0601_lookup_indexes.sql` indexes `approvals` by subject and by submitter and `audit_log` by subject and by actor. The ticker lists read the latest approval of every row in one query (`approvals_core::latest_of_each`), without the snapshot. The expired tab is still unpaged.
+- **Seed markers.** Migration `0602_seed_markers.sql` adds `seed_markers (name, created_at)`, marked `ticker` for databases that already have or had announcements; the ticker seeds only when it claims the marker.
+- **Rollbacks.** `db::migrate` allows migrations it does not know, so the previous release starts against a newer schema. Every migration must therefore stay additive.
+- **Errors.** Malformed announcement ids answer `404` in the error shape, like the other tracks (`routes::common::parse_id`). A wrong method on an API route answers `405 method_not_allowed` with `Allow`. A governance repository that is down or answers with something unusable gives `502 upstream_failed` instead of `400`. Both codes are in `ApiErrorBody` in types.ts.
+- **Rate limits** take the visitor from `CF-Connecting-IP` behind a loopback peer, then the right-most `X-Forwarded-For`: Caddy in kennel replaces `X-Forwarded-For` with the tunnel's loopback address, so every visitor shared one bucket.
+- **Logs** are plain text unless stdout is a terminal, every request has an info span with its method and path (never the query), internal errors log their causes on one line, and the trace layer's failure line moved to debug, so each 500 is logged once.
+- **Secrets.** `PORTAL_DEV_LOGIN` (default `1`) and `PORTAL_DEV_LOGIN_KEY` are declared in the preview profile only, so keyed dev sign-in works on previews and other profiles never resolve the key. The dev profile no longer defaults `SEED_DEMO_CONTENT` to `1`: on kennel's long-lived dev deployment it gave real accounts with persona Andrew IDs the persona roles. Local development still gets it from the dev shell.
+- **CI.** `services/site/src/routes/auth/test-signing-key.pem` is in `extraSources`, and `group_thousands` uses `is_multiple_of`, which stable clippy requires, so `site-clippy` and `site-test` build.
+- **Shared route helpers** live in `routes::common`: `blocking`, `query_param`, `parse_id(raw, what)`, `no_store` and `quoted`.
 
 ### 2026-11-24, sign-in hardening and roles from governance
 

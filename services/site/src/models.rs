@@ -234,7 +234,20 @@ impl ImageRef {
             .strip_prefix("/media/")
             .and_then(|id| Uuid::parse_str(id).ok())
     }
+
+    /// Why this image cannot be a cover, which pages show up to 1200 pixels wide: an upload narrower than [`MIN_COVER_WIDTH`]. Bundled `/seed/` images are exempt; some are 1000 pixels wide. Call it after the stored size replaced the one the browser sent.
+    pub fn cover_problem(&self) -> Option<String> {
+        let width = self.width?;
+        (self.media_id().is_some() && width < MIN_COVER_WIDTH).then(|| {
+            format!(
+                "Use a cover photo at least 1,200 pixels wide. This one is {width} pixels wide."
+            )
+        })
+    }
 }
+
+/// Narrowest upload accepted as a cover, from spec section 12.
+pub const MIN_COVER_WIDTH: u32 = 1200;
 
 fn is_local_image_src(src: &str) -> bool {
     if let Some(id) = src.strip_prefix("/media/") {
@@ -331,6 +344,9 @@ pub fn check_line(raw: &str, min: usize, max: usize, label: &str) -> Result<Stri
     if value.contains(['\n', '\r']) {
         return Err(format!("Keep {label} on one line."));
     }
+    if value.chars().any(is_hidden_control) {
+        return Err(format!("Remove the special characters from {label}."));
+    }
     let count = value.chars().count();
     if count < min {
         return Err(if min == 1 {
@@ -343,6 +359,15 @@ pub fn check_line(raw: &str, min: usize, max: usize, label: &str) -> Result<Stri
         return Err(format!("Keep {label} to {max} characters or fewer."));
     }
     Ok(value)
+}
+
+/// Characters a one-line field refuses besides line breaks: control characters such as NUL and tab, the Unicode line and paragraph separators, and the bidirectional embeddings, overrides and isolates, which can make text read backwards or spoof what it says.
+fn is_hidden_control(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
 }
 
 #[cfg(test)]
@@ -430,6 +455,23 @@ mod tests {
         assert_eq!(check_line("  hi  ", 1, 10, "a name").unwrap(), "hi");
         assert!(check_line("", 1, 10, "a name").is_err());
         assert!(check_line("a\nb", 1, 10, "a name").is_err());
+        for hidden in ["\0", "\t", "\u{7}", "\u{2028}", "\u{202E}", "\u{2067}"] {
+            assert_eq!(
+                check_line(&format!("a{hidden}b"), 1, 10, "the message"),
+                Err("Remove the special characters from the message.".to_owned()),
+                "{hidden:?}"
+            );
+        }
+        // Letters from any script, emoji sequences and directional marks stay.
+        assert!(
+            check_line(
+                "Caf\u{e9} \u{1F469}\u{200D}\u{1F4BB} \u{5E9}\u{200F}",
+                1,
+                20,
+                "a name"
+            )
+            .is_ok()
+        );
         assert!(check_line(&"x".repeat(11), 1, 10, "a name").is_err());
     }
 }

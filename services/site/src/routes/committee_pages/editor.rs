@@ -20,6 +20,7 @@ use crate::error::{AppError, AppResult, Problems};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, ImageRef, PersonRef};
 use crate::permissions;
+use crate::routes::common::blocking;
 use crate::routes::projects::public::{ProjectCard, published_cards};
 use crate::state::AppState;
 
@@ -312,7 +313,9 @@ pub(super) async fn save_draft(
 ) -> AppResult<Json<SaveDraftResponse>> {
     let committee = committee_from_slug(&slug)?;
     require_editor(&viewer, committee)?;
-    let mut doc = blocks::clean_draft(input.doc)?;
+    // Sanitizing rich text takes CPU time, so it runs off the async runtime.
+    let doc = input.doc;
+    let mut doc = blocking(move || blocks::clean_draft(doc)).await??;
     let mut tx = state.db.begin().await?;
     check_media(&mut tx, &mut doc).await?;
     let row = locked_page(&mut tx, committee).await?;

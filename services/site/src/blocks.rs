@@ -588,12 +588,14 @@ fn clean_block(content: &mut BlockContent, fields: &mut Fields<'_>) {
 }
 
 fn clean_rich_text(body: &mut String, fields: &mut Fields<'_>) {
-    let clean = richtext::sanitize(body);
+    const TOO_MUCH: &str =
+        "This text has too much formatting to save. Remove some of it and try again.";
+    let Ok(clean) = richtext::clean(body) else {
+        fields.add("body", TOO_MUCH);
+        return;
+    };
     if clean.len() > limits::BODY_HTML_BYTES {
-        fields.add(
-            "body",
-            "This text has too much formatting to save. Remove some of it and try again.",
-        );
+        fields.add("body", TOO_MUCH);
         return;
     }
     if richtext::plain_text(&clean).chars().count() > richtext::MAX_TEXT_CHARS {
@@ -771,11 +773,17 @@ fn clean_settings(settings: &mut CommitteeSettings, problems: &mut Problems) {
 // ---------------------------------------------------------------------------
 // Checks for publishing
 
-/// The extra checks before a cleaned draft goes live: a cover photo, alt text on every image, and blocks that would otherwise show up empty.
+/// The extra checks before a cleaned draft goes live: a cover photo at least 1,200 pixels wide, alt text on every image, and blocks that would otherwise show up empty. Run it after the stored image sizes are filled in.
 pub fn check_for_publishing(doc: &CommitteePageDoc) -> AppResult<()> {
     let mut problems = Problems::new();
-    if doc.cover().is_some_and(|cover| cover.image.is_none()) {
-        problems.add("blocks.0.image", "Add a cover photo before you publish.");
+    match doc.cover().map(|cover| cover.image.as_ref()) {
+        Some(None) => problems.add("blocks.0.image", "Add a cover photo before you publish."),
+        Some(Some(image)) => {
+            if let Some(message) = image.cover_problem() {
+                problems.add("blocks.0.image", message);
+            }
+        }
+        None => {}
     }
     for (index, block) in doc.blocks.iter().enumerate() {
         let mut fields = Fields {

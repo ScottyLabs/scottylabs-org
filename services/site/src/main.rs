@@ -20,6 +20,7 @@ mod static_files;
 #[cfg(test)]
 mod testing;
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -30,13 +31,19 @@ use crate::state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // html5ever warns once per node it cannot place while ammonia sanitizes, which anyone can trigger thousands of times per request, so it logs only errors, whatever RUST_LOG says.
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("info,site=debug"))
+        .add_directive("html5ever=error".parse()?);
+    // Colors only on a terminal; journald and log collectors would store the escape codes.
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,site=debug")),
-        )
+        .with_env_filter(filter)
+        .with_ansi(std::io::stdout().is_terminal())
         .init();
 
     let config = Arc::new(Config::from_env().context("loading configuration")?);
+    let (sign_in, media) = config.describe();
+    tracing::info!(sign_in, media, "configuration loaded");
     let db = db::connect(&config.database_url).await?;
     db::migrate(&db).await?;
     seed::run(&db, &config).await.context("seeding content")?;

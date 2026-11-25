@@ -43,9 +43,11 @@ export interface ApiErrorBody {
       | "forbidden"
       | "not_found"
       | "conflict"
+      | "method_not_allowed"
       | "payload_too_large"
       | "unsupported_media_type"
       | "rate_limited"
+      | "upstream_failed"
       | "auth_not_configured"
       | "internal";
     message: string;
@@ -367,6 +369,8 @@ export interface ProjectListResponse {
 
 export interface ProjectChecklist {
   cover: boolean;
+  /** The cover is at least 1,200 pixels wide (bundled /seed/ images always pass, and so does no cover). Publishing needs it. */
+  coverWide: boolean;
   summary: boolean;
   description: boolean;
   links: boolean;

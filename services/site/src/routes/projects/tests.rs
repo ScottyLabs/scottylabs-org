@@ -464,7 +464,8 @@ async fn opening_a_project_follows_the_view_rules(db: PgPool) {
     assert_eq!(
         project["checklist"],
         json!({
-            "cover": true, "summary": true, "description": true, "links": false, "altText": true
+            "cover": true, "coverWide": true, "summary": true, "description": true,
+            "links": false, "altText": true
         })
     );
 
@@ -592,6 +593,44 @@ async fn drafts_are_checked_cleaned_and_kept_from_visitors(db: PgPool) {
     let draft_only = testing::project(&db, Committee::Events, "fresh").await;
     let (status, _) = act(&app, &p.director, draft_only, "discard").await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn descriptions_with_too_much_markup_are_refused_at_once(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let base = full(Committee::Events, "Nova", json!({}));
+
+    // Thousands of unclosed tables take the HTML parser time that grows with the square of their number, so they are refused before parsing.
+    let started = std::time::Instant::now();
+    let (status, body) = save(
+        &app,
+        &p.director,
+        nova,
+        with(&base, json!({ "description": "<table>x".repeat(31_000) })),
+    )
+    .await;
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(1),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"]["description"],
+        "The description has too much formatting to save. Remove some of it and try again."
+    );
+
+    // Someone who may not edit the project still gets 403 first.
+    let (status, _) = save(
+        &app,
+        &p.member,
+        nova,
+        with(&base, json!({ "description": "<table>x".repeat(31_000) })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -729,6 +768,34 @@ async fn publishing_needs_a_described_cover_and_a_summary(db: PgPool) {
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(body["error"]["fields"]["media.0.alt"].is_string());
     assert_eq!(body["error"]["fields"].as_object().unwrap().len(), 1);
+
+    // An uploaded cover must be at least 1,200 pixels wide; bundled images are exempt.
+    let narrow = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO media (id, content_type, width, height, variants, bytes, storage)
+         VALUES ($1, 'image/jpeg', 600, 400, '{480,600}', 1000, 'database')",
+    )
+    .bind(narrow)
+    .execute(&db)
+    .await
+    .unwrap();
+    let small = with(
+        &draft,
+        json!({ "summary": "Support for builders", "media": [{ "src": format!("/media/{narrow}"), "alt": "Five members" }] }),
+    );
+    let (status, body) = save(&app, &p.director, id, small).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "drafts may hold a small photo: {body}"
+    );
+    assert_eq!(body["project"]["checklist"]["coverWide"], false);
+    let (status, body) = act(&app, &p.director, id, "publish").await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body["error"]["fields"]["media.0"],
+        "Use a cover photo at least 1,200 pixels wide. This one is 600 pixels wide."
+    );
 
     let ready = with(
         &draft,

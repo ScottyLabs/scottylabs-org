@@ -9,6 +9,7 @@ use super::{Scope, when};
 use crate::approvals_core::SubjectType;
 use crate::error::AppResult;
 use crate::models::{Committee, PersonRef};
+use crate::routes::common::quoted;
 
 /// Mirrors `AttentionItem` in types.ts.
 #[derive(Debug, Serialize)]
@@ -96,10 +97,6 @@ fn who(
         return Some("you".into());
     }
     Some(PersonRef::new(id, andrew_id, name.unwrap_or_default()).name)
-}
-
-fn quoted(text: &str) -> String {
-    format!("\u{201c}{}\u{201d}", text.trim())
 }
 
 // ---------------------------------------------------------------------------

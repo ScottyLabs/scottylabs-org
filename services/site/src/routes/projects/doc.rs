@@ -102,11 +102,13 @@ impl ProjectDoc {
 }
 
 /// What is still missing before publishing. Mirrors `ProjectChecklist` in types.ts.
-/// Publishing needs `cover`, `summary` and `alt_text`; a description and links are recommended.
+/// Publishing needs `cover`, `cover_wide`, `summary` and `alt_text`; a description and links are recommended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Checklist {
     pub cover: bool,
+    /// The cover is at least 1,200 pixels wide, or a bundled image, or there is no cover yet.
+    pub cover_wide: bool,
     pub summary: bool,
     pub description: bool,
     pub links: bool,
@@ -118,6 +120,9 @@ impl Checklist {
         let summary = doc.summary.trim().chars().count();
         Self {
             cover: doc.cover().is_some(),
+            cover_wide: doc
+                .cover()
+                .is_none_or(|cover| cover.cover_problem().is_none()),
             summary: (1..=MAX_SUMMARY_CHARS).contains(&summary),
             description: !richtext::plain_text(&doc.description).is_empty(),
             links: doc.site_url.is_some() || doc.repo_url.is_some(),
@@ -141,8 +146,37 @@ pub async fn validate(
     doc: ProjectDoc,
     purpose: Purpose,
 ) -> AppResult<ProjectDoc> {
-    let mut problems = Problems::new();
-    let mut clean = clean_fields(doc, &mut problems);
+    finish_validation(conn, Cleaned::of(doc), purpose).await
+}
+
+/// A doc after the checks that need no database, with the problems they found. Cleaning sanitizes the description, which takes CPU time, so a save cleans the doc off the async runtime before it locks the project.
+pub struct Cleaned {
+    doc: ProjectDoc,
+    problems: Problems,
+}
+
+impl Cleaned {
+    pub fn of(doc: ProjectDoc) -> Self {
+        let mut problems = Problems::new();
+        let doc = clean_fields(doc, &mut problems);
+        Self { doc, problems }
+    }
+
+    pub fn committee(&self) -> Committee {
+        self.doc.committee
+    }
+}
+
+/// The rest of [`validate`] for a doc cleaned with [`Cleaned::of`].
+pub async fn finish_validation(
+    conn: &mut PgConnection,
+    cleaned: Cleaned,
+    purpose: Purpose,
+) -> AppResult<ProjectDoc> {
+    let Cleaned {
+        doc: mut clean,
+        mut problems,
+    } = cleaned;
     size_uploads(conn, &mut clean.media, &mut problems).await?;
     if purpose == Purpose::Publish {
         check_publishable(&clean, &mut problems);
@@ -152,7 +186,7 @@ pub async fn validate(
 }
 
 /// The checks that need no database.
-pub fn clean_fields(doc: ProjectDoc, problems: &mut Problems) -> ProjectDoc {
+fn clean_fields(doc: ProjectDoc, problems: &mut Problems) -> ProjectDoc {
     let name =
         check_line(&doc.name, 1, MAX_NAME_CHARS, "the project name").unwrap_or_else(|message| {
             problems.add("name", message);
@@ -210,7 +244,13 @@ pub fn clean_fields(doc: ProjectDoc, problems: &mut Problems) -> ProjectDoc {
 }
 
 fn clean_description(raw: &str, problems: &mut Problems) -> String {
-    let html = richtext::sanitize(raw);
+    let Ok(html) = richtext::clean(raw) else {
+        problems.add(
+            "description",
+            "The description has too much formatting to save. Remove some of it and try again.",
+        );
+        return String::new();
+    };
     let length = richtext::plain_text(&html).chars().count();
     if length == 0 {
         // Empty paragraphs and line breaks count as no description.
@@ -233,7 +273,7 @@ fn group_thousands(value: usize) -> String {
     let digits = value.to_string();
     let mut out = String::new();
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(digit);
@@ -319,18 +359,24 @@ async fn size_uploads(
     Ok(())
 }
 
-/// The extra rules for publishing: a cover with alt text, and a summary.
+/// The extra rules for publishing: a cover at least 1,200 pixels wide with alt text, and a summary.
 fn check_publishable(doc: &ProjectDoc, problems: &mut Problems) {
     match doc.cover() {
         None => problems.add(
             "media",
             "Add at least one photo before publishing. The first one is the cover.",
         ),
-        Some(cover) if cover.alt.is_empty() => problems.add(
-            "media.0.alt",
-            "Describe the cover photo for people who use screen readers.",
-        ),
-        Some(_) => {}
+        Some(cover) => {
+            if let Some(message) = cover.cover_problem() {
+                problems.add("media.0", message);
+            }
+            if cover.alt.is_empty() {
+                problems.add(
+                    "media.0.alt",
+                    "Describe the cover photo for people who use screen readers.",
+                );
+            }
+        }
     }
     if doc.summary.is_empty() {
         problems.add(

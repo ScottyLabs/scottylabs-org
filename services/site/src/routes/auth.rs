@@ -1,7 +1,7 @@
 //! Signing in and out: Keycloak through the Ricochet relay, dev sign-in as a seeded persona, and logout.
 
 use axum::extract::{RawQuery, State};
-use axum::http::header::{CACHE_CONTROL, LOCATION};
+use axum::http::header::LOCATION;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -18,6 +18,7 @@ use crate::auth::session::{self, NewSession, secrets_match};
 use crate::config::{Config, DevLogin};
 use crate::error::{AppError, AppResult};
 use crate::models::AuthMode;
+use crate::routes::common::no_store;
 use crate::seed::people::{PERSONAS, persona};
 use crate::state::AppState;
 
@@ -120,13 +121,6 @@ fn sign_in_error(code: &str) -> Response {
     redirect(&format!("{SIGN_IN_PAGE}?error={code}"))
 }
 
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
-}
-
 /// Binds a sign-in to the browser that started it, so nobody can finish their own sign-in in someone else's browser.
 fn attempt_cookie_name(config: &Config) -> &'static str {
     if config.is_https() {
@@ -152,7 +146,7 @@ async fn login(State(state): State<AppState>, RawQuery(query): RawQuery) -> Resp
     let authorization = match oidc.authorize(&callback_url(&state.config)).await {
         Ok(authorization) => authorization,
         Err(error) => {
-            tracing::error!(error = ?error, "could not start a Keycloak sign-in");
+            tracing::error!(error = %format!("{error:#}"), "could not start a Keycloak sign-in");
             return sign_in_error("failed");
         }
     };
@@ -171,7 +165,7 @@ async fn login(State(state): State<AppState>, RawQuery(query): RawQuery) -> Resp
     .execute(&state.db)
     .await;
     if let Err(error) = stored {
-        tracing::error!(error = ?error, "could not store a sign-in attempt");
+        tracing::error!(error = %error, "could not store a sign-in attempt");
         return sign_in_error("failed");
     }
     let mut response = redirect(authorization.url.as_str());

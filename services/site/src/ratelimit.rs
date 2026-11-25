@@ -135,14 +135,26 @@ fn prune(table: &mut Table, now: Instant) {
     table.pruned_at = now;
 }
 
-/// The address limits apply to. Kennel runs Caddy on the same host, so a loopback peer means the real client is the right-most `X-Forwarded-For` entry, which Caddy wrote. Any other peer is the client itself, and its headers are not trusted.
+/// The address limits apply to. Kennel serves through Cloudflare, then a tunnel to the host, then Caddy on the same host, so a loopback peer is the proxy. Behind it the visitor is `CF-Connecting-IP`, which Cloudflare's edge sets and the tunnel and Caddy pass on; Caddy replaces `X-Forwarded-For` with the tunnel's loopback address, so its right-most entry is only the fallback. Any other peer is the client itself, and its headers are not trusted.
 pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap) -> IpAddr {
     let ip = match peer {
-        Some(peer) if peer.is_loopback() => forwarded_for(headers).unwrap_or(peer),
+        Some(peer) if peer.is_loopback() => connecting_ip(headers)
+            .or_else(|| forwarded_for(headers))
+            .unwrap_or(peer),
         Some(peer) => peer,
         None => IpAddr::from([0, 0, 0, 0]),
     };
     normalize(ip)
+}
+
+fn connecting_ip(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get("cf-connecting-ip")?
+        .to_str()
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
@@ -304,6 +316,37 @@ mod tests {
         let mut garbage = HeaderMap::new();
         garbage.append("x-forwarded-for", HeaderValue::from_static("nonsense"));
         assert_eq!(client_ip(Some(ip("127.0.0.1")), &garbage), ip("127.0.0.1"));
+    }
+
+    #[test]
+    fn cloudflare_names_the_visitor_behind_kennels_proxy() {
+        // What arrives through Cloudflare, the tunnel and Caddy: Caddy rewrote X-Forwarded-For to the tunnel's address.
+        let mut headers = HeaderMap::new();
+        headers.append("x-forwarded-for", HeaderValue::from_static("127.0.0.1"));
+        headers.append("cf-connecting-ip", HeaderValue::from_static("198.51.100.7"));
+        assert_eq!(
+            client_ip(Some(ip("127.0.0.1")), &headers),
+            ip("198.51.100.7")
+        );
+        let mut v6 = HeaderMap::new();
+        v6.append(
+            "cf-connecting-ip",
+            HeaderValue::from_static("2001:db8:5:6:7::1"),
+        );
+        assert_eq!(client_ip(Some(ip("::1")), &v6), ip("2001:db8:5:6::"));
+        // A remote peer cannot pick its own address this way either.
+        assert_eq!(
+            client_ip(Some(ip("203.0.113.9")), &headers),
+            ip("203.0.113.9")
+        );
+        // A header that is not an address falls back to X-Forwarded-For.
+        let mut garbage = HeaderMap::new();
+        garbage.append("cf-connecting-ip", HeaderValue::from_static("nonsense"));
+        garbage.append("x-forwarded-for", HeaderValue::from_static("203.0.113.7"));
+        assert_eq!(
+            client_ip(Some(ip("127.0.0.1")), &garbage),
+            ip("203.0.113.7")
+        );
     }
 
     #[test]

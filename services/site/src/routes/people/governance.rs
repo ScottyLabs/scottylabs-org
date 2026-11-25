@@ -15,11 +15,12 @@ use sqlx::{PgConnection, PgPool};
 use tokio::time::MissedTickBehavior;
 use uuid::Uuid;
 
-use super::{clear_lead_projects, display_name, find_or_create_user, no_store, record};
+use super::{clear_lead_projects, display_name, find_or_create_user, record};
 use crate::auth::{PortalViewer, Viewer, normalize_andrew_id};
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, Role};
 use crate::permissions;
+use crate::routes::common::{self, no_store};
 use crate::state::AppState;
 
 const GOVERNANCE_URL: &str =
@@ -118,9 +119,10 @@ impl Listed {
     }
 }
 
+/// A name from the governance file in curly quotes, cut short, since the file is not ours.
 fn quoted(text: &str) -> String {
     let short: String = text.chars().take(MAX_QUOTED_CHARS).collect();
-    format!("\u{201c}{short}\u{201d}")
+    common::quoted(&short)
 }
 
 /// Reads `data/committees.yaml`. The organization director is not a committee director and is ignored; governance never makes anyone an admin.
@@ -220,7 +222,7 @@ fn heads_of(
 
 async fn fetch_governance(http: &reqwest::Client, url: &str) -> AppResult<String> {
     let unreachable = || {
-        AppError::BadRequest(
+        AppError::Upstream(
             "We couldn't reach the governance repository. Try again in a few minutes.".into(),
         )
     };
@@ -235,16 +237,15 @@ async fn fetch_governance(http: &reqwest::Client, url: &str) -> AppResult<String
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| unreachable())? {
         if body.len() + chunk.len() > MAX_GOVERNANCE_BYTES {
-            return Err(AppError::BadRequest(
+            return Err(AppError::Upstream(
                 "The governance committees file is larger than expected, so it was not read."
                     .into(),
             ));
         }
         body.extend_from_slice(&chunk);
     }
-    String::from_utf8(body).map_err(|_| {
-        AppError::BadRequest("The governance committees file is not valid text.".into())
-    })
+    String::from_utf8(body)
+        .map_err(|_| AppError::Upstream("The governance committees file is not valid text.".into()))
 }
 
 /// Remembers that the People page took `user_id`'s role in `committee` away or lowered it, so the sync does not give one back while governance still lists them there. Called in the same transaction as the change.
@@ -615,7 +616,7 @@ async fn sync_from(
     let yaml = fetch_governance(http, url).await?;
     let mut listed = parse_committees(&yaml).map_err(|error| {
         tracing::warn!(error = %error, "governance committees file did not parse");
-        AppError::BadRequest(
+        AppError::Upstream(
             "The governance committees file could not be read. Check data/committees.yaml in governance, then try again.".into(),
         )
     })?;
@@ -680,7 +681,10 @@ async fn sync_in_background(db: &PgPool, http: &reqwest::Client, url: &str) {
             "synced directors and heads from governance"
         ),
         Ok(Err(error)) => tracing::warn!(
-            error = ?error,
+            error = %match &error {
+                AppError::Internal(cause) => format!("{cause:#}"),
+                other => other.to_string(),
+            },
             "could not sync directors and heads from governance; roles are unchanged"
         ),
         Err(_) => tracing::warn!(

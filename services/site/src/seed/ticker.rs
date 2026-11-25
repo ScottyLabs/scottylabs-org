@@ -1,4 +1,4 @@
-//! Seeds the ticker with the announcements from the design file, only while the table is empty, so edits and deletions stick across restarts. CollegeCart is always seeded, since it replaces the announcement that used to be hard-coded in `Hero.svelte`; the rest only with demo content.
+//! Seeds the ticker with the announcements from the design file once per database, recorded in `seed_markers`, so edits and deletions stick across restarts, even deleting every announcement. CollegeCart is always seeded, since it replaces the announcement that used to be hard-coded in `Hero.svelte`; the rest only with demo content.
 
 use anyhow::Context;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -76,10 +76,17 @@ const PENDING: Sample = Sample {
 };
 
 pub async fn run(conn: &mut PgConnection, config: &Config) -> anyhow::Result<()> {
+    // Seeding runs inside one transaction under an advisory lock, so two instances starting at once cannot both claim the marker.
+    let first_time = sqlx::query_scalar::<_, String>(
+        "INSERT INTO seed_markers (name) VALUES ('ticker') ON CONFLICT (name) DO NOTHING RETURNING name",
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .is_some();
     let existing: i64 = sqlx::query_scalar("SELECT count(*) FROM announcements")
         .fetch_one(&mut *conn)
         .await?;
-    if existing > 0 {
+    if !first_time || existing > 0 {
         return Ok(());
     }
     let now = Utc::now();
@@ -258,6 +265,31 @@ mod tests {
             .unwrap();
         run(&mut conn, &config).await.unwrap();
         assert_eq!(states(&db).await.len(), 5);
+
+        // Even with every announcement gone, nothing comes back.
+        sqlx::query("DELETE FROM announcements")
+            .execute(&db)
+            .await
+            .unwrap();
+        run(&mut conn, &config).await.unwrap();
+        assert!(states(&db).await.is_empty());
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn a_deleted_collegecart_stays_deleted_in_production(db: PgPool) {
+        testing::ensure_committees(&db).await;
+        let mut config = testing::config();
+        config.seed_demo = false;
+        let mut conn = db.acquire().await.unwrap();
+        run(&mut conn, &config).await.unwrap();
+        assert_eq!(states(&db).await.len(), 1);
+        // A director deletes the only announcement, which empties the table; the next deploy must not post it again.
+        sqlx::query("DELETE FROM announcements")
+            .execute(&db)
+            .await
+            .unwrap();
+        run(&mut conn, &config).await.unwrap();
+        assert!(states(&db).await.is_empty());
     }
 
     #[sqlx::test(migrations = "./migrations")]

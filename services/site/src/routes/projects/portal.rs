@@ -14,7 +14,6 @@ use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use super::doc::{self, Checklist, ProjectDoc, ProjectState, Purpose};
-use super::public::query_param;
 use crate::approvals_core::{self, ApprovalStatus, SubjectType};
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
@@ -22,6 +21,7 @@ use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, ImageRef, PersonRef, check_line};
 use crate::permissions::{self, ProjectAccess};
+use crate::routes::common::{self, blocking, query_param};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -76,7 +76,7 @@ pub(super) async fn lock(conn: &mut PgConnection, id: Uuid) -> AppResult<Project
 
 /// Project ids come from the path; anything that is not one is a project we don't have.
 fn parse_id(raw: &str) -> AppResult<Uuid> {
-    Uuid::parse_str(raw).map_err(|_| AppError::not_found("project"))
+    common::parse_id(raw, "project")
 }
 
 #[derive(FromRow)]
@@ -609,18 +609,21 @@ async fn save_draft(
     JsonBody(input): JsonBody<SaveDraftInput>,
 ) -> AppResult<Json<ProjectEditorResponse>> {
     let id = parse_id(&id)?;
+    // Sanitizing takes CPU time, so it happens before the project is locked and off the async runtime. Its problems are reported after the access checks.
+    let cleaned = blocking(move || doc::Cleaned::of(input.doc)).await?;
+    let target = cleaned.committee();
     let mut tx = state.db.begin().await?;
     let project = lock(&mut tx, id).await?;
     let access = require_access(&viewer, &project)?;
-    let moving = input.doc.committee != project.committee;
-    if moving && !permissions::can_publish_projects_for(&viewer, input.doc.committee) {
+    let moving = target != project.committee;
+    if moving && !permissions::can_publish_projects_for(&viewer, target) {
         return Err(AppError::Forbidden(format!(
             "Only admins and the director of {} can move a project to {}.",
-            input.doc.committee.name(),
-            input.doc.committee.name()
+            target.name(),
+            target.name()
         )));
     }
-    let clean = doc::validate(&mut tx, input.doc, Purpose::Save).await?;
+    let clean = doc::finish_validation(&mut tx, cleaned, Purpose::Save).await?;
     if clean != project.draft.0 {
         sqlx::query(
             "UPDATE projects SET draft = $2, committee = $3, updated_at = now(), updated_by = $4

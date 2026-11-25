@@ -815,6 +815,9 @@ async fn failed_fetches_change_nothing(db: PgPool) {
         error.to_string(),
         "We couldn't reach the governance repository. Try again in a few minutes."
     );
+    // The admin's request was fine; the repository failed.
+    assert_eq!(error.code(), "upstream_failed");
+    assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
     let moved = serve_with(StatusCode::FOUND, String::new()).await;
     assert!(sync_from(&db, &http, &moved, None).await.is_err());
     let huge = serve_with(StatusCode::OK, "#".repeat(MAX_GOVERNANCE_BYTES + 1)).await;

@@ -66,7 +66,7 @@ fn processing_error(error: ProcessError) -> AppError {
             AppError::UnsupportedMediaType("Upload a JPEG, PNG or WebP image.".into())
         }
         ProcessError::TooLarge => AppError::PayloadTooLarge(
-            "That image is too large. Use one under 12,000 pixels wide and tall.".into(),
+            "That image has too many pixels. Resize it to at most 8,000 by 5,000 pixels and try again.".into(),
         ),
         ProcessError::Unreadable(cause) => {
             tracing::debug!(cause, "an upload could not be decoded");

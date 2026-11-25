@@ -26,11 +26,12 @@ use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, PersonRef, TickerSource};
 use crate::permissions::{self, Posting};
+use crate::routes::common::{self, no_store, quoted};
 use crate::state::AppState;
 
 use model::{
     AnnouncementInput, AnnouncementKind, AnnouncementPatch, AnnouncementState, Row, Valid,
-    approval_too_late, quote, validate,
+    approval_too_late, validate,
 };
 
 /// At most this many announcements are live at once.
@@ -190,13 +191,6 @@ impl Tab {
     }
 }
 
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
-}
-
 fn one(announcement: AnnouncementDto) -> Json<AnnouncementResponse> {
     Json(AnnouncementResponse { announcement })
 }
@@ -350,11 +344,10 @@ async fn describe(
     rows: Vec<Row>,
     now: DateTime<Utc>,
 ) -> AppResult<Vec<AnnouncementDto>> {
-    let mut approvals = Vec::with_capacity(rows.len());
-    for row in &rows {
-        approvals
-            .push(approvals_core::latest(&mut *conn, SubjectType::Announcement, row.id).await?);
-    }
+    let row_ids: Vec<Uuid> = rows.iter().map(|row| row.id).collect();
+    let mut latest =
+        approvals_core::latest_of_each(&mut *conn, SubjectType::Announcement, &row_ids).await?;
+    let approvals: Vec<_> = rows.iter().map(|row| latest.remove(&row.id)).collect();
     let ids: BTreeSet<Uuid> = rows
         .iter()
         .flat_map(|row| [row.created_by, row.approved_by])
@@ -451,18 +444,22 @@ async fn list(
     Ok(no_store(Json(body).into_response()))
 }
 
+/// Announcement ids come from the path; anything that is not one is an announcement we don't have.
+fn parse_id(raw: &str) -> AppResult<Uuid> {
+    common::parse_id(raw, "announcement")
+}
+
 /// Waiting announcements are private to their author and the people who manage the source.
 fn can_see(viewer: &Viewer, row: &Row) -> bool {
-    !row.is_waiting()
-        || row.created_by == Some(viewer.user_id)
-        || permissions::can_manage_ticker(viewer, row.committee)
+    permissions::can_view_announcement(viewer, row.committee, row.created_by, row.is_waiting())
 }
 
 async fn show(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let mut conn = state.db.acquire().await?;
     let row = find(&mut conn, id, false)
         .await?
@@ -603,7 +600,7 @@ async fn post_new(
                 viewer,
                 "announcement.publish",
                 &row,
-                format!("Posted {} to the ticker", quote(&row.message)),
+                format!("Posted {} to the ticker", quoted(&row.message)),
             )
             .await?;
             row
@@ -625,7 +622,7 @@ async fn post_new(
                 viewer,
                 "announcement.submit",
                 &row,
-                format!("Sent {} for approval", quote(&row.message)),
+                format!("Sent {} for approval", quoted(&row.message)),
             )
             .await?;
             row
@@ -701,9 +698,10 @@ fn may_use_source(viewer: &Viewer, row: &Row, source: TickerSource) -> bool {
 async fn update(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
     JsonBody(patch): JsonBody<AnnouncementPatch>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let row = lock(&mut tx, id).await?;
@@ -767,11 +765,11 @@ async fn update(
         .await?;
         // An approver who fixes a lead's submission keeps it waiting; it stays the lead's.
         let summary = if updated.created_by == Some(viewer.user_id) {
-            format!("Sent {} for approval again", quote(&updated.message))
+            format!("Sent {} for approval again", quoted(&updated.message))
         } else {
             format!(
                 "Edited {} while it waits for approval",
-                quote(&updated.message)
+                quoted(&updated.message)
             )
         };
         log(&mut tx, &viewer, "announcement.resubmit", &updated, summary).await?;
@@ -781,7 +779,7 @@ async fn update(
             &viewer,
             "announcement.edit",
             &updated,
-            format!("Edited {} on the ticker", quote(&updated.message)),
+            format!("Edited {} on the ticker", quoted(&updated.message)),
         )
         .await?;
     }
@@ -798,9 +796,10 @@ struct ExtendInput {
 async fn extend(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
     JsonBody(input): JsonBody<ExtendInput>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     if !(1..=MAX_EXTEND_DAYS).contains(&input.days) {
         return Err(AppError::field(
             "days",
@@ -827,11 +826,11 @@ async fn extend(
     }
     let updated = set_expiry(&mut tx, id, expires_at).await?;
     let summary = if expires_at == limit {
-        format!("Extended {} to the 30-day limit", quote(&updated.message))
+        format!("Extended {} to the 30-day limit", quoted(&updated.message))
     } else {
         format!(
             "Extended {} by {} day{}",
-            quote(&updated.message),
+            quoted(&updated.message),
             input.days,
             if input.days == 1 { "" } else { "s" }
         )
@@ -861,8 +860,9 @@ async fn set_expiry(
 async fn end(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let row = lock(&mut tx, id).await?;
@@ -886,7 +886,7 @@ async fn end(
         &viewer,
         "announcement.end",
         &updated,
-        format!("Took {} off the ticker", quote(&updated.message)),
+        format!("Took {} off the ticker", quoted(&updated.message)),
     )
     .await?;
     let announcement = describe_one(&mut tx, &viewer, updated, now).await?;
@@ -903,9 +903,10 @@ struct RepostInput {
 async fn repost(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
     JsonBody(input): JsonBody<RepostInput>,
 ) -> AppResult<Response> {
+    let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
     let original = find(&mut tx, id, false)
@@ -992,8 +993,9 @@ async fn reorder(
 async fn remove(
     State(state): State<AppState>,
     viewer: PortalViewer,
-    Path(id): Path<Uuid>,
+    Path(id): Path<String>,
 ) -> AppResult<StatusCode> {
+    let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
     let row = lock(&mut tx, id).await?;
     if !can_see(&viewer, &row) {
@@ -1016,7 +1018,7 @@ async fn remove(
         &viewer,
         "announcement.delete",
         &row,
-        format!("Deleted {}", quote(&row.message)),
+        format!("Deleted {}", quoted(&row.message)),
     )
     .await?;
     tx.commit().await?;
@@ -1098,7 +1100,7 @@ pub async fn apply_approval(
     if approval_too_late(snapshot.expires_at, now) {
         return Err(AppError::field(
             "expiresAt",
-            "The time this announcement was set to leave the ticker has passed. Send it back and ask the lead to pick a new time.",
+            "This announcement leaves the ticker in less than 5 minutes, or already has. Send it back and ask the lead to pick a later time.",
         ));
     }
     let valid = validate(&snapshot, now)?;
@@ -1129,7 +1131,7 @@ pub async fn apply_approval(
         approver,
         "announcement.approve",
         &updated,
-        format!("Approved {} for the ticker", quote(&updated.message)),
+        format!("Approved {} for the ticker", quoted(&updated.message)),
     )
     .await
 }
@@ -1153,7 +1155,7 @@ pub async fn apply_send_back(
         approver,
         "announcement.send_back",
         &updated,
-        format!("Sent {} back for changes", quote(&updated.message)),
+        format!("Sent {} back for changes", quoted(&updated.message)),
     )
     .await
 }

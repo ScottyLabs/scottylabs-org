@@ -94,9 +94,11 @@
             package = helpers.buildRustService {
               src = ./.;
               pname = "site";
+              # crane keeps only Rust sources; these are read by sqlx::migrate!, include_str! and the seed.
               extraSources = [
                 "services/site/migrations"
                 "services/site/seed"
+                "services/site/src/routes/auth/test-signing-key.pem"
               ];
               buildArgs.cargoExtraArgs = "--locked -p site";
             };

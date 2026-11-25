@@ -7,8 +7,7 @@ mod governance;
 pub use governance::spawn_sync as spawn_governance_sync;
 
 use axum::extract::{Path, RawQuery, State};
-use axum::http::header::CACHE_CONTROL;
-use axum::http::{HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, patch, post};
 use axum::{Json, Router};
@@ -24,6 +23,7 @@ use crate::error::{AppError, AppResult, Problems};
 use crate::json::Json as JsonBody;
 use crate::models::{Committee, PersonRef, Role, check_line};
 use crate::permissions::{self, PeopleScope};
+use crate::routes::common::{self, no_store, query_param};
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -98,20 +98,6 @@ async fn person_row(conn: &mut PgConnection, user_id: Uuid) -> AppResult<PersonR
         .await?
         .pop()
         .ok_or_else(|| AppError::not_found("person"))
-}
-
-fn no_store(mut response: Response) -> Response {
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
-}
-
-fn query_param(raw: Option<&str>, name: &str) -> Option<String> {
-    url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes())
-        .find(|(key, _)| key == name)
-        .map(|(_, value)| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 // ---------------------------------------------------------------------------
@@ -696,7 +682,7 @@ async fn lock_assignment(conn: &mut PgConnection, id: Uuid) -> AppResult<Assignm
 }
 
 fn parse_id(raw: &str) -> AppResult<Uuid> {
-    Uuid::parse_str(raw).map_err(|_| AppError::not_found("role"))
+    common::parse_id(raw, "role")
 }
 
 async fn update_assignment(
