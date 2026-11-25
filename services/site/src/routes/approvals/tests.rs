@@ -452,10 +452,7 @@ async fn a_failed_decision_changes_nothing(db: PgPool) {
     assert!(testing::audit_summaries(&db).await.is_empty());
 }
 
-// The next two need the ticker's approval hooks, which are stubs until the tracks are merged. Run them with `cargo test -p site -- --ignored` after integration.
-
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "needs announcements::apply_approval from the ticker track"]
 async fn approving_publishes_the_announcement(db: PgPool) {
     let s = setup(&db).await;
     let res = Req::post(&format!(
@@ -485,7 +482,6 @@ async fn approving_publishes_the_announcement(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
-#[ignore = "needs announcements::apply_send_back from the ticker track"]
 async fn sending_back_returns_the_announcement_with_the_note(db: PgPool) {
     let s = setup(&db).await;
     let res = Req::post(&format!(
@@ -507,4 +503,61 @@ async fn sending_back_returns_the_announcement_with_the_note(db: PgPool) {
     assert_eq!(state, "sent_back");
     let summaries = testing::audit_summaries(&db).await;
     assert_eq!(summaries.len(), 1, "{summaries:?}");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn approving_a_project_publishes_what_the_lead_sent(db: PgPool) {
+    let s = setup(&db).await;
+    let maps = testing::project(&db, Committee::Tech, "campus-maps").await;
+    let mut doc = testing::project_doc(Committee::Tech, "Campus Maps");
+    doc["summary"] = json!("Find your way around campus");
+    doc["media"] = json!([
+        { "src": "/seed/projects/cmu-maps.png", "alt": "The map", "width": 1200, "height": 900 }
+    ]);
+    let approval = project_submission(&db, &s.tech_lead, maps, doc).await;
+
+    let res = Req::post(&format!("/api/approvals/{approval}/approve"))
+        .user(&s.tech_director)
+        .send(&s.app)
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    assert_eq!(res.json["status"], "approved");
+    assert_eq!(res.json["href"], format!("/portal/projects/{maps}/"));
+
+    let (status, body) = testing::get(&s.app, "/api/public/projects/campus-maps", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["project"]["summary"], "Find your way around campus");
+    // The projects hook records the decision; this module adds no second entry.
+    assert_eq!(
+        testing::audit_summaries(&db).await,
+        ["Approved and published Campus Maps"]
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn sending_a_project_back_keeps_it_unpublished_with_the_note(db: PgPool) {
+    let s = setup(&db).await;
+    let res = Req::post(&format!("/api/approvals/{}/send-back", s.project_approval))
+        .user(&s.admin)
+        .json(json!({ "note": "Add a link to the live site." }))
+        .send(&s.app)
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    assert_eq!(res.json["status"], "sent_back");
+
+    let (status, _) = testing::get(&s.app, "/api/public/projects/cmu-maps", None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let mine = list(&s.app, &s.tech_lead, "?status=decided&mine=true").await;
+    assert_eq!(
+        mine.json["approvals"][0]["id"],
+        s.project_approval.to_string()
+    );
+    assert_eq!(
+        mine.json["approvals"][0]["note"],
+        "Add a link to the live site."
+    );
+    assert_eq!(
+        testing::audit_summaries(&db).await,
+        ["Sent CMU Maps back with a note"]
+    );
 }
