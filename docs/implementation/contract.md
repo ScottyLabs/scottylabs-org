@@ -311,8 +311,40 @@ Each builder owns the files of their track. Edit shared files only where this ta
 
 Record changes to this contract here, newest first, with the reason.
 
+### 2026-11-24, committee pages
+
+Additive; no shape in `types.ts` changed.
+
+- **Buttons may link to this site.** `models::check_button_url` also accepts paths on this site such as `/sponsors/`, so the Finance call to action can open the Sponsors page. It refuses `//host`, backslashes, spaces and control characters, which browsers read as links elsewhere.
+
+- **Galleries fill up in drafts.** A draft gallery may hold 0 to 6 photos, so it can be filled one upload at a time; publishing still needs 3 to 6.
+
+- **Publishing also needs** a cover photo, alt text on every image (cover, image blocks, gallery photos, video posters), a photo in every image block, a link in every video block, at least one team in a Teams block and a value for every Stats number. The editor checks the same rules in the browser (`src/lib/committees/editor/publish-checks.ts`) to list them before publishing.
+
+- **Field paths.** Validation errors name fields `blocks.<index>.<prop>` (for example `blocks.3.items.1.value` or `blocks.0.image.alt`) and `settings.<field>`, by position in the document that was sent. `blocks` alone is about the page as a whole.
+
+- **Text limits**, in characters after trimming: tagline 120; headings 80; captions 200; quotes, call to action text and the teams introduction 240; Stats value 12 and label 60; team name 40 and description 140; attribution 80; button label 40; video title 80; index description 300; teams line 120; meeting time 60; room 80; Slack channels 80. Text bodies hold 4000 visible characters. At most 20 teams. Plain text fields are one line. Block ids are 1 to 64 letters, digits, `-` and `_`. The web mirror is `src/lib/committees/limits.ts`.
+
+- **Stored forms.** Rich text is sanitized and text that is only empty paragraphs becomes `""`. Quotes are stored without quotation marks; the page adds them. Team channels, like `settings.slackChannel`, are stored lower case without `#`. A button with neither label nor link becomes `null`. Uploaded images must exist in `media`, and their stored width and height replace what the browser sent.
+
+- **The edit lock.** Migration `0301` adds `committee_pages.lock_since`, when the holder took the lock (`EditLock.since`). `POST /lock` answers with the `EditLock`. Saving, publishing and discarding also take a free or lapsed lock, so editing carries on after a laptop wakes up; all of them answer 409 with the holder's name while someone else holds a fresh lock. `DELETE /lock` answers 204 and only ever clears the caller's own lock.
+
+- **Writes.** `PUT /draft` answers 409 when `baseVersion` is not the latest version. `POST /publish` answers 409 when `draftVersion` is not the latest and 422 with fields when the draft cannot go live; `POST /discard` answers 409 for a page never published. Both answer with the `CommitteePageEditorResponse`. Unknown slugs are 404 everywhere.
+
+- **Changes** are sentences in page order: "Moved Stats above What we do", "Made What we do full width", "Added an image block", "Edited Teams", "Edited the cover", then "Removed Quote" and "Changed the page settings". A text block is named by its heading, any other block by its type. The list is empty when nothing changed; a page never published gets one sentence saying so.
+
+- **Audit.** `committee_page.edit_draft` ("Edited the draft of the Tech page") is written at most once every 30 minutes per person and page, because the editor saves every couple of seconds; `committee_page.publish` and `committee_page.discard` are written every time.
+
+- **Public endpoints** list only committees whose page is published; a page answers 404 until it is published. `projects` are read from `projects.published` (name, summary, the description for the excerpt, status, kind, siteUrl, repoUrl, and the first of `media` as the cover), featured first, then by name.
+
+- **Seed.** The designs show two video blocks without real videos (the TartanHacks recap and a Foundry fireside chat); they are seeded as image blocks with the same photo and caption.
+
+- **Portal routes.** `/portal/committees/<slug>/` (the activity link) redirects to `/portal/committees/<slug>/edit/`, which opens read only for people who cannot edit the page.
+
 - 2026-11-24, shared web components. Additive only. `Field` gives its label an id and `FieldContext` gains `labelId`, so controls that a `<label for>` cannot name (the contenteditable in `RichTextEditor`) use `aria-labelledby`. New shared pieces for the projects, committees and people tracks: `src/lib/editor/` (`RichTextEditor`, `RichText`, `sanitize`, `normalizeRichText`, `plainText`, `plainTextLength`; the client mirror of `richtext.rs`), `src/lib/media/` (`Img`, `ImageField`, `ImageListField`, `src`, `srcset`, `aspectRatio`, `uploadImage`), `PersonPicker` in the portal UI kit, `src/lib/projects/ProjectCard.svelte` (also exports `PROJECT_STATUS_LABELS`, `PROJECT_KIND_LABELS` and `projectPath`) and `src/lib/site/SelectionBox.svelte`. The projects track owns `src/lib/projects/` and may change the card; keep its props.
+
 - 2026-11-24, platform web. `sites/web/vite.config.ts` proxies to `SITE_SERVICE_URL` when it is set (default `http://127.0.0.1:8080`), so builds can run side by side on other ports. Prerendering warns instead of failing when `/projects/` or `/committees/` answer 404, because the header links to them before those routes exist; remove that handler once both routes are in.
+
 - 2026-11-24, platform web. How portal pages plug in: call the API with the helpers in `src/lib/api/client.ts`, whose paths are relative to `/api` (`get<MeResponse>("/me")`); read the signed-in person with `getPortalSession()` and show confirmations with `getToasts()` (both from `src/lib/portal/index.ts`); build pages from `src/lib/portal/ui/index.ts` and the `p-table` classes. Render the page's `<h1>` straight away (`PageHeader` does), since the shell moves focus to it after navigation. Unknown `/portal/` addresses get the portal error card from the root `+error.svelte`.
 
 ### 2026-11-24, platform backend review fixes
