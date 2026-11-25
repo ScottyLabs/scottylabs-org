@@ -388,6 +388,12 @@
 
   .section {
     margin-top: 56px;
+    /* Below the sticky site header when the address points at it, as #watch does. */
+    scroll-margin-top: 96px;
+
+    &:focus {
+      outline: none;
+    }
   }
   .section__head {
     display: flex;

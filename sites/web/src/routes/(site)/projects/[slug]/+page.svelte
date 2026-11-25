@@ -2,6 +2,7 @@
   // One project's page (Figma 10:217, 44:5275; phone 11:520; spec P-8 to P-12). Loaded in the
   // browser from /api/public/projects/<slug>. A renamed project's old address moves to the new
   // one; unpublished and archived projects show the not-found message.
+  import { tick } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
   import SearchX from "@lucide/svelte/icons/search-x";
@@ -70,11 +71,33 @@
         return;
       }
       view = { kind: "ready", project: response.project };
+      void revealTarget();
       void loadRelated(response.project, signal);
     } catch (error) {
       if (isAbortError(error)) return;
       view = isApiError(error) && error.status === 404 ? { kind: "missing" } : { kind: "failed" };
     }
+  }
+
+  /**
+   * An address can point into the page, as the Projects page's "Watch video" does with #watch.
+   * The browser looked for that part before the project loaded, so go to it now, and start
+   * keyboard navigation there.
+   */
+  async function revealTarget(): Promise<void> {
+    let id = "";
+    try {
+      id = decodeURIComponent(page.url.hash.slice(1));
+    } catch {
+      return;
+    }
+    if (id === "") return;
+    await tick();
+    const target = document.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
+    if (target === null) return;
+    target.scrollIntoView({ block: "start" });
+    if (!target.hasAttribute("tabindex")) target.tabIndex = -1;
+    target.focus({ preventScroll: true });
   }
 
   async function loadRelated(project: ProjectDetail, signal: AbortSignal): Promise<void> {

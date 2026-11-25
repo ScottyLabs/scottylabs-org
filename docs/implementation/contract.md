@@ -340,6 +340,12 @@ Each area keeps the files below; change another area's files only together with 
 
 Record changes to this contract here, newest first, with the reason.
 
+### 2026-11-25, follow-ups after the final review
+
+What the final backend and web fixers left for each other.
+
+- **`ProjectCard.videoUrl: string | null`** is required and filled from the published version, so the Projects page's featured card shows "Watch video" (to `/projects/<slug>/#watch`) and committee pages' project cards carry it too. `ProjectDetail` gets it from the card it flattens and no longer has its own field, so it is sent once. Draft and approval previews (`draftCard`, `projectCardFromDoc`) set it from the doc. Project pages go to the part their address points to once the project has loaded (the browser looked before it was on the page) and focus it, so `#watch` lands on the click-to-load video below the sticky header.
+
 ### 2026-11-25, final backend review fixes
 
 - **Rich text is size-capped before sanitizing.** `richtext::clean` refuses sources over 64,000 bytes or 4,000 tags (`blocks.<i>.body` or `description`: "... has too much formatting to save"), because html5ever takes time that grows with the square of nested-table markup. Committee and project drafts are cleaned on the blocking pool (`routes::common::blocking`), a project's before its row is locked, and html5ever logs only errors.
@@ -363,7 +369,7 @@ Record changes to this contract here, newest first, with the reason.
 
 Web only; no endpoint changed. `types.ts` gains one optional field.
 
-- **`ProjectCard.videoUrl?: string | null`** (optional): when it is set, the featured card on the Projects page shows "Watch video", linking to `/projects/<slug>/#watch` (Figma 52:8705). The service does not send it yet; `routes::projects::public::published_cards` should fill it from the published version's `videoUrl`, after which the field can become required.
+- **`ProjectCard.videoUrl?: string | null`** (optional): when it is set, the featured card on the Projects page shows "Watch video", linking to `/projects/<slug>/#watch` (Figma 52:8705). The service did not send it yet; since the follow-ups entry it does, and the field is required.
 - **One video reader and one link host helper.** `videoEmbed` lives in `src/lib/media/video.ts` (also exported from `#lib/media/index.ts` and `#lib/projects/index.ts`) and returns `{ provider: "youtube" | "vimeo", providerName, embedUrl }`. Committee and project pages play the same links, the ones `blocks::video_id` accepts (keep the two in step; this replaces `src/lib/committees/video.ts` in the 2026-11-24 committee pages review entry), and project pages keep the start time and the unlisted Vimeo hash. `models::check_video_url` still accepts any YouTube or Vimeo link for projects, so a channel link saves and then shows only as a plain "Watch the video" link; projects should validate with `blocks::video_id` too. `linkHost(url, { httpsOnly })` lives in `src/lib/site/links.ts` (hostname without `www.` or port, null for anything that is not an http or https link).
 - **Seed photos in responsive sizes.** `src()` and `srcset()` in `src/lib/media/images.ts` treat `/seed/<path>.jpg` with a known width like uploads: `seedWidths` lists 480 and 960 where they are at most 80% of the width, then the width itself, and `seedVariantPath` names the copy (`/seed/photos/c10-480.jpg`). Run `deno run -A scripts/seed-sizes.ts` from `sites/web` after adding or replacing a seed photo.
 - **Portal fields** are 48 px tall with 16 px text (`--p-field-height`, `--p-field-font`, `--p-field-line` in `tokens.css`). `.p-fields-compact` on a container gives 40 px and 14 px, for the committee page editor and list toolbars. Below 768 px every field uses 16 px text, so iOS does not zoom in on focus.
