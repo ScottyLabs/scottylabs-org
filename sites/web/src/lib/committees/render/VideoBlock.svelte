@@ -53,7 +53,7 @@
         ></iframe>
       {:else}
         {#if props.poster}
-          <Img image={props.poster} class="cb-photo" alt="" sizes="(min-width: 1280px) 792px, 100vw" fit="cover" />
+          <Img image={props.poster} class="cb-photo" sizes="(min-width: 1280px) 792px, 100vw" fit="cover" />
         {:else}
           <div class="video__blank"></div>
         {/if}
