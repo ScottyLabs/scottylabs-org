@@ -1,6 +1,9 @@
 //! Uploaded images: processing, and storage in S3 (Garage) when configured, otherwise in Postgres.
 //! Objects live under `media/<uuid>/<width>`.
+//!
+//! Logs and errors name the bucket, the key and the status, never a presigned URL: its query string is a credential for that object.
 
+mod lookups;
 pub mod process;
 
 use std::sync::Arc;
@@ -17,13 +20,16 @@ use uuid::Uuid;
 
 pub use process::{MAX_UPLOAD_BYTES, ProcessError, Processed};
 
+use self::lookups::{Lookups, MediaRow};
 use crate::config::S3Settings;
 use crate::error::{AppError, AppResult};
 
 /// Presigned URLs only need to live for the request that uses them.
 const PRESIGN_FOR: Duration = Duration::from_secs(60);
-/// Decoding a large image takes hundreds of megabytes, so only a few run at once.
+/// Uploads decoded at once. One decode holds at most `process::MAX_DECODED_BYTES` (160 MB) of pixels plus a smaller working copy, so two stay under half a gigabyte.
 const CONCURRENT_PROCESSING: usize = 2;
+/// Uploads that may wait for a decode slot. Past this an upload is refused at once with 503, instead of holding its request and its bytes in memory.
+const WAITING_PROCESSING: usize = 4;
 /// How long fetching an image from S3 may wait for its next bytes before giving up.
 const DOWNLOAD_STALL: Duration = Duration::from_secs(15);
 const DOWNLOAD_CONNECT: Duration = Duration::from_secs(5);
@@ -41,6 +47,10 @@ pub struct MediaStore {
     /// For images streamed from S3 to visitors. It has no deadline for the whole download, because a visitor on a slow connection sets the pace; it only gives up when S3 stops sending.
     download_http: reqwest::Client,
     processing: Arc<Semaphore>,
+    /// Uploads being decoded or waiting to be: [`CONCURRENT_PROCESSING`] plus [`WAITING_PROCESSING`] permits.
+    admitted: Arc<Semaphore>,
+    /// Where each recently served image is stored, so serving one from S3 keeps working while the database is briefly unreachable.
+    lookups: Lookups,
 }
 
 /// A stored image ready to send.
@@ -87,6 +97,8 @@ impl MediaStore {
             upload_http,
             download_http,
             processing: Arc::new(Semaphore::new(CONCURRENT_PROCESSING)),
+            admitted: Arc::new(Semaphore::new(CONCURRENT_PROCESSING + WAITING_PROCESSING)),
+            lookups: Lookups::default(),
         }
     }
 
@@ -94,9 +106,17 @@ impl MediaStore {
         if self.s3.is_some() { "s3" } else { "database" }
     }
 
-    /// Checks and re-encodes an upload off the async runtime.
+    /// Checks and re-encodes an upload off the async runtime, once a decode slot is free. Refuses at once with [`ProcessError::Busy`] when too many uploads are already waiting.
     pub async fn process(&self, bytes: Bytes) -> Result<Processed, ProcessError> {
-        run_limited(&self.processing, move || process::process(&bytes)).await?
+        let admitted = Arc::clone(&self.admitted)
+            .try_acquire_owned()
+            .map_err(|_| ProcessError::Busy)?;
+        run_limited(&self.processing, move || {
+            let processed = process::process(&bytes);
+            drop(admitted);
+            processed
+        })
+        .await?
     }
 
     /// Stores every variant, then records the image. Without a database row nothing is served.
@@ -177,11 +197,13 @@ impl MediaStore {
             .body(bytes.to_vec())
             .send()
             .await
-            .with_context(|| format!("uploading {key}"))?;
+            .map_err(|error| s3_failed("uploading", s3, &key, error))?;
         if !response.status().is_success() {
             return Err(AppError::Internal(anyhow!(
-                "S3 answered {} when uploading {key}",
-                response.status()
+                "S3 answered {} when uploading {} in bucket {}",
+                response.status(),
+                key,
+                s3.bucket.name()
             )));
         }
         Ok(())
@@ -189,12 +211,12 @@ impl MediaStore {
 
     /// The smallest stored variant at least `width` wide (or the widest), or `None` for unknown ids.
     pub async fn open(&self, id: Uuid, width: Option<u32>) -> AppResult<Option<MediaBody>> {
-        let row: Option<(String, Vec<i32>, String)> =
-            sqlx::query_as("SELECT content_type, variants, storage FROM media WHERE id = $1")
-                .bind(id)
-                .fetch_optional(&self.db)
-                .await?;
-        let Some((content_type, variants, storage)) = row else {
+        let Some(MediaRow {
+            content_type,
+            variants,
+            storage,
+        }) = self.lookup(id).await?
+        else {
             return Ok(None);
         };
         let Some(chosen) = choose_variant(&variants, width) else {
@@ -226,6 +248,27 @@ impl MediaStore {
         .await
     }
 
+    /// Where image `id` is stored, from memory when it was looked up before. Images never change once uploaded, so a kept row stays right; unknown ids are not kept.
+    async fn lookup(&self, id: Uuid) -> AppResult<Option<MediaRow>> {
+        if let Some(row) = self.lookups.get(id) {
+            return Ok(Some(row));
+        }
+        let row: Option<(String, Vec<i32>, String)> =
+            sqlx::query_as("SELECT content_type, variants, storage FROM media WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&self.db)
+                .await?;
+        Ok(row.map(|(content_type, variants, storage)| {
+            let row = MediaRow {
+                content_type,
+                variants,
+                storage,
+            };
+            self.lookups.insert(id, row.clone());
+            row
+        }))
+    }
+
     async fn get_object(
         &self,
         s3: &S3Backend,
@@ -243,20 +286,31 @@ impl MediaStore {
             .get(url)
             .send()
             .await
-            .with_context(|| format!("fetching {key}"))?;
+            .map_err(|error| s3_failed("fetching", s3, &key, error))?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            tracing::warn!(key, "media row exists but its object is missing");
+            tracing::warn!(
+                bucket = s3.bucket.name(),
+                key,
+                "media row exists but its object is missing"
+            );
             return Ok(None);
         }
         if !response.status().is_success() {
             return Err(AppError::Internal(anyhow!(
-                "S3 answered {} when fetching {key}",
-                response.status()
+                "S3 answered {} when fetching {} in bucket {}",
+                response.status(),
+                key,
+                s3.bucket.name()
             )));
         }
         let length = response.content_length();
+        // A download that fails halfway ends the visitor's response; the error must not carry the URL either.
         let chunks = futures::stream::try_unfold(response, |mut response| async move {
-            Ok::<_, reqwest::Error>(response.chunk().await?.map(|chunk| (chunk, response)))
+            let chunk = response
+                .chunk()
+                .await
+                .map_err(reqwest::Error::without_url)?;
+            Ok::<_, reqwest::Error>(chunk.map(|chunk| (chunk, response)))
         });
         Ok(Some(MediaBody {
             content_type,
@@ -283,6 +337,21 @@ where
     })
     .await
     .map_err(|error| ProcessError::Encode(error.to_string()))
+}
+
+/// An S3 request that got no answer, such as a refused connection or a timeout. reqwest puts the request URL in its errors, and a presigned URL carries a signature, so the URL is dropped and the bucket and key named instead.
+fn s3_failed(action: &str, s3: &S3Backend, key: &str, error: reqwest::Error) -> AppError {
+    let kind = if error.is_timeout() {
+        "timed out"
+    } else if error.is_connect() {
+        "could not connect"
+    } else {
+        "failed"
+    };
+    AppError::Internal(anyhow::Error::new(error.without_url()).context(format!(
+        "{action} {key} in bucket {}: {kind}",
+        s3.bucket.name()
+    )))
 }
 
 fn download_client(stall: Duration) -> reqwest::Result<reqwest::Client> {
@@ -485,6 +554,92 @@ pub(crate) mod tests {
         // Seven pauses of 150 ms: the download outlasts the stall limit twice over and still completes.
         assert!(started.elapsed() > stall * 2);
         assert_eq!(body.to_bytes(), expected.bytes);
+    }
+
+    /// A pool for a database that is not there. Building it does not connect.
+    fn no_database() -> PgPool {
+        crate::db::request_pool(
+            crate::db::connect_options("postgresql:///nowhere?host=/nonexistent/sl-site-test")
+                .unwrap(),
+            1,
+        )
+    }
+
+    #[tokio::test]
+    async fn a_full_queue_refuses_uploads_at_once() {
+        let store = MediaStore::with_clients(
+            None,
+            no_database(),
+            reqwest::Client::new(),
+            download_client(DOWNLOAD_STALL).unwrap(),
+        );
+        // Every decode slot is taken and every waiting place too.
+        let held = Arc::clone(&store.admitted)
+            .try_acquire_many_owned(
+                u32::try_from(CONCURRENT_PROCESSING + WAITING_PROCESSING).unwrap(),
+            )
+            .unwrap();
+        let started = Instant::now();
+        let refused = store.process(Bytes::from(jpeg(64, 64))).await;
+        assert!(matches!(refused, Err(ProcessError::Busy)));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        drop(held);
+        let processed = store.process(Bytes::from(jpeg(64, 64))).await.unwrap();
+        assert_eq!(processed.largest().map(|v| v.width), Some(64));
+        assert_eq!(
+            store.admitted.available_permits(),
+            CONCURRENT_PROCESSING + WAITING_PROCESSING
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_s3_requests_never_show_the_presigned_url() {
+        // Nothing listens on port 9 of the loopback address.
+        let settings = S3Settings {
+            endpoint: url::Url::parse("http://127.0.0.1:9").unwrap(),
+            region: "garage".into(),
+            access_key: "GKtestaccess".into(),
+            secret_key: "test-secret".into(),
+            bucket: "media".into(),
+        };
+        let store = MediaStore::with_clients(
+            Some(settings),
+            no_database(),
+            reqwest::Client::new(),
+            download_client(DOWNLOAD_STALL).unwrap(),
+        );
+        let processed = process::process(&jpeg(64, 64)).unwrap();
+        let Err(AppError::Internal(cause)) =
+            store.save(Uuid::now_v7(), &processed, Uuid::nil()).await
+        else {
+            panic!("the upload should fail");
+        };
+        let logged = format!("{cause:#}");
+        assert!(logged.contains("in bucket media"), "{logged}");
+        assert!(logged.contains("could not connect"), "{logged}");
+        for secret in ["X-Amz", "GKtestaccess", "Signature", "127.0.0.1:9/", "?"] {
+            assert!(!logged.contains(secret), "{secret} in {logged}");
+        }
+    }
+
+    #[tokio::test]
+    async fn served_images_keep_working_while_the_database_is_down() {
+        let isolated = testing::IsolatedDb::new().await;
+        let (store, id, processed) =
+            stored_in_s3(&isolated.pool, Duration::ZERO, DOWNLOAD_STALL).await;
+        assert!(store.open(id, Some(480)).await.unwrap().is_some());
+
+        isolated.pool.close().await;
+        let media = store
+            .open(id, Some(960))
+            .await
+            .unwrap()
+            .expect("served from S3 with the kept row");
+        let body = media.body.collect().await.unwrap().to_bytes();
+        assert_eq!(body, processed.variants[1].bytes);
+        // An image never looked up still needs the database.
+        let error = store.open(Uuid::now_v7(), None).await.err().unwrap();
+        assert_eq!(error.code(), "unavailable");
     }
 
     #[tokio::test]
