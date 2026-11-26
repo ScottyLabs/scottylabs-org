@@ -245,7 +245,7 @@ async fn the_public_feed_shows_only_live_announcements_in_order(db: PgPool) {
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(
         res.header("cache-control"),
-        Some("public, max-age=60, stale-while-revalidate=600")
+        Some("public, max-age=60, stale-while-revalidate=600, stale-if-error=86400")
     );
     assert_eq!(res.header("access-control-allow-origin"), Some("*"));
     let items = res.json["announcements"].as_array().unwrap();

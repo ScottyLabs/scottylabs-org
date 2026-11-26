@@ -8,6 +8,7 @@ mod config;
 mod db;
 mod error;
 mod json;
+mod last_good;
 mod media;
 mod models;
 mod permissions;

@@ -137,7 +137,7 @@ async fn visitors_see_published_projects_featured_first(db: PgPool) {
     assert_eq!(names(&res.json), ["TartanHacks", "alpha", "Zeta"]);
     assert_eq!(
         res.header("cache-control"),
-        Some("public, max-age=60, stale-while-revalidate=600")
+        Some("public, max-age=60, stale-while-revalidate=600, stale-if-error=86400")
     );
     assert_eq!(res.header("access-control-allow-origin"), Some("*"));
 
@@ -205,7 +205,7 @@ async fn searches_look_through_whole_descriptions(db: PgPool) {
             assert_eq!(res.status, StatusCode::OK, "{path}: {}", res.text());
             assert_eq!(
                 res.header("cache-control"),
-                Some("public, max-age=60, stale-while-revalidate=600")
+                Some("public, max-age=60, stale-while-revalidate=600, stale-if-error=86400")
             );
             names(&res.json)
         }

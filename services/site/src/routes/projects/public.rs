@@ -18,10 +18,8 @@ use super::doc::{ProjectDoc, ProjectKind, ProjectStatus, check_slug};
 use super::search;
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, ImageRef};
-use crate::routes::common::{blocking, query_param};
+use crate::routes::common::{PUBLIC_CACHE, blocking, query_param};
 use crate::state::AppState;
-
-const PUBLIC_CACHE: &str = "public, max-age=60, stale-while-revalidate=600";
 
 pub fn router() -> Router<AppState> {
     Router::new()

@@ -92,7 +92,7 @@ async fn public_ticker(State(state): State<AppState>) -> AppResult<Response> {
     let headers = response.headers_mut();
     headers.insert(
         CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=600"),
+        HeaderValue::from_static(crate::routes::common::PUBLIC_CACHE),
     );
     headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
     Ok(response)

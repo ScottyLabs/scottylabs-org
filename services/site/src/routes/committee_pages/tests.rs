@@ -56,7 +56,7 @@ async fn the_public_index_lists_published_committees_in_order(db: PgPool) {
     assert_eq!(res.header("access-control-allow-origin"), Some("*"));
     assert_eq!(
         res.header("cache-control"),
-        Some("public, max-age=60, stale-while-revalidate=600")
+        Some("public, max-age=60, stale-while-revalidate=600, stale-if-error=86400")
     );
     let committees = res.json["committees"].as_array().unwrap();
     let slugs: Vec<&str> = committees

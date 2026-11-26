@@ -5,7 +5,7 @@ mod announcements;
 mod approvals;
 mod auth;
 mod committee_pages;
-mod common;
+pub(crate) mod common;
 mod me;
 mod media;
 mod overview;
@@ -76,7 +76,12 @@ pub fn router(state: AppState) -> Router {
         .nest("/api", api)
         .merge(media::serve_router())
         .fallback(crate::static_files::serve)
+        // Inside the copies of public answers, so a request stopped for taking too long still gets one.
         .layer(middleware::from_fn(crate::server::limit_duration))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            crate::last_good::keep,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             crate::static_files::security_headers,

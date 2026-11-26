@@ -58,13 +58,13 @@ struct PublicCommitteePageResponse {
     published_at: Option<DateTime<Utc>>,
 }
 
-/// Cached briefly by browsers and the CDN, so a publish shows within about a minute, and readable from any site.
+/// Cached briefly by browsers and the CDN, so a publish shows within about a minute, and readable from any site. While the service fails, caches may keep serving it for a day, and the service serves its last good copy (`crate::last_good`).
 fn public_json(body: impl Serialize) -> Response {
     let mut response = Json(body).into_response();
     let headers = response.headers_mut();
     headers.insert(
         CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=60, stale-while-revalidate=600"),
+        HeaderValue::from_static(crate::routes::common::PUBLIC_CACHE),
     );
     headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
     response

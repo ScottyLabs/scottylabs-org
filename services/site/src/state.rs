@@ -7,6 +7,7 @@ use sqlx::PgPool;
 use crate::auth::oidc::OidcProvider;
 use crate::config::Config;
 use crate::db::{Phase, Readiness};
+use crate::last_good::LastGood;
 use crate::media::MediaStore;
 use crate::ratelimit::RateLimiter;
 
@@ -21,6 +22,8 @@ pub struct AppState {
     pub oidc: Option<Arc<OidcProvider>>,
     pub media: Arc<MediaStore>,
     pub limits: Arc<RateLimiter>,
+    /// The last good answer of each public endpoint, served when the database fails.
+    pub last_good: Arc<LastGood>,
 }
 
 impl AppState {
@@ -49,6 +52,7 @@ impl AppState {
             oidc,
             media,
             limits: Arc::new(RateLimiter::new()),
+            last_good: Arc::new(LastGood::default()),
         })
     }
 
