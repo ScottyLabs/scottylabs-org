@@ -2770,6 +2770,8 @@ dependencies = [
  "cookie",
  "futures",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "image",
  "mime_guess",
  "openidconnect",

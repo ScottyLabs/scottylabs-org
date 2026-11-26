@@ -18,6 +18,13 @@ chrono = { version = "0.4", default-features = false, features = [
 ] }
 cookie = "0.18"
 futures = "0.3"
+# Already built for axum and reqwest; the server sets hyper's header and idle timeouts, which axum::serve cannot.
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = [
+  "http1",
+  "server-graceful",
+  "tokio",
+] }
 image = { version = "0.25", default-features = false, features = [
   "jpeg",
   "png",
@@ -57,10 +64,12 @@ tokio = { version = "1", features = [
   "signal",
   "time",
 ] }
+tower = "0.5"
 tower-http = { version = "0.6", features = [
   "fs",
   "limit",
   "set-header",
+  "timeout",
   "trace",
 ] }
 tracing = "0.1"

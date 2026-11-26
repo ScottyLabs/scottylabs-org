@@ -6,12 +6,15 @@ use sqlx::PgPool;
 
 use crate::auth::oidc::OidcProvider;
 use crate::config::Config;
+use crate::db::{Phase, Readiness};
 use crate::media::MediaStore;
 use crate::ratelimit::RateLimiter;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    /// Whether `db` has been migrated and seeded. Until then the API answers 503.
+    pub database: Arc<Readiness>,
     pub config: Arc<Config>,
     pub http: reqwest::Client,
     /// Present only when every OIDC variable is set.
@@ -21,6 +24,7 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// State over a database that is already migrated and seeded, as in tests.
     pub async fn new(db: PgPool, config: Arc<Config>) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -39,11 +43,19 @@ impl AppState {
         )?);
         Ok(Self {
             db,
+            database: Readiness::new(Phase::Ready),
             config,
             http,
             oidc,
             media,
             limits: Arc::new(RateLimiter::new()),
         })
+    }
+
+    /// State for a service whose database is prepared in the background: the API answers 503 until `database` is marked ready.
+    pub async fn starting(db: PgPool, config: Arc<Config>) -> anyhow::Result<Self> {
+        let state = Self::new(db, config).await?;
+        state.database.set(Phase::Starting);
+        Ok(state)
     }
 }

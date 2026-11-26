@@ -15,6 +15,7 @@ mod ratelimit;
 mod richtext;
 mod routes;
 mod seed;
+mod server;
 mod state;
 mod static_files;
 #[cfg(test)]
@@ -44,32 +45,37 @@ async fn main() -> anyhow::Result<()> {
     let config = Arc::new(Config::from_env().context("loading configuration")?);
     let (sign_in, media) = config.describe();
     tracing::info!(sign_in, media, "configuration loaded");
-    let db = db::connect(&config.database_url).await?;
-    db::migrate(&db).await?;
-    seed::run(&db, &config).await.context("seeding content")?;
 
-    let state = AppState::new(db, config.clone()).await?;
-    if config.governance_sync {
-        // In the background, after seeding, so a slow or failing governance fetch never delays startup.
-        routes::spawn_governance_sync(state.clone());
-    } else {
-        tracing::info!("governance sync is off; set GOVERNANCE_SYNC=1 to turn it on");
-    }
-    let app = routes::router(state);
-
-    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
-        .await
-        .with_context(|| format!("binding {}", config.bind_addr))?;
+    // The site is served before the database is ready, and whether or not it ever is: the static pages need no database. Migrations and seeding run in the background until they succeed; until then the API answers 503.
+    let options = db::connect_options(&config.database_url)?;
+    let state = AppState::starting(
+        db::request_pool(options.clone(), config.db_pool_size),
+        config.clone(),
+    )
+    .await?;
+    let listener = server::bind(&config.bind_addr).await?;
     tracing::info!(addr = %config.bind_addr, app_url = %config.app_url, "listening");
 
-    axum::serve(
+    tokio::spawn({
+        let state = state.clone();
+        async move {
+            db::prepare_until_ready(&options, &state.config, &state.database).await;
+            if state.config.governance_sync {
+                // After seeding, so a slow or failing governance fetch never delays startup.
+                routes::spawn_governance_sync(state);
+            } else {
+                tracing::info!("governance sync is off; set GOVERNANCE_SYNC=1 to turn it on");
+            }
+        }
+    });
+
+    server::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        routes::router(state),
+        server::Limits::default(),
+        shutdown_signal(),
     )
-    .with_graceful_shutdown(shutdown_signal())
     .await
-    .context("serving")?;
-    Ok(())
 }
 
 async fn shutdown_signal() {
