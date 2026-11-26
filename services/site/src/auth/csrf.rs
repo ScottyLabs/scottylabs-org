@@ -1,6 +1,6 @@
 //! CSRF token and Origin checks for writes under /api.
 //!
-//! Every POST, PUT, PATCH and DELETE must come from this site's origin when the browser says where it came from, and must carry the session's CSRF token in `X-CSRF-Token` whenever a valid session cookie is sent. Dev login is exempt from the token because it runs before a session exists; it still gets the Origin check, and its JSON body cannot be sent by a cross-site form.
+//! Every POST, PUT, PATCH and DELETE must come from this site's origin when the browser says where it came from, and must carry the session's CSRF token in `X-CSRF-Token` whenever a valid session cookie is sent. The token is derived from the session cookie (`session::csrf_token_for`), so the database holds nothing that passes this check. Dev login and its persona list are exempt from the token because they run before a session exists; they still get the Origin check, and their JSON bodies cannot be sent by a cross-site form.
 
 use axum::extract::{OriginalUri, Request, State};
 use axum::http::header::ORIGIN;
@@ -15,7 +15,8 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 pub const CSRF_HEADER: &str = "x-csrf-token";
-const DEV_LOGIN_PATH: &str = "/api/auth/dev-login";
+/// Writes that run before a session exists.
+const BEFORE_SIGN_IN: [&str; 2] = ["/api/auth/dev-login", "/api/auth/dev-personas"];
 
 pub async fn require_csrf(State(state): State<AppState>, request: Request, next: Next) -> Response {
     if !is_write(request.method()) {
@@ -44,7 +45,7 @@ pub fn full_path(request: &Request) -> &str {
 
 async fn check(state: &AppState, request: Request) -> Result<Request, AppError> {
     check_origin(request.headers(), &state.config)?;
-    if full_path(&request) == DEV_LOGIN_PATH {
+    if BEFORE_SIGN_IN.contains(&full_path(&request)) {
         return Ok(request);
     }
     let (mut parts, body) = request.into_parts();

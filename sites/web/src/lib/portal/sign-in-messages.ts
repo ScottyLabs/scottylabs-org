@@ -23,6 +23,25 @@ const ERRORS: Record<string, SignInNotice> = {
     tone: "info",
     message: "ScottyLabs sign-in is not set up for this site yet.",
   },
+  unavailable: {
+    tone: "warning",
+    message:
+      "ScottyLabs sign-in (Keycloak) is not responding right now. Try again in a few minutes.",
+  },
+  rate_limited: {
+    tone: "warning",
+    message: "There were too many sign-in attempts from your network. Wait a minute and try again.",
+  },
+  no_andrew_id: {
+    tone: "error",
+    message:
+      "We couldn\u2019t match this account to a CMU Andrew ID. Sign in with your Andrew account, or ask an admin for help.",
+  },
+  linked_elsewhere: {
+    tone: "error",
+    message:
+      "Your Andrew ID is linked to a different ScottyLabs account. Ask an admin to reset your sign-in, then try again.",
+  },
 };
 
 export function signInNotice(params: Pick<URLSearchParams, "get" | "has">): SignInNotice | null {

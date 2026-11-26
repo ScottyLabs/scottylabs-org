@@ -407,7 +407,10 @@ async fn removing_a_lead_removes_their_projects(db: PgPool) {
         .await
         .unwrap();
     assert_eq!(editors, 0);
-    // The change applies at the lead's next request.
+    // With no role left the lead is signed out everywhere; signed in again, they have no access.
+    let res = Req::get("/api/me").user(&lead).send(&app).await;
+    assert_eq!(res.status, StatusCode::UNAUTHORIZED);
+    let lead = testing::session_for(&db, lead.id).await;
     let res = Req::get("/api/me").user(&lead).send(&app).await;
     assert_eq!(res.json["permissions"]["canUsePortal"], false);
     assert_eq!(res.json["permissions"]["editableProjectIds"], json!([]));

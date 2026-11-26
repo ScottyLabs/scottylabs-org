@@ -3,7 +3,9 @@
 
 pub mod csrf;
 pub mod extract;
+pub mod groups;
 pub mod oidc;
+pub mod revalidate;
 pub mod roles;
 pub mod session;
 

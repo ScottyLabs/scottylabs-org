@@ -438,6 +438,7 @@ fn keycloak_may_receive_sign_in_forms() {
         oauth_relay_url: "https://oauth.scottylabs.org/oauth2/callback".into(),
         project_group: "/g".into(),
         project_admin_group: "/g/admins".into(),
+        andrew_id_claim: None,
     });
     assert!(
         content_security_policy(&config).ends_with("form-action 'self' https://idp.scottylabs.org")

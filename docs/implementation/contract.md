@@ -36,7 +36,8 @@ Local development runs Vite on port 5173 and the service on 127.0.0.1:8080. Vite
 | `SITE_BIND_ADDR` | dev shell, `127.0.0.1:8080`. Wins over `PORT` when set, so binding all interfaces is always an explicit choice | local |
 | `STATIC_DIR` | flake `env`. Unset locally, where Vite serves pages | in deploys |
 | `S3_ENDPOINT`, `S3_BUCKET`, and the key as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | kennel `garage` provisioner in deploys; the dev shell names the key `S3_ACCESS_KEY` and `S3_SECRET_KEY`, which win when both are set. `S3_REGION` defaults to `garage` | optional. Without them media is stored in Postgres; a partial set logs which are missing, and startup logs where uploads go |
-| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OAUTH_RELAY_URL`, `PROJECT_GROUP`, `PROJECT_ADMIN_GROUP` | governance `oidc_client` | optional. Sign-in through Keycloak is on only when all seven are set |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OAUTH_RELAY_URL`, `PROJECT_GROUP`, `PROJECT_ADMIN_GROUP` | governance `oidc_client` | optional. Sign-in through Keycloak is on only when all seven are set, and on a production host only when `OAUTH_RELAY_URL` is the site's own callback (see "Ricochet relay") |
+| `ANDREW_ID_CLAIM` | a Keycloak mapper, once there is one | optional. Names an ID token claim that holds the Andrew ID; when set it decides alone (see "Keycloak sign-in") |
 | `PORTAL_DEV_LOGIN` | dev shell sets `1`; the preview profile defaults it to `1` | optional |
 | `GOVERNANCE_SYNC` | `1` or `0`; declared in `secretspec.toml` so a deployment can turn it off | optional. Unset, the governance sync runs everywhere except local development with open dev sign-in |
 | `PORTAL_DEV_LOGIN_KEY` | OpenBao, preview profile only | optional |
@@ -47,8 +48,9 @@ Dev login rules, enforced in the service:
 
 1. Off unless `PORTAL_DEV_LOGIN=1`.
 1. Always off when the `APP_URL` host is `scottylabs.org` or `www.scottylabs.org`.
-1. When `APP_URL` is not `localhost` or `127.0.0.1`, `PORTAL_DEV_LOGIN_KEY` must be set and the request must send the same key. Compare in constant time.
-1. Only the seeded personas below can be used.
+1. When `APP_URL` is not `localhost` or `127.0.0.1`, `PORTAL_DEV_LOGIN_KEY` must be set and the request must send the same key. Compare in constant time. There, `GET /api/auth/config` lists no personas; `POST /api/auth/dev-personas` with the key does.
+1. Only the seeded personas below can be used. Away from `localhost` and `127.0.0.1`, never one whose row is linked to a Keycloak account (`keycloak_sub` set): someone signed in there with their real account, and the key is shared.
+1. A dev session lasts 8 hours at most, and works only while dev sign-in is on and, on previews, with the key it was made with: turning dev sign-in off or changing the key ends it.
 
 ## Seed data
 
@@ -108,22 +110,29 @@ Bundled seed images live in `sites/web/static/seed/` and are referenced as `/see
   - Without OIDC configured, redirect to `/portal/sign-in/?error=not_configured`.
   - Create a PKCE S256 verifier, a nonce and a 32-byte random `csrf`. Store them with `returnTo` in `auth_attempts`.
   - `state` is base64url (no padding) of `{"return_to": "<APP_URL>/api/auth/callback", "csrf": "<csrf>"}`. Ricochet reads only `return_to` (other fields are ignored) and forwards the browser there with every provider parameter unchanged: `code`, `state`, `iss`, `session_state`, `error`, `error_description`.
-  - `redirect_uri` is `OAUTH_RELAY_URL`. Scopes: exactly `openid email profile`. Do not add `microprofile-jwt`: the realm offers it, and its mapper writes realm roles into a claim also named `groups`, replacing the group paths below.
+  - `redirect_uri` is `OAUTH_RELAY_URL`: the shared relay on previews and staging, the site's own callback in production (see "Ricochet relay"). Scopes: exactly `openid email profile`. Do not add `microprofile-jwt`: the realm offers it, and its mapper writes realm roles into a claim also named `groups`, replacing the group paths below.
   - Redirect (302) to Keycloak's authorization endpoint from discovery at `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>`.
+  - Each call to Keycloak gets 5 seconds: discovery (configuration and keys together), and each token request. A 5xx or 429 answer counts as no answer. One discovery runs at a time, without holding a lock while it runs, and a failed one is remembered for 30 seconds, during which the last good result is used, or the sign-in fails at once. Keycloak not answering ends the sign-in with `unavailable`.
 - `GET /api/auth/callback?code&state` (or `?error=...`)
   - If `iss` is present it must equal `<KEYCLOAK_URL>/realms/<KEYCLOAK_REALM>` exactly (RFC 9207), on errors too; otherwise `failed`. A callback without `iss` is accepted.
   - On `error`, use up the attempt and go to `cancelled` for `access_denied`, `failed` for anything else.
   - Decode `state`, load and delete the attempt by `csrf`. Reject attempts older than 10 minutes.
   - Exchange the code with the verifier and `redirect_uri = OAUTH_RELAY_URL`. Keycloak's `invalid_grant` gives `expired`; other token errors give `failed`. Verify the ID token (signature, issuer, audience, expiry, nonce). Only RS256 is accepted, the algorithm of the realm's signing key, so a token signed with the client secret (HS256, which discovery also lists) is refused. Keys are picked by `kid`; the realm's encryption key (`use: enc`) is skipped.
-  - Read `sub`, `preferred_username` (the Andrew ID), `name`, `email` and the `groups` claim.
-  - Upsert the user: match `keycloak_sub`, else an existing row with that `andrew_id` (people can be added before they first sign in), else insert.
+  - Read `sub`, `name`, `email`, `email_verified`, the `groups` claim and the Andrew ID. The Andrew ID needs proof, because a username alone can come from an identity provider where people pick their own:
+    - With `ANDREW_ID_CLAIM` set, that claim is the Andrew ID, and nothing else counts.
+    - Otherwise `preferred_username` is the Andrew ID only when the token's `email`, ignoring case, is exactly `<preferred_username>@andrew.cmu.edu` or `<preferred_username>@cmu.edu`, and `email_verified` is not `false` (a missing claim is accepted).
+    - Without the proof the sign-in is refused with `no_andrew_id`, and nothing is linked or created. One info line per sign-in logs whether `email_verified` was `true`, `false` or missing, without personal data.
+  - Upsert the user: match `keycloak_sub`, else an existing row with that `andrew_id` (people can be added before they first sign in; linking such a row is audited), else insert. An Andrew ID whose row is linked to another `keycloak_sub` is refused with `linked_elsewhere`; an admin can reset the link (see "Sessions" and `sign-in-recovery.md`).
   - If `groups` contains `PROJECT_ADMIN_GROUP`, ensure an `admin` assignment with source `keycloak_group`.
-  - Create a session and redirect to the attempt's `returnTo`. On any failure redirect to `/portal/sign-in/?error=<code>` with codes `cancelled`, `expired`, `failed`.
+  - End the session the browser already had, create a session that keeps Keycloak's refresh token and ID token on the server, and redirect to the attempt's `returnTo`. On any failure redirect to `/portal/sign-in/?error=<code>` with codes `cancelled`, `expired`, `failed`, `unavailable` (Keycloak did not answer), `no_andrew_id` and `linked_elsewhere`. `/api/auth/login` also sends `not_configured`, `unavailable` and, past its rate limit, `rate_limited`.
   - Every unsuccessful callback logs why, never with a code, token or secret: a provider `error` (warn, with `error` and `error_description`), a refused code exchange (warn, with Keycloak's `error` and `error_description`), a missing sign-in cookie or an unknown, used or stale attempt (info), and every other failure (warn). Text taken from the URL is cut to 200 characters.
+  - The audit log records sign-ins (`auth.sign_in`, Keycloak and dev), sign-outs (`auth.sign_out`), first links of people added before they signed in (`auth.link`), refused identities (`auth.identity_refused`) and failed sign-ins with a reason code (`auth.sign_in_failed`), never a code or token. These entries have no actor and the person as subject, so only admins see them in "Recent activity". A failed callback is recorded only once it used up a stored attempt, which the rate limit on `/api/auth/login` bounds; one that matches no attempt is only logged.
 
 ### Ricochet relay
 
-- Production, staging and previews share `https://oauth.scottylabs.org/oauth2/callback`. Its allowlist accepts `https://scottylabs.org` and every `*.scottylabs.net` deployment host, so `APP_URL` works in prod and on previews. It refuses `www.scottylabs.org` and plain http.
+- Staging and previews share `https://oauth.scottylabs.org/oauth2/callback`. Its allowlist accepts `https://scottylabs.org` and every `*.scottylabs.net` deployment host (and every custom domain kennel publishes), and it forwards a code to whichever of them `state.return_to` names, which anyone can edit. It refuses `www.scottylabs.org` and plain http.
+- So production must not use it: a production code relayed to a host someone else controls could be redeemed at the production callback by whoever started that sign-in. In production `OAUTH_RELAY_URL` is the site's own callback, `https://scottylabs.org/api/auth/callback`, also the prod client's only redirect URI in Keycloak, and Keycloak redirects straight back with the same `code`, `state`, `session_state` and `iss`. The callback works the same either way; `state.return_to` is not used.
+- The service enforces this: when the `APP_URL` host is not `localhost`, a loopback address or a `*.scottylabs.net` host, and `OAUTH_RELAY_URL` is not exactly `<APP_URL>/api/auth/callback`, Keycloak sign-in stays off, startup logs one error naming the governance change, and `/api/auth/config` says `oidc: false`. Governance must change the prod client's redirect URI and the prod profile's `OAUTH_RELAY_URL` together; one without the other breaks sign-in.
 - Development: kennel runs Ricochet as the pitchfork process `ricochet` on `127.0.0.1:8090` with `RICOCHET_DEV=1`, which accepts any http loopback `return_to`. The `scottylabs-org-dev` client allows only `http://localhost:8090/oauth2/callback`.
 - Open the portal at `http://localhost:5173` in development, not `http://127.0.0.1:5173`. Sign-in returns to `APP_URL` (`http://localhost:5173`), and the sign-in cookie set on another host is not sent there, so the callback ends with `error=expired`.
 - The pitchfork `site` process loads the dev profile's secrets with `secretspec export` before `cargo run`, as the dev shell does, because kennel starts processes without them. Without an OpenBao token it starts anyway, with dev sign-in only. Log in once with `nix run git+https://git.cmu.dev/ScottyLabs/kennel#login`.
@@ -132,7 +141,7 @@ Bundled seed images live in `sites/web/static/seed/` and are referenced as `/see
 
 Authorization reads only `role_assignments`. Three things write to it:
 
-- **Admins from `PROJECT_ADMIN_GROUP`** (`/projects/scottylabs-org/admins`) in the token's `groups` claim, at every sign-in, with source `keycloak_group`. Governance fills that group with the UIA team leads, plus the Tech director because governance adds the Tech director to every team's leads. A `groups` list without the group, including an empty list, removes an admin role that came from the group (never the last admin). A token without the claim changes nothing. `PROJECT_GROUP` grants nothing.
+- **Admins from `PROJECT_ADMIN_GROUP`** (`/projects/scottylabs-org/admins`) in the token's `groups` claim, at every sign-in and every check of a session with Keycloak (see "Sessions"), with source `keycloak_group`. Governance fills that group with the UIA team leads, plus the Tech director because governance adds the Tech director to every team's leads. A `groups` list without the group, including an empty list, removes an admin role that came from the group (never the last admin). A token without the claim changes nothing. `PROJECT_GROUP` grants nothing.
 - **Directors and heads from governance's `data/committees.yaml`**, with source `governance`: each committee's `director` becomes its director, and the members of `committees.<c>.roles.*` and `committees.<c>.teams.*.roles.*` become leads of that committee (can post to the ticker, which still needs approval; no projects). Tech is left out of the head sync, since its leads live in governance's team files. The organization director is never made an admin.
   - A head who already has a role in the committee is left alone. A governance lead whom governance stops listing is removed with their projects. Editing a lead on the People page makes it `portal`, so later syncs keep it; when governance stops listing such a lead, the sync says so once in `messages` and in the activity log ("Kept ... as a lead in ...").
   - The People page has the last word. Removing a director or lead role there, moving it to another committee, or changing a director to a lead writes a row to `governance_opt_outs` in the same transaction, and the sync then gives that person no role in that committee (director or lead) while governance still lists them there; each run says so in `messages`. The row is deleted once governance lists the person in that committee neither as director nor as a head. To give the role back, add it on the People page.
@@ -145,15 +154,19 @@ The governance sync runs from the admin Sync button, at startup (in the backgrou
 ### Sessions
 
 - Cookie `__Host-sl_session` when `APP_URL` is https, otherwise `sl_session`. `HttpOnly`, `Path=/`, `SameSite=Lax`, `Secure` on https. Value is 32 random bytes, base64url. The database stores only its SHA-256.
-- Expires after 12 hours without a request, and 7 days after creation at most. Refresh `last_seen_at` at most once a minute.
-- `POST /api/auth/logout` deletes the session and clears the cookie (204).
+- Expires after 12 hours without a request, and 7 days after creation at most (dev sessions: 8 hours). Refresh `last_seen_at` at most once a minute.
+- **Checked with Keycloak.** A Keycloak session keeps Keycloak's refresh token and latest ID token in its row (never sent to a browser). At most every 15 minutes, a request on it starts a refresh-token grant in the background, 5 seconds at most, one at a time per session across processes (`validation_retry_at`). `invalid_grant` (account disabled, signed out of Keycloak, or Keycloak's own session over) or a token for another `sub` ends the session at once (`auth.session_end`, no actor). Otherwise the new ID token's `groups` add or remove the admin role from `PROJECT_ADMIN_GROUP`, as at sign-in. When Keycloak cannot be reached the session is kept and asked again 5 minutes later, but an admin role that came only from the group stops counting 24 hours after the last confirmation (sign-in or refresh) until one succeeds; `/api/me` still lists the role while `permissions.isAdmin` is false. Dev sessions are never checked. Sessions from before this, without a refresh token, are never checked, so their group admin lapses 24 hours after sign-in. In practice a Keycloak session also ends when Keycloak's own session ends (its idle or maximum time), at the first check after that.
+- Residual risk: the refresh token is stored in plain text. Using it also needs the client secret, which is not in the database; whoever has both the database and the secret can act as a signed-in person with Keycloak until the token expires.
+- Signing in (Keycloak or dev) ends the session the browser already had.
+- `POST /api/auth/logout` deletes the session and clears the cookie. It answers 204, or 200 `LogoutResponse` `{ "endSessionUrl" }` when the session came from Keycloak and Keycloak's discovery lists an `end_session_endpoint` on its own origin: the URL carries `id_token_hint` and `client_id` and no return address (none is registered), so the browser can end the Keycloak session too.
+- Admins can sign a person out everywhere (`DELETE /api/people/:id/sessions`, `auth.sessions_end`) and reset the link between their Andrew ID and a Keycloak account (`DELETE /api/people/:id/keycloak-link`, `auth.link_reset`, which also ends their sessions). Removing someone's last role on the People page ends their sessions too. Recovery steps are in `sign-in-recovery.md`.
 - When a portal call gets a 401, the web sends the person to sign in and back to the page, and editors keep work the service does not have yet in the tab until then (see Changes, "2026-11-25, follow-ups after the final review").
 
 ### CSRF and origin checks
 
 Every `POST`, `PUT`, `PATCH` and `DELETE` under `/api/` must:
 
-1. carry `X-CSRF-Token` equal to the session's `csrf_token` (from `GET /api/me`), except `/api/auth/dev-login`, which has no session yet; and
+1. carry `X-CSRF-Token` equal to the session's CSRF token (from `GET /api/me`), except `/api/auth/dev-login` and `/api/auth/dev-personas`, which run before a session exists. The token is base64url of SHA-256 over a fixed prefix and the session cookie, so the database stores nothing that passes this check (the `csrf_token` column holds an unused random value, kept for rollbacks); and
 1. if an `Origin` header is present, match the origin of `APP_URL`.
 
 Authenticated endpoints send no CORS headers. Public `GET /api/public/*` endpoints send `Access-Control-Allow-Origin: *`.
@@ -212,7 +225,8 @@ All bodies are JSON unless stated. Types are in `sites/web/src/lib/api/types.ts`
 | GET `/api/auth/login?returnTo=` | 302 |
 | GET `/api/auth/callback` | 302 |
 | POST `/api/auth/dev-login` | `DevLoginInput` to 204 with cookie |
-| POST `/api/auth/logout` | 204 |
+| POST `/api/auth/dev-personas` | `DevPersonasInput` to `DevPersonasResponse`; 403 when dev sign-in is off or the key is wrong |
+| POST `/api/auth/logout` | 204, or 200 `LogoutResponse` (see "Sessions") |
 | GET `/api/me` | `MeResponse`, or 401 |
 
 ### Ticker
@@ -293,6 +307,8 @@ Approving calls `announcements::apply_approval` or `projects::apply_approval` in
 | POST `/api/people` | `AddPersonInput` |
 | PATCH `/api/people/assignments/:id` | `UpdateAssignmentInput` |
 | DELETE `/api/people/assignments/:id` | 204 |
+| DELETE `/api/people/:id/sessions` | admins. Ends every session of the person; `EndSessionsResponse` `{ "ended" }`. Clears the cookie when admins end their own |
+| DELETE `/api/people/:id/keycloak-link` | admins. Clears `keycloak_sub` and ends the person's sessions; 204. Nothing changes for someone not linked |
 | POST `/api/people/sync-governance` | admins. Reads `data/committees.yaml` from the governance repository, makes each listed director a director of their committee and each listed head a lead in it (see "Where roles come from"). `GovernanceSyncResponse` |
 
 ### Overview and activity
@@ -320,9 +336,14 @@ Headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: 
 ## Limits on requests
 
 - JSON bodies at most 256 KB, uploads 6 MB. A NUL anywhere in a JSON string is refused with `validation_failed`, since Postgres cannot store it.
+
 - Rich text sources over 64,000 bytes or 4,000 tags are refused before sanitizing.
+
 - Per IP: sign-in and dev login 20 a minute; writes 120 a minute; uploads 30 a minute; public project searches 60 a minute. Behind kennel's proxy (a loopback peer) the client is `CF-Connecting-IP`, then the right-most `X-Forwarded-For`; headers from other peers are ignored.
+
 - Time: a request has 30 seconds to produce its response (uploads 120), headers must arrive within 30 seconds (also the idle limit of a kept-alive connection), and a body may pause at most 30 seconds. Request connections stop a statement after 5 seconds and a lock wait after 2, and end a transaction idle for 30. Shutdown waits at most 8 seconds for open requests.
+
+- Per IP: starting a sign-in 60 a minute (a campus network often shares one address), dev sign-in and its persona list 20 a minute, writes 120 a minute, uploads 30 a minute. A refused `GET /api/auth/login` redirects to `/portal/sign-in/?error=rate_limited` instead of answering JSON. When the service listens on a loopback address only, a loopback peer is kennel's proxy and the client is `CF-Connecting-IP`, then the right-most `X-Forwarded-For`; listening on every interface, and from any other peer, those headers are ignored.
 
 ## Ownership of files
 
@@ -337,7 +358,7 @@ Each area keeps the files below; change another area's files only together with 
 | Projects | `routes/projects/`, `seed/projects.rs`, migrations `02*`; web: `src/lib/projects/`, `src/routes/(site)/projects/`, `src/routes/portal/projects/`, the project links in `src/lib/sections/home/Projects.svelte` |
 | Committees | `routes/committee_pages/`, `blocks.rs`, `richtext.rs`, `seed/committees.rs`, migrations `03*`; web: `src/lib/committees/`, `src/routes/(site)/committees/`, `src/routes/portal/committees/` |
 | Overview | `routes/overview.rs` and `routes/overview/`, `routes/approvals.rs` and `routes/approvals/`; web: `src/routes/portal/+page.svelte`, `src/lib/portal/overview/`, `src/lib/portal/approvals/`, `src/routes/portal/people/` |
-| Sign-in and governance | `auth/`, `routes/auth.rs`, `routes/auth/`, `routes/people/governance*`, `seed/people.rs`, `migrations/05*`, `.gitleaks.toml` |
+| Sign-in and governance | `auth/`, `routes/auth.rs`, `routes/auth/`, `routes/people/governance*`, `seed/people.rs`, `migrations/05*` and `07*`, `.gitleaks.toml`, `docs/implementation/sign-in-recovery.md` |
 
 ## Changes
 
@@ -359,6 +380,22 @@ From the security audit (AVAIL-1, AVAIL-2, AVAIL-4, AVAIL-5, AVAIL-6, AVAIL-8, A
 - **Media.** `media::lookups` keeps the 4,096 most recently used media rows (content type, variants, storage), which never change after upload, so images in S3 keep being served while the database is briefly unreachable. A failed S3 call logs and returns `<action> <key> in bucket <bucket>: could not connect | timed out | failed` with reqwest's error without its URL, since the presigned URL's query string is a credential; download stream errors drop the URL too. `/media` already sends `public, max-age=31536000, immutable`.
 - **Production answers only on its own host** (`host_redirect::canonical_host`). When the `APP_URL` host is `scottylabs.org` or `www.scottylabs.org`, a request naming another host, such as kennel's generated `scottylabs-org-site-main.scottylabs.net`, is answered `308` to the same path and query on `APP_URL` (`Cache-Control: public, max-age=86400`) for `GET` and `HEAD`, and `403 forbidden` ("Changes can only be made at https://scottylabs.org...") otherwise. `/api/health` is exempt for kennel's probe on `127.0.0.1`; requests without a host pass; previews and local development are unaffected.
 - **Owned elsewhere, recorded for ops and kennel.** Cloudflare caches by file extension, so `/api/public/*` (without `q`) and the extension-less `/media/<uuid>` need a Cache Rule that makes them eligible and respects origin TTLs; kennel forces `no-store` on HTML; kennel leaves a unit that hit its start limit stopped until a redeploy, restarts units without secrets when OpenBao is down, sets no `MemoryMax`, and routes the generated host of a production deployment instead of redirecting it.
+
+### 2026-11-25, security audit fixes: sign-in, sessions and identity
+
+From the security audit (findings AUTHN-1 to 5, AUTHZ-1, 4 and 7, GOV-1, CRIT-2 and 3, RELAY-1, AVAIL-1, 2, 9 and 10, NET-1, PREVIEW-1, PREV-1, DP-4, AUD-2). Migration `0701_session_validation.sql` adds `sessions.refresh_token`, `id_token`, `validated_at`, `validation_retry_at` and `dev_key_fingerprint`.
+
+- **Production does not use the shared relay** (see "Ricochet relay"). A production host whose `OAUTH_RELAY_URL` is not its own callback keeps Keycloak sign-in off with one startup error. Governance must give the prod client `https://scottylabs.org/api/auth/callback` as its redirect URI and the same `OAUTH_RELAY_URL`.
+- **Andrew IDs need proof** (see "Keycloak sign-in"): `ANDREW_ID_CLAIM`, or a `preferred_username` whose CMU email matches and `email_verified` is not false. Otherwise `error=no_andrew_id`, and nothing is linked or created. A refused relink is `error=linked_elsewhere`.
+- **Sessions are checked with Keycloak** every 15 minutes at most, so a disabled account or leaving the admin group takes effect without a new sign-in; a Keycloak outage keeps sessions but lets the group's admin role lapse after 24 hours (see "Sessions"). Admins can sign people out everywhere and reset a Keycloak link; removing someone's last role signs them out. Recovery steps: `sign-in-recovery.md`.
+- **Fail fast while Keycloak is down**: 5 seconds per call, one discovery at a time with no lock held, failures remembered for 30 seconds, and `error=unavailable` on the sign-in page.
+- **Signing in ends the browser's earlier session**, for Keycloak as for dev sign-in.
+- **Previews**: dev sessions last 8 hours, end when dev sign-in turns off or the key changes, and never act as a person linked to Keycloak away from localhost. `GET /api/auth/config` lists no personas there; `POST /api/auth/dev-personas` with the key does, and the sign-in page asks for the key first.
+- **CSRF tokens are derived from the session cookie**, so the database holds none that work. `/api/me` and the header are unchanged.
+- **Rate limits**: sign-in starts 60 a minute per IP, dev sign-in 20; a refused sign-in start redirects to `error=rate_limited`. `CF-Connecting-IP` counts only when the service listens on a loopback address.
+- **Audit**: sign-ins, sign-outs, failed and refused sign-ins (with a reason, after an attempt was used up), ended sessions and link resets (see "Keycloak sign-in" and "Sessions"). `audit::record` is unchanged.
+- **Sign-out** answers 200 with `endSessionUrl` when Keycloak can end its own session too; otherwise 204 as before. The web does not use it yet (spec Q5).
+- **Types**: `DevPersona`, `DevPersonasInput`, `DevPersonasResponse`, `LogoutResponse` and `EndSessionsResponse` in types.ts; `AuthConfigResponse.devPersonas` is empty when `devLoginNeedsKey`.
 
 ### 2026-11-25, follow-ups after the final review
 

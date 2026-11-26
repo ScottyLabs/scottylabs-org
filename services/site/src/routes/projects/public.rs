@@ -201,7 +201,7 @@ async fn list(
     if query_param(query, "q").is_some() {
         // Each visitor gets a number of searches a minute (`ratelimit::Class::Search`); the list itself is not limited.
         let peer = peer.map(|Extension(ConnectInfo(peer))| peer.ip());
-        let client = client_ip(peer, &headers);
+        let client = client_ip(peer, &headers, state.config.binds_loopback());
         if let Err(wait) = state.limits.check(Class::Search, client, Instant::now()) {
             let mut response = public(Err(AppError::RateLimited));
             response

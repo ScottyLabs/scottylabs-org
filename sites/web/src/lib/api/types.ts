@@ -556,13 +556,42 @@ export interface AuthConfigResponse {
   devLogin: boolean;
   /** Previews may require a shared key for dev sign-in. */
   devLoginNeedsKey: boolean;
-  devPersonas: { andrewId: string; name: string; label: string }[];
+  /** Empty when `devLoginNeedsKey`: POST /api/auth/dev-personas with the key lists them. */
+  devPersonas: DevPersona[];
+}
+
+export interface DevPersona {
+  andrewId: string;
+  name: string;
+  label: string;
 }
 
 /** POST /api/auth/dev-login */
 export interface DevLoginInput {
   andrewId: string;
   key: string | null;
+}
+
+/** POST /api/auth/dev-personas: 403 when the key is wrong. */
+export interface DevPersonasInput {
+  key: string | null;
+}
+
+export interface DevPersonasResponse {
+  personas: DevPersona[];
+}
+
+/**
+ * POST /api/auth/logout answers 200 with this when the session came from Keycloak and Keycloak can
+ * end its own session too (open `endSessionUrl` for that); otherwise 204.
+ */
+export interface LogoutResponse {
+  endSessionUrl: string;
+}
+
+/** DELETE /api/people/:id/sessions (admins): how many sessions ended. */
+export interface EndSessionsResponse {
+  ended: number;
 }
 
 // ---------------------------------------------------------------------------

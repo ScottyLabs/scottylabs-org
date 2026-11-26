@@ -1,10 +1,12 @@
-//! Signing in and out: Keycloak through the Ricochet relay, dev sign-in as a seeded persona, and logout.
+//! Signing in and out: Keycloak (through the Ricochet relay on previews and staging, straight back in production), dev sign-in as a seeded persona, and logout. Also two admin actions for the People page: ending all of a person's sessions, and resetting the link between their Andrew ID and a Keycloak account.
+//!
+//! Sign-ins, refused and failed sign-ins, sign-outs and ended sessions are written to the audit log with no actor and the person as the subject, so only admins see them. Failures are recorded only once a stored attempt was used up, which `/api/auth/login`'s rate limit bounds; callbacks that match no attempt are only logged.
 
-use axum::extract::{RawQuery, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::header::LOCATION;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use cookie::time::Duration as CookieDuration;
 use serde::{Deserialize, Serialize};
@@ -12,13 +14,17 @@ use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use crate::audit;
-use crate::auth::normalize_andrew_id;
-use crate::auth::oidc::{Identity, OidcProvider, RelayState, SignInError, clip, decode_state};
-use crate::auth::session::{self, NewSession, secrets_match};
-use crate::config::{Config, DevLogin};
+use crate::auth::groups::sync_admin_group;
+use crate::auth::oidc::{
+    Identity, OidcProvider, RelayState, SignInError, SignedIn, clip, decode_state,
+};
+use crate::auth::session::{self, NewSession, SessionExtras, secrets_match};
+use crate::auth::{PortalViewer, normalize_andrew_id};
+use crate::config::{Config, DevLogin, sign_in_callback_url};
 use crate::error::{AppError, AppResult};
 use crate::models::AuthMode;
-use crate::routes::common::no_store;
+use crate::permissions;
+use crate::routes::common::{no_store, parse_id};
 use crate::seed::people::{PERSONAS, persona};
 use crate::state::AppState;
 
@@ -34,7 +40,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", get(login))
         .route("/auth/callback", get(callback))
         .route("/auth/dev-login", post(dev_login))
+        .route("/auth/dev-personas", post(dev_personas))
         .route("/auth/logout", post(logout))
+        .route("/people/{id}/sessions", delete(end_sessions))
+        .route("/people/{id}/keycloak-link", delete(reset_keycloak_link))
 }
 
 #[derive(Serialize)]
@@ -43,6 +52,7 @@ struct AuthConfigResponse {
     oidc: bool,
     dev_login: bool,
     dev_login_needs_key: bool,
+    /// Empty on previews until the key is given (`POST /api/auth/dev-personas`), so the page does not list them to everyone.
     dev_personas: Vec<PersonaDto>,
 }
 
@@ -54,26 +64,25 @@ struct PersonaDto {
     label: &'static str,
 }
 
-/// Dev sign-in needs the switch and the seeded personas it signs in as.
-fn dev_login_available(config: &Config) -> bool {
-    config.dev_login != DevLogin::Off && config.seed_demo
+fn personas() -> Vec<PersonaDto> {
+    PERSONAS
+        .iter()
+        .map(|p| PersonaDto {
+            andrew_id: p.andrew_id,
+            name: p.name,
+            label: p.label,
+        })
+        .collect()
 }
 
 async fn auth_config(State(state): State<AppState>) -> Response {
-    let dev_login = dev_login_available(&state.config);
+    let dev_login = state.config.dev_login_available();
     let body = AuthConfigResponse {
         oidc: state.oidc.is_some(),
         dev_login,
         dev_login_needs_key: dev_login && matches!(state.config.dev_login, DevLogin::Keyed(_)),
-        dev_personas: if dev_login {
-            PERSONAS
-                .iter()
-                .map(|p| PersonaDto {
-                    andrew_id: p.andrew_id,
-                    name: p.name,
-                    label: p.label,
-                })
-                .collect()
+        dev_personas: if dev_login && state.config.dev_login == DevLogin::Open {
+            personas()
         } else {
             Vec::new()
         },
@@ -117,6 +126,7 @@ fn redirect(location: &str) -> Response {
     no_store(response)
 }
 
+/// Back to the sign-in page with a reason it explains.
 fn sign_in_error(code: &str) -> Response {
     redirect(&format!("{SIGN_IN_PAGE}?error={code}"))
 }
@@ -131,11 +141,7 @@ fn attempt_cookie_name(config: &Config) -> &'static str {
 }
 
 fn callback_url(config: &Config) -> String {
-    let mut url = config.app_url.clone();
-    url.set_path("/api/auth/callback");
-    url.set_query(None);
-    url.set_fragment(None);
-    url.to_string()
+    sign_in_callback_url(&config.app_url)
 }
 
 async fn login(State(state): State<AppState>, RawQuery(query): RawQuery) -> Response {
@@ -146,8 +152,8 @@ async fn login(State(state): State<AppState>, RawQuery(query): RawQuery) -> Resp
     let authorization = match oidc.authorize(&callback_url(&state.config)).await {
         Ok(authorization) => authorization,
         Err(error) => {
-            tracing::error!(error = %format!("{error:#}"), "could not start a Keycloak sign-in");
-            return sign_in_error("failed");
+            error.log();
+            return sign_in_error(error.code());
         }
     };
     // Abandoned attempts go away here as well as at sign-in, so they cannot pile up.
@@ -193,13 +199,16 @@ async fn callback(
                 let mut response = redirect(&return_to);
                 session::append_cookie(
                     response.headers_mut(),
-                    &session::session_cookie(&state.config, &session.token),
+                    &session::session_cookie(&state.config, &session),
                 );
                 response
             }
-            Err(error) => {
-                error.log();
-                sign_in_error(error.code())
+            Err(failure) => {
+                failure.error.log();
+                if failure.audited {
+                    record_failure(&state, &failure.error).await;
+                }
+                sign_in_error(failure.error.code())
             }
         },
     };
@@ -213,6 +222,93 @@ async fn callback(
         ),
     );
     response
+}
+
+/// A callback that did not sign anyone in. `audited` once it used up a stored attempt.
+struct Failure {
+    error: SignInError,
+    audited: bool,
+}
+
+impl Failure {
+    /// Before any stored attempt was found: logged, not audited.
+    fn quiet(error: SignInError) -> Self {
+        Self {
+            error,
+            audited: false,
+        }
+    }
+}
+
+impl From<SignInError> for Failure {
+    fn from(error: SignInError) -> Self {
+        Self {
+            error,
+            audited: true,
+        }
+    }
+}
+
+/// Writes the audit entry for a failed or refused sign-in, with its reason and never a code or token.
+async fn record_failure(state: &AppState, error: &SignInError) {
+    let (action, summary) = match error {
+        SignInError::NotAndrewId {
+            reason,
+            claimed: Some(andrew_id),
+        } => (
+            "auth.identity_refused",
+            format!(
+                "Refused a ScottyLabs sign-in as {andrew_id}: the account could not be matched to that CMU Andrew ID ({reason})"
+            ),
+        ),
+        SignInError::NotAndrewId {
+            reason,
+            claimed: None,
+        } => (
+            "auth.identity_refused",
+            format!("Refused a ScottyLabs sign-in: the account named no CMU Andrew ID ({reason})"),
+        ),
+        SignInError::LinkedElsewhere { andrew_id } => (
+            "auth.identity_refused",
+            format!(
+                "Refused a ScottyLabs sign-in as {andrew_id}: that Andrew ID is linked to a different ScottyLabs account"
+            ),
+        ),
+        other => (
+            "auth.sign_in_failed",
+            format!("A ScottyLabs sign-in failed ({})", other.reason()),
+        ),
+    };
+    record_auth_event(state, action, None, None, summary).await;
+}
+
+/// Audits a sign-in event outside any other transaction. A failure to write it is logged, never shown.
+async fn record_auth_event(
+    state: &AppState,
+    action: &str,
+    actor: Option<Uuid>,
+    subject: Option<Uuid>,
+    summary: String,
+) {
+    let written = async {
+        let mut conn = state.db.acquire().await?;
+        audit::record(
+            &mut conn,
+            audit::Entry {
+                actor,
+                action,
+                subject_type: audit::subject::PERSON,
+                subject_id: subject.map(|id| id.to_string()),
+                committee: None,
+                summary,
+            },
+        )
+        .await
+    }
+    .await;
+    if let Err(error) = written {
+        tracing::warn!(error = ?error, action, "could not write a sign-in audit entry");
+    }
 }
 
 #[derive(FromRow)]
@@ -237,12 +333,15 @@ async fn take_attempt(state: &AppState, csrf: &str) -> AppResult<Option<Attempt>
     Ok(attempt)
 }
 
-/// Uses up the attempt behind a refused callback, so its `state` cannot be tried again.
-async fn discard_attempt(state: &AppState, relay: Option<&RelayState>) -> Result<(), SignInError> {
-    if let Some(relay) = relay {
-        take_attempt(state, &relay.csrf).await.map_err(internal)?;
+/// Uses up the attempt behind a refused callback, so its `state` cannot be tried again. True when there was one.
+async fn discard_attempt(state: &AppState, relay: Option<&RelayState>) -> Result<bool, Failure> {
+    match relay {
+        Some(relay) => Ok(take_attempt(state, &relay.csrf)
+            .await
+            .map_err(|error| Failure::quiet(internal(error)))?
+            .is_some()),
+        None => Ok(false),
     }
-    Ok(())
 }
 
 /// The callback's checks, in order. Returns where to send the person and their new session.
@@ -251,60 +350,69 @@ async fn finish_sign_in(
     oidc: &OidcProvider,
     query: Option<&str>,
     headers: &HeaderMap,
-) -> Result<(String, NewSession), SignInError> {
+) -> Result<(String, NewSession), Failure> {
     let relay = query_param(query, "state")
         .as_deref()
         .and_then(decode_state);
 
-    // RFC 9207: Keycloak names itself in `iss`, on errors too, and Ricochet passes it through. A callback without `iss` is still accepted.
+    // RFC 9207: Keycloak names itself in `iss`, on errors too, whether through Ricochet or straight back. A callback without `iss` is still accepted.
     if let Some(iss) = query_param(query, "iss")
         && iss != oidc.issuer()
     {
-        discard_attempt(state, relay.as_ref()).await?;
-        return Err(SignInError::Failed(anyhow::anyhow!(
-            "the callback names the issuer {:?}, not {:?}",
-            clip(&iss),
-            oidc.issuer()
-        )));
+        let audited = discard_attempt(state, relay.as_ref()).await?;
+        return Err(Failure {
+            error: SignInError::Failed(anyhow::anyhow!(
+                "the callback names the issuer {:?}, not {:?}",
+                clip(&iss),
+                oidc.issuer()
+            )),
+            audited,
+        });
     }
 
     if let Some(error) = query_param(query, "error") {
-        discard_attempt(state, relay.as_ref()).await?;
-        return Err(SignInError::provider(
-            &error,
-            query_param(query, "error_description").as_deref(),
-        ));
+        let audited = discard_attempt(state, relay.as_ref()).await?;
+        return Err(Failure {
+            error: SignInError::provider(
+                &error,
+                query_param(query, "error_description").as_deref(),
+            ),
+            audited,
+        });
     }
 
-    let relay = relay.ok_or_else(|| failed("the callback has no valid state"))?;
+    let relay = relay.ok_or_else(|| Failure::quiet(failed("the callback has no valid state")))?;
     match session::read_cookie(headers, attempt_cookie_name(&state.config)) {
         None => {
-            return Err(SignInError::Expired(
+            return Err(Failure::quiet(SignInError::Expired(
                 "the browser came back without the sign-in cookie",
-            ));
+            )));
         }
         Some(cookie) if !secrets_match(&cookie, &relay.csrf) => {
-            return Err(failed("the state does not belong to this browser"));
+            return Err(Failure::quiet(failed(
+                "the state does not belong to this browser",
+            )));
         }
         Some(_) => {}
     }
     let attempt = take_attempt(state, &relay.csrf)
         .await
-        .map_err(internal)?
-        .ok_or(SignInError::Expired(
-            "the sign-in attempt is unknown or was already used",
-        ))?;
+        .map_err(|error| Failure::quiet(internal(error)))?
+        .ok_or_else(|| {
+            Failure::quiet(SignInError::Expired(
+                "the sign-in attempt is unknown or was already used",
+            ))
+        })?;
     if !attempt.fresh {
-        return Err(SignInError::Expired(
-            "the sign-in attempt is older than ten minutes",
-        ));
+        return Err(SignInError::Expired("the sign-in attempt is older than ten minutes").into());
     }
     let code = query_param(query, "code").ok_or_else(|| failed("the callback has no code"))?;
 
-    let identity = oidc
+    let signed_in = oidc
         .finish(code, attempt.pkce_verifier, attempt.nonce)
         .await?;
-    let session = sign_in(state, oidc, &identity).await?;
+    let previous = session::token_from_headers(headers, &state.config);
+    let session = sign_in(state, oidc, signed_in, previous).await?;
     Ok((safe_return_to(Some(&attempt.return_to)), session))
 }
 
@@ -316,30 +424,64 @@ fn internal(error: AppError) -> SignInError {
     SignInError::Failed(anyhow::anyhow!(error.to_string()))
 }
 
-/// Records the person, applies the admin group, and starts their session, all in one transaction.
+fn display_name(identity: &Identity) -> &str {
+    identity.name.as_deref().unwrap_or(&identity.andrew_id)
+}
+
+/// Records the person, applies the admin group and starts their session, all in one transaction. The session this browser had before ends, so a shared computer does not keep the last person's session alive on the server.
 async fn sign_in(
     state: &AppState,
     oidc: &OidcProvider,
-    identity: &Identity,
+    signed_in: SignedIn,
+    previous_session: Option<String>,
 ) -> Result<NewSession, SignInError> {
+    let identity = &signed_in.identity;
     let mut tx = state
         .db
         .begin()
         .await
         .map_err(AppError::from)
         .map_err(internal)?;
+    if let Some(token) = previous_session {
+        session::delete_by_token(&mut *tx, &token)
+            .await
+            .map_err(internal)?;
+    }
     let user_id = upsert_user(&mut tx, identity).await?;
     sync_admin_group(
         &mut tx,
         user_id,
-        identity,
+        display_name(identity),
+        identity.groups.as_deref(),
         &oidc.settings.project_admin_group,
     )
     .await
     .map_err(internal)?;
-    let session = session::create(&mut tx, user_id, AuthMode::Oidc)
-        .await
-        .map_err(internal)?;
+    let session = session::create_with(
+        &mut tx,
+        user_id,
+        AuthMode::Oidc,
+        SessionExtras {
+            refresh_token: signed_in.refresh_token,
+            id_token: Some(signed_in.id_token),
+            dev_key_fingerprint: None,
+        },
+    )
+    .await
+    .map_err(internal)?;
+    audit::record(
+        &mut tx,
+        audit::Entry {
+            actor: None,
+            action: "auth.sign_in",
+            subject_type: audit::subject::PERSON,
+            subject_id: Some(user_id.to_string()),
+            committee: None,
+            summary: format!("{} signed in with ScottyLabs", display_name(identity)),
+        },
+    )
+    .await
+    .map_err(internal)?;
     tx.commit()
         .await
         .map_err(AppError::from)
@@ -347,7 +489,7 @@ async fn sign_in(
     Ok(session)
 }
 
-/// Finds the person by Keycloak subject, then by Andrew ID (people can be added before they first sign in), else creates them. Name and email are refreshed from the token.
+/// Finds the person by Keycloak subject, then by Andrew ID (people can be added before they first sign in), else creates them. Name and email are refreshed from the token. `identity.andrew_id` has already been proven (see `oidc::andrew_id_of`).
 pub async fn upsert_user(
     conn: &mut PgConnection,
     identity: &Identity,
@@ -392,9 +534,9 @@ pub async fn upsert_user(
             .map_err(|e| internal(e.into()))?;
 
     match by_andrew_id {
-        Some((_, Some(_))) => Err(failed(
-            "this Andrew ID is already linked to a different Keycloak account",
-        )),
+        Some((_, Some(_))) => Err(SignInError::LinkedElsewhere {
+            andrew_id: identity.andrew_id.clone(),
+        }),
         Some((id, None)) => {
             sqlx::query(
                 "UPDATE users SET keycloak_sub = $2, name = coalesce($3, name), email = coalesce($4, email)
@@ -407,6 +549,24 @@ pub async fn upsert_user(
             .execute(&mut *conn)
             .await
             .map_err(|e| internal(e.into()))?;
+            // Whoever links a person added before they signed in takes over their roles, so say so.
+            audit::record(
+                conn,
+                audit::Entry {
+                    actor: None,
+                    action: "auth.link",
+                    subject_type: audit::subject::PERSON,
+                    subject_id: Some(id.to_string()),
+                    committee: None,
+                    summary: format!(
+                        "Linked the ScottyLabs account of {} to {}, who was added before signing in",
+                        display_name(identity),
+                        identity.andrew_id
+                    ),
+                },
+            )
+            .await
+            .map_err(internal)?;
             Ok(id)
         }
         None => {
@@ -427,82 +587,6 @@ pub async fn upsert_user(
     }
 }
 
-fn same_group(a: &str, b: &str) -> bool {
-    a.trim_start_matches('/') == b.trim_start_matches('/')
-}
-
-/// Members of `PROJECT_ADMIN_GROUP` are admins. An admin role that came only from the group goes away when the token shows they left it (any `groups` list without the group, including an empty one), unless they are the last admin. Tokens without a `groups` claim change nothing.
-pub async fn sync_admin_group(
-    conn: &mut PgConnection,
-    user_id: Uuid,
-    identity: &Identity,
-    admin_group: &str,
-) -> AppResult<()> {
-    let Some(groups) = &identity.groups else {
-        return Ok(());
-    };
-    let name = identity.name.as_deref().unwrap_or(&identity.andrew_id);
-    if groups.iter().any(|group| same_group(group, admin_group)) {
-        let granted: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO role_assignments (id, user_id, role, committee, can_post_ticker, source)
-             SELECT $1, $2, 'admin', NULL, true, 'keycloak_group'
-             WHERE NOT EXISTS (SELECT 1 FROM role_assignments WHERE user_id = $2 AND role = 'admin')
-             RETURNING id",
-        )
-        .bind(Uuid::now_v7())
-        .bind(user_id)
-        .fetch_optional(&mut *conn)
-        .await?;
-        if granted.is_some() {
-            audit::record(
-                conn,
-                audit::Entry {
-                    actor: None,
-                    action: "role.add",
-                    subject_type: audit::subject::PERSON,
-                    subject_id: Some(user_id.to_string()),
-                    committee: None,
-                    summary: format!("{name} became an admin through the Keycloak admin group"),
-                },
-            )
-            .await?;
-        }
-        return Ok(());
-    }
-
-    let admins: Vec<(Uuid, Uuid, String)> = sqlx::query_as(
-        "SELECT id, user_id, source FROM role_assignments WHERE role = 'admin' ORDER BY id FOR UPDATE",
-    )
-    .fetch_all(&mut *conn)
-    .await?;
-    let from_group = admins
-        .iter()
-        .find(|(_, owner, source)| *owner == user_id && source == "keycloak_group");
-    if let Some((assignment_id, _, _)) = from_group
-        && admins.len() > 1
-    {
-        sqlx::query("DELETE FROM role_assignments WHERE id = $1")
-            .bind(assignment_id)
-            .execute(&mut *conn)
-            .await?;
-        audit::record(
-            conn,
-            audit::Entry {
-                actor: None,
-                action: "role.remove",
-                subject_type: audit::subject::PERSON,
-                subject_id: Some(user_id.to_string()),
-                committee: None,
-                summary: format!(
-                    "{name} is no longer an admin after leaving the Keycloak admin group"
-                ),
-            },
-        )
-        .await?;
-    }
-    Ok(())
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DevLoginInput {
@@ -511,57 +595,337 @@ struct DevLoginInput {
     key: Option<String>,
 }
 
+/// Refuses when dev sign-in is off, or when the preview's key is wrong.
+fn check_dev_login(config: &Config, key: Option<&str>) -> Result<(), DevRefusal> {
+    if !config.dev_login_available() {
+        return Err(DevRefusal::Off);
+    }
+    if let DevLogin::Keyed(expected) = &config.dev_login
+        && !secrets_match(key.unwrap_or_default(), expected)
+    {
+        return Err(DevRefusal::WrongKey);
+    }
+    Ok(())
+}
+
+enum DevRefusal {
+    Off,
+    WrongKey,
+}
+
+impl From<DevRefusal> for AppError {
+    fn from(refusal: DevRefusal) -> Self {
+        match refusal {
+            DevRefusal::Off => AppError::Forbidden(
+                "Dev sign-in is turned off on this site. Continue with ScottyLabs instead.".into(),
+            ),
+            DevRefusal::WrongKey => AppError::Forbidden(
+                "That preview key is not right. Ask the UIA team for the current key.".into(),
+            ),
+        }
+    }
+}
+
+#[derive(FromRow)]
+struct DevTarget {
+    id: Uuid,
+    name: String,
+    linked: bool,
+}
+
 async fn dev_login(
     State(state): State<AppState>,
     headers: HeaderMap,
     crate::json::Json(input): crate::json::Json<DevLoginInput>,
 ) -> AppResult<Response> {
-    if !dev_login_available(&state.config) {
-        return Err(AppError::Forbidden(
-            "Dev sign-in is turned off on this site. Continue with ScottyLabs instead.".into(),
-        ));
-    }
-    if let DevLogin::Keyed(expected) = &state.config.dev_login
-        && !secrets_match(input.key.as_deref().unwrap_or_default(), expected)
-    {
-        return Err(AppError::Forbidden(
-            "That preview key is not right. Ask the UIA team for the current key.".into(),
-        ));
+    if let Err(refusal) = check_dev_login(&state.config, input.key.as_deref()) {
+        if matches!(refusal, DevRefusal::WrongKey) {
+            record_auth_event(
+                &state,
+                "auth.sign_in_failed",
+                None,
+                None,
+                "A dev sign-in was refused (wrong_key)".into(),
+            )
+            .await;
+        }
+        return Err(refusal.into());
     }
     let not_a_persona = || AppError::field("andrewId", "Choose one of the people listed.");
     let andrew_id = normalize_andrew_id(&input.andrew_id).ok_or_else(not_a_persona)?;
     persona(&andrew_id).ok_or_else(not_a_persona)?;
-    let user_id: Uuid = sqlx::query_scalar("SELECT id FROM users WHERE andrew_id = $1")
-        .bind(&andrew_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or_else(not_a_persona)?;
+    let target = sqlx::query_as::<_, DevTarget>(
+        "SELECT id, name, keycloak_sub IS NOT NULL AS linked FROM users WHERE andrew_id = $1",
+    )
+    .bind(&andrew_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(not_a_persona)?;
+    // Away from localhost, never act as someone who signed in here with their real account: on previews the key is shared, and their actions would be recorded under their name.
+    let keyed = matches!(state.config.dev_login, DevLogin::Keyed(_));
+    if keyed && target.linked {
+        record_auth_event(
+            &state,
+            "auth.sign_in_failed",
+            None,
+            Some(target.id),
+            format!("A dev sign-in as {andrew_id} was refused: that person signs in with ScottyLabs here (linked_account)"),
+        )
+        .await;
+        return Err(AppError::field(
+            "andrewId",
+            "That person has signed in here with their ScottyLabs account, so dev sign-in can't act as them. Choose someone else.",
+        ));
+    }
+    let fingerprint = match &state.config.dev_login {
+        DevLogin::Keyed(key) => Some(session::dev_key_fingerprint(key)),
+        DevLogin::Open | DevLogin::Off => None,
+    };
 
     let mut tx = state.db.begin().await?;
     if let Some(old) = session::token_from_headers(&headers, &state.config) {
         session::delete_by_token(&mut *tx, &old).await?;
     }
-    let session = session::create(&mut tx, user_id, AuthMode::Dev).await?;
+    let session = session::create_with(
+        &mut tx,
+        target.id,
+        AuthMode::Dev,
+        SessionExtras {
+            dev_key_fingerprint: fingerprint,
+            ..SessionExtras::default()
+        },
+    )
+    .await?;
+    audit::record(
+        &mut tx,
+        audit::Entry {
+            actor: None,
+            action: "auth.sign_in",
+            subject_type: audit::subject::PERSON,
+            subject_id: Some(target.id.to_string()),
+            committee: None,
+            summary: format!("{} signed in with dev sign-in", target.name),
+        },
+    )
+    .await?;
     tx.commit().await?;
 
     let mut response = no_store(StatusCode::NO_CONTENT.into_response());
     session::append_cookie(
         response.headers_mut(),
-        &session::session_cookie(&state.config, &session.token),
+        &session::session_cookie(&state.config, &session),
     );
     Ok(response)
 }
 
+#[derive(Deserialize)]
+struct DevPersonasInput {
+    #[serde(default)]
+    key: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DevPersonasResponse {
+    personas: Vec<PersonaDto>,
+}
+
+/// The people dev sign-in can act as. On previews it needs the key, so the list is not public.
+async fn dev_personas(
+    State(state): State<AppState>,
+    crate::json::Json(input): crate::json::Json<DevPersonasInput>,
+) -> AppResult<Response> {
+    check_dev_login(&state.config, input.key.as_deref())?;
+    Ok(no_store(
+        Json(DevPersonasResponse {
+            personas: personas(),
+        })
+        .into_response(),
+    ))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LogoutResponse {
+    end_session_url: String,
+}
+
+/// Ends this browser's session. When it came from Keycloak and Keycloak lists an end-session endpoint, answers 200 with `endSessionUrl`, where the browser can go to sign out of Keycloak too; otherwise 204.
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
+    let mut end_session_url = None;
     if let Some(token) = session::token_from_headers(&headers, &state.config) {
-        session::delete_by_token(&state.db, &token).await?;
+        let mut tx = state.db.begin().await?;
+        let ended = session::end_by_token(&mut *tx, &token).await?;
+        if let Some(ended) = &ended {
+            let shown = if ended.name.trim().is_empty() {
+                &ended.andrew_id
+            } else {
+                &ended.name
+            };
+            audit::record(
+                &mut tx,
+                audit::Entry {
+                    actor: None,
+                    action: "auth.sign_out",
+                    subject_type: audit::subject::PERSON,
+                    subject_id: Some(ended.user_id.to_string()),
+                    committee: None,
+                    summary: format!("{shown} signed out"),
+                },
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        if let (Some(ended), Some(oidc)) = (ended, &state.oidc)
+            && ended.auth_mode == AuthMode::Oidc
+            && let Some(id_token) = ended.id_token
+        {
+            end_session_url = oidc.end_session_url(&id_token).await;
+        }
     }
-    let mut response = no_store(StatusCode::NO_CONTENT.into_response());
+    let mut response = match end_session_url {
+        Some(end_session_url) => Json(LogoutResponse { end_session_url }).into_response(),
+        None => StatusCode::NO_CONTENT.into_response(),
+    };
+    response = no_store(response);
     session::append_cookie(
         response.headers_mut(),
         &session::clear_session_cookie(&state.config),
     );
     Ok(response)
+}
+
+#[derive(FromRow)]
+struct Person {
+    name: String,
+    andrew_id: String,
+    linked: bool,
+}
+
+impl Person {
+    fn shown(&self) -> &str {
+        if self.name.trim().is_empty() {
+            &self.andrew_id
+        } else {
+            &self.name
+        }
+    }
+}
+
+/// The person behind `id`, locked for the change, after checking the viewer is an admin.
+async fn person_for_sign_in_change(
+    conn: &mut PgConnection,
+    viewer: &PortalViewer,
+    id: &str,
+) -> AppResult<(Uuid, Person)> {
+    if !permissions::can_manage_sign_in(viewer) {
+        return Err(AppError::Forbidden(
+            "Only admins can sign people out or reset their sign-in.".into(),
+        ));
+    }
+    let user_id = parse_id(id, "person")?;
+    let person = sqlx::query_as::<_, Person>(
+        "SELECT name, andrew_id, keycloak_sub IS NOT NULL AS linked FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?
+    .ok_or_else(|| AppError::not_found("person"))?;
+    Ok((user_id, person))
+}
+
+/// Clears the cookie too when admins ended their own sessions.
+fn after_ending_sessions(
+    state: &AppState,
+    viewer: &PortalViewer,
+    user_id: Uuid,
+    ended: bool,
+    mut response: Response,
+) -> Response {
+    if ended && viewer.user_id == user_id {
+        session::append_cookie(
+            response.headers_mut(),
+            &session::clear_session_cookie(&state.config),
+        );
+    }
+    no_store(response)
+}
+
+#[derive(Serialize)]
+struct EndSessionsResponse {
+    ended: u64,
+}
+
+/// `DELETE /api/people/:id/sessions`: signs a person out everywhere. Admins only. Their roles stay; an admin role from the Keycloak group comes back at their next sign-in while they are in the group.
+async fn end_sessions(
+    State(state): State<AppState>,
+    viewer: PortalViewer,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let mut tx = state.db.begin().await?;
+    let (user_id, person) = person_for_sign_in_change(&mut tx, &viewer, &id).await?;
+    let ended = session::end_all_for_user(&mut *tx, user_id).await?;
+    audit::record(
+        &mut tx,
+        audit::Entry {
+            actor: Some(viewer.user_id),
+            action: "auth.sessions_end",
+            subject_type: audit::subject::PERSON,
+            subject_id: Some(user_id.to_string()),
+            committee: None,
+            summary: format!("Signed {} out everywhere", person.shown()),
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    let response = Json(EndSessionsResponse { ended }).into_response();
+    Ok(after_ending_sessions(
+        &state,
+        &viewer,
+        user_id,
+        ended > 0,
+        response,
+    ))
+}
+
+/// `DELETE /api/people/:id/keycloak-link`: forgets which Keycloak account a person signed in with, for when Keycloak gave them a new one (docs/implementation/sign-in-recovery.md). Admins only. Their sessions end, and their next sign-in links the account again, which still needs proof of the Andrew ID.
+async fn reset_keycloak_link(
+    State(state): State<AppState>,
+    viewer: PortalViewer,
+    Path(id): Path<String>,
+) -> AppResult<Response> {
+    let mut tx = state.db.begin().await?;
+    let (user_id, person) = person_for_sign_in_change(&mut tx, &viewer, &id).await?;
+    if person.linked {
+        sqlx::query("UPDATE users SET keycloak_sub = NULL WHERE id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        session::end_all_for_user(&mut *tx, user_id).await?;
+        audit::record(
+            &mut tx,
+            audit::Entry {
+                actor: Some(viewer.user_id),
+                action: "auth.link_reset",
+                subject_type: audit::subject::PERSON,
+                subject_id: Some(user_id.to_string()),
+                committee: None,
+                summary: format!(
+                    "Reset the ScottyLabs sign-in link of {}; their next sign-in links it again",
+                    person.shown()
+                ),
+            },
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    let response = StatusCode::NO_CONTENT.into_response();
+    Ok(after_ending_sessions(
+        &state,
+        &viewer,
+        user_id,
+        person.linked,
+        response,
+    ))
 }
 
 #[cfg(test)]
