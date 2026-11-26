@@ -17,7 +17,9 @@ pub async fn apply_approval(
     approver: &Viewer,
 ) -> AppResult<()> {
     check_subject(approval)?;
+    // `routes/approvals.rs` locked the approval; the project comes second, as in every project write.
     let project = lock(conn, approval.subject_id).await?;
+    let approver = &permissions::recheck(conn, approver).await?;
     if !permissions::can_approve_for(approver, project.committee) {
         return Err(AppError::Forbidden(format!(
             "Only admins and the director of {} can approve its projects.",
@@ -53,7 +55,8 @@ pub async fn apply_approval(
             .execute(&mut *conn)
             .await?;
     }
-    audit::record(
+    // What visitors saw before and see now, as for a direct publish.
+    audit::record_details(
         conn,
         audit::Entry {
             actor: Some(approver.user_id),
@@ -63,6 +66,11 @@ pub async fn apply_approval(
             committee: Some(project.committee),
             summary: format!("Approved and published {}", clean.name),
         },
+        serde_json::json!({
+            "approval": approval.id,
+            "before": project.published.as_ref().map(|doc| &doc.0),
+            "after": &clean,
+        }),
     )
     .await
 }
@@ -75,6 +83,7 @@ pub async fn apply_send_back(
 ) -> AppResult<()> {
     check_subject(approval)?;
     let project = lock(conn, approval.subject_id).await?;
+    let approver = &permissions::recheck(conn, approver).await?;
     if !permissions::can_approve_for(approver, project.committee) {
         return Err(AppError::Forbidden(format!(
             "Only admins and the director of {} can send its projects back.",
@@ -82,7 +91,7 @@ pub async fn apply_send_back(
         )));
     }
     let name = snapshot_doc(approval).map_or_else(|_| project.draft.name.clone(), |doc| doc.name);
-    audit::record(
+    audit::record_details(
         conn,
         audit::Entry {
             actor: Some(approver.user_id),
@@ -92,6 +101,7 @@ pub async fn apply_send_back(
             committee: Some(project.committee),
             summary: format!("Sent {name} back with a note"),
         },
+        serde_json::json!({ "approval": approval.id }),
     )
     .await
 }

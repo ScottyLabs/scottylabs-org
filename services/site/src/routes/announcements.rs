@@ -614,18 +614,30 @@ async fn log(
     row: &Row,
     summary: String,
 ) -> AppResult<()> {
-    audit::record(
-        conn,
-        audit::Entry {
-            actor: Some(actor.user_id),
-            action,
-            subject_type: subject::ANNOUNCEMENT,
-            subject_id: Some(row.id.to_string()),
-            committee: row.committee.committee(),
-            summary,
-        },
-    )
-    .await
+    audit::record(conn, entry(actor, action, row, summary)).await
+}
+
+/// [`log`] with what the ticker showed before and after, for live edits, approvals and deletions.
+async fn log_change(
+    conn: &mut PgConnection,
+    actor: &Viewer,
+    action: &str,
+    row: &Row,
+    summary: String,
+    details: serde_json::Value,
+) -> AppResult<()> {
+    audit::record_details(conn, entry(actor, action, row, summary), details).await
+}
+
+fn entry<'a>(actor: &Viewer, action: &'a str, row: &Row, summary: String) -> audit::Entry<'a> {
+    audit::Entry {
+        actor: Some(actor.user_id),
+        action,
+        subject_type: subject::ANNOUNCEMENT,
+        subject_id: Some(row.id.to_string()),
+        committee: row.committee.committee(),
+        summary,
+    }
 }
 
 fn require_posting(viewer: &Viewer, source: TickerSource) -> AppResult<Posting> {
@@ -842,12 +854,13 @@ async fn update(
         };
         log(&mut tx, &viewer, "announcement.resubmit", &updated, summary).await?;
     } else {
-        log(
+        log_change(
             &mut tx,
             &viewer,
             "announcement.edit",
             &updated,
             format!("Edited {} on the ticker", quoted(&updated.message)),
+            audit::change(row.input(), updated.input()),
         )
         .await?;
     }
@@ -1081,12 +1094,16 @@ async fn remove(
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    log(
+    log_change(
         &mut tx,
         &viewer,
         "announcement.delete",
         &row,
         format!("Deleted {}", quoted(&row.message)),
+        audit::change(
+            serde_json::json!({ "announcement": row.input(), "state": row.state, "createdBy": row.created_by }),
+            serde_json::Value::Null,
+        ),
     )
     .await?;
     tx.commit().await?;
@@ -1194,12 +1211,13 @@ pub async fn apply_approval(
     .bind(position)
     .fetch_one(&mut *conn)
     .await?;
-    log(
+    log_change(
         conn,
         approver,
         "announcement.approve",
         &updated,
         format!("Approved {} for the ticker", quoted(&updated.message)),
+        serde_json::json!({ "approval": approval.id, "before": null, "after": updated.input() }),
     )
     .await
 }

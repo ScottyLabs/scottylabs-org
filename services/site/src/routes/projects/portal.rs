@@ -13,14 +13,20 @@ use sqlx::types::Json as JsonColumn;
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
+use serde_json::json;
+
 use super::doc::{self, Checklist, ProjectDoc, ProjectState, Purpose};
 use crate::approvals_core::{self, ApprovalStatus, SubjectType};
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
 use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
-use crate::models::{Committee, ImageRef, PersonRef, check_line};
+use crate::models::{
+    Committee, ImageRef, PersonRef, check_https_url, check_line, check_video_url,
+    is_direction_control, without_direction_controls,
+};
 use crate::permissions::{self, ProjectAccess};
+use crate::richtext;
 use crate::routes::common::{self, blocking, query_param};
 use crate::state::AppState;
 
@@ -63,7 +69,20 @@ impl ProjectRow {
 
 const ROW_COLUMNS: &str = "id, slug, committee, state, draft, published, featured, published_at";
 
-/// Locks a project for a write.
+/// Locks a project for a write that may change its waiting approval: the approval first, then the project, the order `routes/approvals.rs` takes them in when an approver decides. Taking them the other way round deadlocks against an approval, and Postgres would fail one of the two requests.
+async fn lock_for_write(conn: &mut PgConnection, id: Uuid) -> AppResult<ProjectRow> {
+    sqlx::query(
+        "SELECT id FROM approvals
+         WHERE subject_type = 'project' AND subject_id = $1 AND status = 'waiting'
+         FOR UPDATE",
+    )
+    .bind(id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    lock(conn, id).await
+}
+
+/// Locks a project. Writes from the editor use [`lock_for_write`]; the approval hooks call this after `routes/approvals.rs` locked the approval.
 pub(super) async fn lock(conn: &mut PgConnection, id: Uuid) -> AppResult<ProjectRow> {
     sqlx::query_as::<_, ProjectRow>(&format!(
         "SELECT {ROW_COLUMNS} FROM projects WHERE id = $1 FOR UPDATE"
@@ -308,8 +327,8 @@ pub(super) async fn editor_view(
             slug: project.slug,
             state: project.state,
             featured: project.featured,
-            draft: project.draft.0,
-            published: project.published.map(|doc| doc.0),
+            draft: cleaned_for_reading(project.draft.0),
+            published: project.published.map(|doc| cleaned_for_reading(doc.0)),
             has_unpublished_changes,
             pending_approval,
             editors,
@@ -321,6 +340,16 @@ pub(super) async fn editor_view(
             can_manage_editors: permissions::can_publish_projects_for(viewer, project.committee),
         },
     })
+}
+
+/// A stored doc as the editor receives it, cleaned again as approvals clean what they show: the description sanitized without bidirectional controls, links the editor would refuse dropped, and images from outside the site left out. Saving cleans on the way in; this keeps a bad row, from before a rule existed or written by hand, from reaching the browser.
+fn cleaned_for_reading(mut doc: ProjectDoc) -> ProjectDoc {
+    doc.description = without_direction_controls(&richtext::sanitize(&doc.description));
+    doc.site_url = doc.site_url.and_then(|url| check_https_url(&url).ok());
+    doc.repo_url = doc.repo_url.and_then(|url| check_https_url(&url).ok());
+    doc.video_url = doc.video_url.and_then(|url| check_video_url(&url).ok());
+    doc.media.retain(|image| image.check(false).is_ok());
+    doc
 }
 
 /// Leads listed as editors who are still leads of the owning committee, the ones who can edit.
@@ -423,6 +452,23 @@ async fn show(
 // ---------------------------------------------------------------------------
 // Shared by the writes
 
+fn entry<'a>(
+    viewer: &Viewer,
+    action: &'a str,
+    project: Uuid,
+    committee: Committee,
+    summary: String,
+) -> audit::Entry<'a> {
+    audit::Entry {
+        actor: Some(viewer.user_id),
+        action,
+        subject_type: subject::PROJECT,
+        subject_id: Some(project.to_string()),
+        committee: Some(committee),
+        summary,
+    }
+}
+
 async fn record(
     conn: &mut PgConnection,
     viewer: &Viewer,
@@ -431,23 +477,32 @@ async fn record(
     committee: Committee,
     summary: String,
 ) -> AppResult<()> {
-    audit::record(
+    audit::record(conn, entry(viewer, action, project, committee, summary)).await
+}
+
+/// [`record`] with the values the change replaced and the ones it set.
+async fn record_change(
+    conn: &mut PgConnection,
+    viewer: &Viewer,
+    action: &str,
+    project: Uuid,
+    committee: Committee,
+    summary: String,
+    details: serde_json::Value,
+) -> AppResult<()> {
+    audit::record_details(
         conn,
-        audit::Entry {
-            actor: Some(viewer.user_id),
-            action,
-            subject_type: subject::PROJECT,
-            subject_id: Some(project.to_string()),
-            committee: Some(committee),
-            summary,
-        },
+        entry(viewer, action, project, committee, summary),
+        details,
     )
     .await
 }
 
 const EDIT_ACTION: &str = "project.edit";
+/// Draft edits are logged at most this often per person and project.
+const EDIT_AUDIT_MINUTES: i32 = 15;
 
-/// Autosave writes often, so a run of edits by one person shows as one entry: the latest edit moves that entry forward instead of adding another.
+/// Autosave writes often, so the log gets one "Edited <name>" entry per person and project every 15 minutes rather than one per save. The log only grows, so later saves in that window add nothing; what each publish changed is in its own entry.
 async fn record_edit(
     conn: &mut PgConnection,
     viewer: &Viewer,
@@ -455,24 +510,20 @@ async fn record_edit(
     committee: Committee,
     name: &str,
 ) -> AppResult<()> {
-    let refreshed = sqlx::query(
-        "UPDATE audit_log SET created_at = now(), summary = $4, committee = $5
-         WHERE id = (
-             SELECT id FROM audit_log
-             WHERE subject_type = $1 AND subject_id = $2
-             ORDER BY created_at DESC, id DESC LIMIT 1
-         )
-           AND actor_id = $3 AND action = $6 AND created_at > now() - interval '15 minutes'",
+    let recent: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+             SELECT 1 FROM audit_log
+             WHERE actor_id = $1 AND subject_type = $2 AND subject_id = $3 AND action = $4
+               AND created_at > now() - make_interval(mins => $5))",
     )
+    .bind(viewer.user_id)
     .bind(subject::PROJECT)
     .bind(project.to_string())
-    .bind(viewer.user_id)
-    .bind(format!("Edited {name}"))
-    .bind(committee)
     .bind(EDIT_ACTION)
-    .execute(&mut *conn)
+    .bind(EDIT_AUDIT_MINUTES)
+    .fetch_one(&mut *conn)
     .await?;
-    if refreshed.rows_affected() > 0 {
+    if recent {
         return Ok(());
     }
     record(
@@ -484,6 +535,17 @@ async fn record_edit(
         format!("Edited {name}"),
     )
     .await
+}
+
+/// Rich text keeps no bidirectional embeddings, overrides or isolates: inside a link they make the text that shows differ from what it says. Checked after sanitizing, which turns character references into the characters themselves.
+fn refuse_direction_controls(doc: &ProjectDoc) -> AppResult<()> {
+    if doc.description.chars().any(is_direction_control) {
+        return Err(AppError::field(
+            "description",
+            "Remove the special characters that change the direction of the text from the description.",
+        ));
+    }
+    Ok(())
 }
 
 /// The viewer's access to a project they are about to change.
@@ -550,6 +612,14 @@ async fn create(
     let id = Uuid::now_v7();
 
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    if !permissions::can_publish_projects_for(&viewer, input.committee) {
+        return Err(AppError::Forbidden(format!(
+            "Only admins and the director of {} can add projects for {}.",
+            input.committee.name(),
+            input.committee.name()
+        )));
+    }
     let mut created = false;
     for attempt in 1..=MAX_SLUG_TRIES {
         let slug = if attempt == 1 {
@@ -613,7 +683,8 @@ async fn save_draft(
     let cleaned = blocking(move || doc::Cleaned::of(input.doc)).await?;
     let target = cleaned.committee();
     let mut tx = state.db.begin().await?;
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    let project = lock_for_write(&mut tx, id).await?;
     let access = require_access(&viewer, &project)?;
     let moving = target != project.committee;
     if moving && !permissions::can_publish_projects_for(&viewer, target) {
@@ -624,6 +695,7 @@ async fn save_draft(
         )));
     }
     let clean = doc::finish_validation(&mut tx, cleaned, Purpose::Save).await?;
+    refuse_direction_controls(&clean)?;
     if clean != project.draft.0 {
         sqlx::query(
             "UPDATE projects SET draft = $2, committee = $3, updated_at = now(), updated_by = $4
@@ -640,13 +712,17 @@ async fn save_draft(
             approvals_core::withdraw_waiting(&mut tx, SubjectType::Project, id).await?;
         }
         if moving {
-            record(
+            record_change(
                 &mut tx,
                 &viewer,
                 "project.move",
                 id,
                 clean.committee,
                 format!("Moved {} to {}", clean.name, clean.committee.name()),
+                audit::change(
+                    json!({ "committee": project.committee }),
+                    json!({ "committee": clean.committee }),
+                ),
             )
             .await?;
         } else {
@@ -666,7 +742,8 @@ async fn publish(
 ) -> AppResult<Json<ProjectEditorResponse>> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    let project = lock_for_write(&mut tx, id).await?;
     let access = require_access(&viewer, &project)?;
     if project.state == ProjectState::Archived {
         return Err(AppError::Conflict(format!(
@@ -685,13 +762,15 @@ async fn publish(
         if !unchanged {
             publish_doc(&mut tx, id, &clean, viewer.user_id).await?;
             approvals_core::withdraw_waiting(&mut tx, SubjectType::Project, id).await?;
-            record(
+            // What visitors saw before and see now, so a change can be traced and put back.
+            record_change(
                 &mut tx,
                 &viewer,
                 "project.publish",
                 id,
                 clean.committee,
                 format!("Published {}", clean.name),
+                audit::change(project.published.as_ref().map(|doc| &doc.0), &clean),
             )
             .await?;
         }
@@ -760,18 +839,23 @@ async fn archive(
 ) -> AppResult<Json<ProjectEditorResponse>> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    let project = lock_for_write(&mut tx, id).await?;
     require_full(&viewer, &project, "archive projects")?;
     if project.state != ProjectState::Archived {
         set_state(&mut tx, id, ProjectState::Archived, viewer.user_id).await?;
         approvals_core::withdraw_waiting(&mut tx, SubjectType::Project, id).await?;
-        record(
+        record_change(
             &mut tx,
             &viewer,
             "project.archive",
             id,
             project.committee,
             format!("Archived {}", project.draft.name),
+            audit::change(
+                json!({ "state": project.state }),
+                json!({ "state": ProjectState::Archived }),
+            ),
         )
         .await?;
     }
@@ -785,7 +869,8 @@ async fn unarchive(
 ) -> AppResult<Json<ProjectEditorResponse>> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    let project = lock_for_write(&mut tx, id).await?;
     require_full(&viewer, &project, "unarchive projects")?;
     if project.state == ProjectState::Archived {
         let state = if project.published.is_some() {
@@ -794,13 +879,17 @@ async fn unarchive(
             ProjectState::Draft
         };
         set_state(&mut tx, id, state, viewer.user_id).await?;
-        record(
+        record_change(
             &mut tx,
             &viewer,
             "project.unarchive",
             id,
             project.committee,
             format!("Unarchived {}", project.draft.name),
+            audit::change(
+                json!({ "state": ProjectState::Archived }),
+                json!({ "state": state }),
+            ),
         )
         .await?;
     }
@@ -831,7 +920,8 @@ async fn discard(
 ) -> AppResult<Json<ProjectEditorResponse>> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    let project = lock_for_write(&mut tx, id).await?;
     let access = require_access(&viewer, &project)?;
     let Some(published) = project.published.as_ref().map(|doc| doc.0.clone()) else {
         return Err(AppError::Conflict(format!(
@@ -854,13 +944,15 @@ async fn discard(
         if access == ProjectAccess::Lead {
             approvals_core::withdraw_waiting(&mut tx, SubjectType::Project, id).await?;
         }
-        record(
+        // The draft that was thrown away, in case it is wanted back.
+        record_change(
             &mut tx,
             &viewer,
             "project.discard",
             id,
             published.committee,
             format!("Discarded the unpublished changes to {}", published.name),
+            audit::change(&project.draft.0, &published),
         )
         .await?;
     }
@@ -918,17 +1010,27 @@ async fn settings(
     if input.featured == Some(true) {
         wait_to_feature(&mut tx).await?;
     }
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    if !permissions::can_curate_projects(&viewer) {
+        return Err(AppError::Forbidden(
+            "Only admins can change a project's address or feature it.".into(),
+        ));
+    }
+    let project = lock_for_write(&mut tx, id).await?;
     let name = project.draft.name.clone();
     if let Some(slug) = new_slug.filter(|slug| *slug != project.slug) {
         change_slug(&mut tx, &project, &slug).await?;
-        record(
+        record_change(
             &mut tx,
             &viewer,
             "project.slug",
             id,
             project.committee,
-            format!("Moved {name} to /projects/{slug}/"),
+            format!(
+                "Moved {name} from /projects/{}/ to /projects/{slug}/",
+                project.slug
+            ),
+            audit::change(json!({ "slug": project.slug }), json!({ "slug": slug })),
         )
         .await?;
     }
@@ -942,13 +1044,17 @@ async fn settings(
         } else {
             format!("Stopped featuring {name}")
         };
-        record(
+        record_change(
             &mut tx,
             &viewer,
             "project.feature",
             id,
             project.committee,
             summary,
+            audit::change(
+                json!({ "featured": project.featured }),
+                json!({ "featured": featured }),
+            ),
         )
         .await?;
     }
@@ -1058,7 +1164,8 @@ async fn set_editors(
         ));
     }
     let mut tx = state.db.begin().await?;
-    let project = lock(&mut tx, id).await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    let project = lock_for_write(&mut tx, id).await?;
     if !permissions::can_publish_projects_for(&viewer, project.committee) {
         return Err(AppError::Forbidden(format!(
             "Only admins and the director of {} can choose who edits {}.",
@@ -1105,13 +1212,14 @@ async fn set_editors(
         .bind(viewer.user_id)
         .execute(&mut *tx)
         .await?;
-        record(
+        record_change(
             &mut tx,
             &viewer,
             "project.editors",
             id,
             project.committee,
             format!("Changed who can edit {}", project.draft.name),
+            audit::change(json!({ "userIds": before }), json!({ "userIds": user_ids })),
         )
         .await?;
     }
