@@ -84,6 +84,10 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            crate::host_redirect::canonical_host,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             crate::static_files::security_headers,
         ))
         .layer(

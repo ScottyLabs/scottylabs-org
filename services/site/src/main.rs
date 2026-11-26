@@ -7,6 +7,7 @@ mod blocks;
 mod config;
 mod db;
 mod error;
+mod host_redirect;
 mod json;
 mod last_good;
 mod media;

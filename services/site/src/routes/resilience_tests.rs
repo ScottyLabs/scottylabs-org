@@ -1,4 +1,4 @@
-//! The site through database outages: the static pages without a database, the API's 503s, the health check, the last good copies of public answers, and the limits on searches.
+//! The site through database outages: the static pages without a database, the API's 503s, the health check, the last good copies of public answers, and the production host.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use axum::Router;
 use axum::http::StatusCode;
 use sqlx::PgPool;
+use url::Url;
 
 use crate::config::Config;
 use crate::db::{self, Phase};
@@ -148,6 +149,45 @@ async fn public_answers_survive_a_database_outage(db: PgPool) {
         assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_eq!(res.code(), "unavailable", "{path}");
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn production_answers_only_on_its_own_host(db: PgPool) {
+    let config = Config {
+        app_url: Url::parse("https://scottylabs.org").unwrap(),
+        ..testing::config()
+    };
+    let app = testing::app_with(db, config).await;
+    let mirror = "scottylabs-org-site-main.scottylabs.net";
+
+    let page = Req::get("/projects/?committee=tech")
+        .header("host", mirror)
+        .send(&app)
+        .await;
+    assert_eq!(page.status, StatusCode::PERMANENT_REDIRECT);
+    assert_eq!(
+        page.header("location"),
+        Some("https://scottylabs.org/projects/?committee=tech")
+    );
+
+    let write = Req::post("/api/auth/logout")
+        .header("host", mirror)
+        .send(&app)
+        .await;
+    assert_eq!(write.status, StatusCode::FORBIDDEN);
+    assert_eq!(write.code(), "forbidden");
+
+    // Kennel's health probe dials 127.0.0.1, and the production host is served as usual.
+    let probe = Req::get("/api/health")
+        .header("host", "127.0.0.1:10234")
+        .send(&app)
+        .await;
+    assert_eq!(probe.status, StatusCode::OK);
+    let own = Req::get("/api/public/ticker")
+        .header("host", "scottylabs.org")
+        .send(&app)
+        .await;
+    assert_eq!(own.status, StatusCode::OK);
 }
 
 #[sqlx::test(migrations = "./migrations")]

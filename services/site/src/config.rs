@@ -235,6 +235,11 @@ fn s3_settings(var: &impl Fn(&str) -> Option<String>) -> anyhow::Result<Option<S
     }
 }
 
+/// Whether `host` is where production is served: `scottylabs.org` or `www.scottylabs.org`.
+pub fn is_production_host(host: &str) -> bool {
+    PRODUCTION_HOSTS.contains(&host)
+}
+
 /// Applies the dev login rules from docs/implementation/contract.md.
 pub fn dev_login_mode(app_url: &Url, enabled: bool, key: Option<String>) -> DevLogin {
     let host = app_url.host_str().unwrap_or_default();
