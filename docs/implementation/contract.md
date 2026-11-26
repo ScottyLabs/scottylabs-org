@@ -29,10 +29,11 @@ Local development runs Vite on port 5173 and the service on 127.0.0.1:8080. Vite
 
 | Variable | Where it comes from | Required |
 | -- | -- | -- |
-| `DATABASE_URL`, `PGUSER` | kennel, or the dev shell | yes |
+| `DATABASE_URL`, `PGUSER` | kennel, or the dev shell | yes. The service starts without the database and connects in the background (see Changes, "2026-11-25, security audit fixes: availability and resilience") |
+| `DATABASE_POOL_SIZE` | anywhere | optional. Request pool connections, 1 to 50, default 10 |
 | `APP_URL` | kennel; the dev shell sets `http://localhost:5173` | yes. The service refuses to start without it |
-| `PORT` | kennel. Binds `0.0.0.0:$PORT` | in deploys |
-| `SITE_BIND_ADDR` | dev shell, `127.0.0.1:8080` | local |
+| `PORT` | kennel. Binds `127.0.0.1:$PORT`; kennel's Caddy and health probe are on the same host | in deploys |
+| `SITE_BIND_ADDR` | dev shell, `127.0.0.1:8080`. Wins over `PORT` when set, so binding all interfaces is always an explicit choice | local |
 | `STATIC_DIR` | flake `env`. Unset locally, where Vite serves pages | in deploys |
 | `S3_ENDPOINT`, `S3_BUCKET`, and the key as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` | kennel `garage` provisioner in deploys; the dev shell names the key `S3_ACCESS_KEY` and `S3_SECRET_KEY`, which win when both are set. `S3_REGION` defaults to `garage` | optional. Without them media is stored in Postgres; a partial set logs which are missing, and startup logs where uploads go |
 | `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `KEYCLOAK_URL`, `KEYCLOAK_REALM`, `OAUTH_RELAY_URL`, `PROJECT_GROUP`, `PROJECT_ADMIN_GROUP` | governance `oidc_client` | optional. Sign-in through Keycloak is on only when all seven are set |
@@ -82,7 +83,7 @@ Bundled seed images live in `sites/web/static/seed/` and are referenced as `/see
 - Edition 2024, nightly toolchain from kennel. Format with `cargo fmt`. `cargo clippy` clean, on the dev shell's nightly and on the stable toolchain the Nix checks (`site-clippy`, `site-test`) use in CI. Files the tests read with `include_str!` must be listed in `extraSources` in `flake.nix`.
 - `sqlx` with runtime-checked queries (`query`, `query_as`, `query_scalar`). Do not use the `query!` macros, which need a database at compile time. `sqlx::migrate!` is fine.
 - IDs are `Uuid::now_v7()`.
-- Handlers return `Result<T, AppError>` (`src/error.rs`). Errors serialize as `{ "error": { "code", "message", "fields"? } }` with the matching status: `bad_request` 400, `validation_failed` 422, `unauthenticated` 401, `forbidden` 403, `not_found` 404, `conflict` 409, `method_not_allowed` 405, `payload_too_large` 413, `unsupported_media_type` 415, `rate_limited` 429, `upstream_failed` 502, `auth_not_configured` 503, `internal` 500. Internal errors log the cause and never return it.
+- Handlers return `Result<T, AppError>` (`src/error.rs`). Errors serialize as `{ "error": { "code", "message", "fields"? } }` with the matching status: `bad_request` 400, `validation_failed` 422, `unauthenticated` 401, `forbidden` 403, `not_found` 404, `conflict` 409, `method_not_allowed` 405, `payload_too_large` 413, `unsupported_media_type` 415, `rate_limited` 429, `upstream_failed` 502, `unavailable` 503 (with `Retry-After: 5`; the database is unreachable or too slow, the service is starting, or it is busy), `auth_not_configured` 503, `internal` 500. Internal errors log the cause and never return it.
 - Messages are for people: plain sentences that say what to do. "Write a message of 90 characters or fewer." not "message: invalid length".
 - JSON structs use `#[serde(rename_all = "camelCase")]`. Enums serialize as their snake_case names (`"in_development"`), matching `sites/web/src/lib/api/types.ts`.
 - Every write that changes content or roles writes an audit entry with `audit::record` in the same transaction.
@@ -192,13 +193,13 @@ Extra rules:
 
 All bodies are JSON unless stated. Types are in `sites/web/src/lib/api/types.ts`.
 
-### Public (no auth, `Cache-Control: public, max-age=60, stale-while-revalidate=600`)
+### Public (no auth, `Cache-Control: public, max-age=60, stale-while-revalidate=600, stale-if-error=86400`)
 
 | Method and path | Response |
 | -- | -- |
-| GET `/api/health` | `200 ok` (plain text). Checks the database |
+| GET `/api/health` | `200 ok` (plain text) once migrations and seeding are done and the database answers within 1.5 s; otherwise `503` with `starting` or `unavailable` and `Retry-After` |
 | GET `/api/public/ticker` | `PublicTickerResponse`: live, unexpired, ordered by `position` then `starts_at` |
-| GET `/api/public/projects?committee=&q=` | `PublicProjectsResponse`: published, featured first, then by name. `committee` keeps one committee's projects. `q` keeps those where every word appears, ignoring case and accents, in the name, summary, whole description, committee name, kind or status (the words on the card); it is trimmed, cut to 100 characters, and control characters are dropped. Blank means no search |
+| GET `/api/public/projects?committee=&q=` | `PublicProjectsResponse`: published, featured first, then by name. `committee` keeps one committee's projects. `q` keeps those where every word appears, ignoring case and accents, in the name, summary, whole description, committee name, kind or status (the words on the card); it is trimmed, cut to 100 characters, and control characters are dropped. Blank means no search. Searches count 60 a minute per visitor (`429` with `Retry-After`), and at most 4 run at once (`503` after waiting 2 s) |
 | GET `/api/public/projects/:slug` | `PublicProjectResponse`; 404 when unknown or not published |
 | GET `/api/public/committees` | `PublicCommitteesResponse`, in `sort_order` |
 | GET `/api/public/committees/:slug` | `PublicCommitteePageResponse`; 404 for unknown slugs |
@@ -266,12 +267,12 @@ Rules: name 1 to 60 characters; summary 1 to 48; description up to 4000 characte
 `POST /api/media`, multipart with `file` and optional `alt`, any portal user.
 
 - At most 5 MB. JPEG, PNG or WebP, detected from the bytes, not the name or header.
-- Decode with limits: at most 12000 pixels on each side, 40 megapixels in all (checked from the header before decoding), and 512 MB of allocation.
+- Decode with limits: at most 12000 pixels on each side, 40 megapixels in all and 160 MB of decoded pixels (both checked from the header before decoding, so 16-bit images are refused above 20 megapixels with `413`, "That image holds too much data to process..."), and 256 MB of allocation. Two uploads decode at once and four more may wait; past that an upload answers `503 unavailable` at once. The EXIF orientation is applied to the widest variant, after the first downscale.
 - Re-encode, which strips metadata: JPEG at quality 82 for opaque images, PNG when the image has transparency. Make widths 480, 960 and 1920, never wider than the original.
 - Store under `media/<uuid>/<width>` in S3 when configured, otherwise in `media_blobs`.
 - Respond `201 UploadResponse`.
 
-`GET /media/:id?w=`: the smallest stored variant at least `w` wide, or the largest. `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`.
+`GET /media/:id?w=`: the smallest stored variant at least `w` wide, or the largest. `Cache-Control: public, max-age=31536000, immutable`, `X-Content-Type-Options: nosniff`. Media rows are kept in memory once looked up (the 4,096 most recently used), so images in S3 keep being served while the database is briefly unreachable. Logs and errors name the bucket, key and status of a failed S3 call, never the presigned URL.
 
 ### Approvals
 
@@ -320,7 +321,8 @@ Headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: 
 
 - JSON bodies at most 256 KB, uploads 6 MB. A NUL anywhere in a JSON string is refused with `validation_failed`, since Postgres cannot store it.
 - Rich text sources over 64,000 bytes or 4,000 tags are refused before sanitizing.
-- Per IP: sign-in and dev login 20 a minute; writes 120 a minute; uploads 30 a minute. Behind kennel's proxy (a loopback peer) the client is `CF-Connecting-IP`, then the right-most `X-Forwarded-For`; headers from other peers are ignored.
+- Per IP: sign-in and dev login 20 a minute; writes 120 a minute; uploads 30 a minute; public project searches 60 a minute. Behind kennel's proxy (a loopback peer) the client is `CF-Connecting-IP`, then the right-most `X-Forwarded-For`; headers from other peers are ignored.
+- Time: a request has 30 seconds to produce its response (uploads 120), headers must arrive within 30 seconds (also the idle limit of a kept-alive connection), and a body may pause at most 30 seconds. Request connections stop a statement after 5 seconds and a lock wait after 2, and end a transaction idle for 30. Shutdown waits at most 8 seconds for open requests.
 
 ## Ownership of files
 
@@ -340,6 +342,23 @@ Each area keeps the files below; change another area's files only together with 
 ## Changes
 
 Record changes to this contract here, newest first, with the reason.
+
+### 2026-11-25, security audit fixes: availability and resilience
+
+From the security audit (AVAIL-1, AVAIL-2, AVAIL-4, AVAIL-5, AVAIL-6, AVAIL-8, AUTHN-6, UPLOAD-1, LOG-1, CRIT-6). The service used to need Postgres to start: a restart during a database outage crash-looped, and kennel holds a unit that fails five times in five minutes stopped until the next deploy, static pages included.
+
+- **Starting without the database.** `main` binds and serves at once. The request pool (`db::request_pool`) connects lazily; migrations and seeding run in the background on a one-connection pool of their own without the request timeouts (`db::prepare_until_ready`), retrying after 1 s, then twice as long each time up to a minute, and never giving up. `AppState.database` (`db::Readiness`) records `starting`, `unavailable` (could not connect), `failed` (a migration or the seed failed) or `ready`. Until it is ready, every `/api` call but the health check answers `503 unavailable` with `Retry-After: 5`; the static site and `/media` are served as usual. The governance sync starts once the database is ready. `AppState::new` (tests) is ready at once; `AppState::starting` is what `main` uses.
+- **Health is readiness.** `GET /api/health` answers `200 ok` only when the database is ready and `SELECT 1` answers within 1.5 s (kennel's probe waits 2 s), otherwise `503` with the plain text `starting` or `unavailable` and `Retry-After`. It names no cause; the log does. Kennel's deploy check (200 within 60 s) still stops a release whose migrations fail; deploys need Postgres for provisioning anyway, so a database outage never meets that check.
+- **Outages answer 503, not 500.** `AppError::Unavailable` (`unavailable`, 503, `Retry-After: 5`, in `ApiErrorBody`). Database errors that mean the database is down, unreachable, overloaded or too slow (pool timeout or closed, I/O, TLS, SQLSTATE classes 08, 53, 57 and 58, and 55P03) become it, wherever they are in an error's chain (`db::is_unavailable`); other database errors stay `internal`.
+- **Timeouts.** Request connections set `statement_timeout` 5s, `lock_timeout` 2s and `idle_in_transaction_session_timeout` 30s as connection options, and wait at most 3 s for a connection (was 10 s). `DATABASE_POOL_SIZE` sets the pool, 1 to 50, default 10. `server::serve` replaces `axum::serve`: HTTP/1.1 only (kennel's Caddy, its probe and Vite's proxy speak it, and HTTP/2 detection would wait on a silent connection without a timeout), hyper's header timer of 30 s, which is also the idle limit of kept-alive connections, a request body that pauses 30 s fails, `ConnectInfo` as before, and a graceful shutdown that waits at most 8 s, under kennel's 10 s stop wait. `server::limit_duration` ends a request that has no response after 30 s (uploads 120 s) with `503 unavailable`.
+- **Loopback by default.** With `PORT` the service binds `127.0.0.1:$PORT` (was `0.0.0.0`); `SITE_BIND_ADDR` wins when set. Kennel's Caddy dials `localhost:<port>` and its probe `127.0.0.1:<port>`, so both still reach it.
+- **Last good public answers.** `last_good::keep` keeps the latest `200` of every `GET /api/public/*` in memory, keyed by path and, for the project list, `committee` (searches are not kept; at most 256 copies, 1 MB each, 16 MB in all). When a later request answers a 5xx, the kept copy is sent with `200`, `Cache-Control: no-store`, `Access-Control-Allow-Origin: *` and `X-Content-Stale: true`. The public `Cache-Control` adds `stale-if-error=86400` (`routes::common::PUBLIC_CACHE`), so a CDN that caches these answers may keep serving them for a day while the service fails.
+- **Public pages through an outage (web).** The committee pages, the Committees index, the Projects page and project pages keep the last content each visitor loaded in `localStorage` under `sl-last-good:<key>` (`committee:<slug>`, `committees`, `projects`, `project:<slug>`) as `{ value, savedAt }`, at most 512 KB each, checked for shape and dropped after a week or when the page answers 404 (`src/lib/site/last-good.ts`). When the content cannot load, a page shows what it showed before in this visit, else the saved copy, with `LastGoodNote` above it ("We couldn't reach the site, so this is how the page looked when you visited earlier today." and Try again), and its error message only when it has neither. The ticker already kept what it loaded and hides when it has nothing; it is unchanged, since its public shape has no expiry to check a saved copy against.
+- **Search cost.** `search::read` keeps each published project's excerpt and folded search text in memory, keyed by id and a per-process keyed hash of the fields they come from, so neither the list, committee pages nor a search parses a description already read; cards are built on the blocking pool. Searches take a visitor's `ratelimit::Class::Search` allowance (60 a minute) in the list handler, and wait at most 2 s for one of 4 search slots (`AppState.search_slots`).
+- **Uploads.** `process::MAX_DECODED_BYTES` (160 MB, 40 megapixels at 4 bytes) is checked from the header with the pixel count, and the decoder may allocate 256 MB (was 512 MB): a 16-bit image above 20 megapixels answers `413` with "That image holds too much data to process. Export it as a JPEG and try again." The EXIF orientation is applied after shrinking to the widest variant, and the widths follow the shown orientation. Two uploads decode at once and four more may wait; any further upload answers `503 unavailable` with "Many images are being processed right now. Try again in a few seconds." at once.
+- **Media.** `media::lookups` keeps the 4,096 most recently used media rows (content type, variants, storage), which never change after upload, so images in S3 keep being served while the database is briefly unreachable. A failed S3 call logs and returns `<action> <key> in bucket <bucket>: could not connect | timed out | failed` with reqwest's error without its URL, since the presigned URL's query string is a credential; download stream errors drop the URL too. `/media` already sends `public, max-age=31536000, immutable`.
+- **Production answers only on its own host** (`host_redirect::canonical_host`). When the `APP_URL` host is `scottylabs.org` or `www.scottylabs.org`, a request naming another host, such as kennel's generated `scottylabs-org-site-main.scottylabs.net`, is answered `308` to the same path and query on `APP_URL` (`Cache-Control: public, max-age=86400`) for `GET` and `HEAD`, and `403 forbidden` ("Changes can only be made at https://scottylabs.org...") otherwise. `/api/health` is exempt for kennel's probe on `127.0.0.1`; requests without a host pass; previews and local development are unaffected.
+- **Owned elsewhere, recorded for ops and kennel.** Cloudflare caches by file extension, so `/api/public/*` (without `q`) and the extension-less `/media/<uuid>` need a Cache Rule that makes them eligible and respects origin TTLs; kennel forces `no-store` on HTML; kennel leaves a unit that hit its start limit stopped until a redeploy, restarts units without secrets when OpenBao is down, sets no `MemoryMax`, and routes the generated host of a production deployment instead of redirecting it.
 
 ### 2026-11-25, follow-ups after the final review
 
