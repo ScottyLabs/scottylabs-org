@@ -150,11 +150,32 @@ function fromContract<T>(value?: unknown): T {
   return value as T;
 }
 
+/**
+ * The session's CSRF token as GET /api/me gives it now, or null when it cannot say. A tab loaded
+ * before a deploy (or a rollback) that changed how the token is made still holds the old one.
+ */
+async function freshCsrfToken(doFetch: typeof fetch): Promise<string | null> {
+  try {
+    const response = await doFetch(apiUrl("/me"), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      credentials: "same-origin",
+    });
+    if (!response.ok) return null;
+    const me: unknown = await response.json();
+    if (typeof me !== "object" || me === null || !("csrfToken" in me)) return null;
+    return typeof me.csrfToken === "string" ? me.csrfToken : null;
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(
   method: Method,
   path: string,
   body: unknown,
   options: RequestOptions = {},
+  retryWithFreshToken = true,
 ): Promise<T> {
   const headers = new Headers({ Accept: "application/json" });
   let payload: BodyInit | undefined;
@@ -164,9 +185,8 @@ async function request<T>(
     headers.set("Content-Type", "application/json");
     payload = JSON.stringify(body);
   }
-  if (WRITE_METHODS.has(method) && csrfToken !== null) {
-    headers.set("X-CSRF-Token", csrfToken);
-  }
+  const sentToken = WRITE_METHODS.has(method) ? csrfToken : null;
+  if (sentToken !== null) headers.set("X-CSRF-Token", sentToken);
 
   const doFetch = options.fetch ?? fetch;
   let response: Response;
@@ -191,6 +211,14 @@ async function request<T>(
     const error = await errorFromResponse(response);
     if (error.status === 401 && options.redirectOnUnauthenticated !== false) {
       unauthenticatedHandler?.(error);
+    }
+    // A write the server refused before doing anything, because the token is not the one the session has now: ask for the current token once, and send the write again with it.
+    if (error.status === 403 && sentToken !== null && retryWithFreshToken) {
+      const fresh = await freshCsrfToken(doFetch);
+      if (fresh !== null && fresh !== sentToken) {
+        csrfToken = fresh;
+        return request<T>(method, path, body, options, false);
+      }
     }
     throw error;
   }

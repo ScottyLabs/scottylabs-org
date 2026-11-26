@@ -9,9 +9,26 @@ import type { AccessState, SessionStatus, SignedOutReason } from "./access.ts";
 import { clearKeptChanges } from "./kept-changes.ts";
 import { replaceLocation } from "./navigation.ts";
 import { SIGN_IN_PATH, isBarePortalPath } from "./paths.ts";
-import { endSessionUrl } from "./sign-out.ts";
+import { type EndSessionForm, endSessionForm } from "./sign-out.ts";
 
 export type { SessionStatus, SignedOutReason } from "./access.ts";
+
+/** Leaves for Keycloak's end-session page by posting a form, so the ID token stays out of addresses. */
+function postEndSession({ action, fields }: EndSessionForm): void {
+  const form = document.createElement("form");
+  form.method = "post";
+  form.action = action;
+  form.hidden = true;
+  for (const [name, value] of fields) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = name;
+    input.value = value;
+    form.append(input);
+  }
+  document.body.append(form);
+  form.submit();
+}
 
 export class PortalSession implements AccessState {
   /** "ready" once /api/me answered; "signed_out" on 401; "error" when it could not be reached. */
@@ -65,7 +82,7 @@ export class PortalSession implements AccessState {
 
   /**
    * Ends the session on the server, forgets it here, and goes to Keycloak to end its session too
-   * when the server names the address, or else to the sign-in page.
+   * when the server names the address (posted as a form), or else to the sign-in page.
    */
   async signOut(): Promise<void> {
     let answer: unknown = null;
@@ -76,9 +93,9 @@ export class PortalSession implements AccessState {
       if (!isApiError(error) || error.status !== 401) throw error;
     }
     this.markSignedOut("signed_out");
-    const keycloak = endSessionUrl(answer);
+    const keycloak = endSessionForm(answer);
     if (keycloak !== null) {
-      location.assign(keycloak);
+      postEndSession(keycloak);
       return;
     }
     await replaceLocation(

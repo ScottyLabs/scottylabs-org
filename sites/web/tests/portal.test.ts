@@ -11,6 +11,7 @@ import {
   isAbortError,
   onUnauthenticated,
   post,
+  put,
   setCsrfToken,
 } from "../src/lib/api/client.ts";
 import type { RoleAssignment } from "../src/lib/api/types.ts";
@@ -47,7 +48,7 @@ import { replaceLocation } from "../src/lib/portal/navigation.ts";
 import { safeReturnTo, signInHref } from "../src/lib/portal/paths.ts";
 import { describeRoles, firstName, primaryRoleLabel } from "../src/lib/portal/roles.ts";
 import { signInNotice } from "../src/lib/portal/sign-in-messages.ts";
-import { endSessionUrl } from "../src/lib/portal/sign-out.ts";
+import { endSessionForm, endSessionUrl } from "../src/lib/portal/sign-out.ts";
 import { focusAfterDialog } from "../src/lib/portal/ui/focus.ts";
 
 const NOW = "2026-11-24T17:00:00Z";
@@ -345,6 +346,51 @@ Deno.test("writes carry the CSRF token and reads do not", async () => {
   assert.equal(write?.init.credentials, "same-origin");
 });
 
+function refused(): Response {
+  return Response.json(
+    { error: { code: "forbidden", message: "Your session check failed." } },
+    { status: 403 },
+  );
+}
+
+Deno.test("a write refused for an outdated CSRF token is sent once more with the current one", async () => {
+  const calls: Call[] = [];
+  // A tab loaded before a deploy changed how the token is made.
+  const server = stubFetch(() => {
+    const last = calls.at(-1);
+    if (last?.url === "/api/me") return Response.json({ csrfToken: "token-new" });
+    const sent = new Headers(last?.init.headers).get("X-CSRF-Token");
+    return sent === "token-new" ? Response.json({ saved: true }) : refused();
+  }, calls);
+  setCsrfToken("token-old");
+  try {
+    const saved = await put<{ saved: boolean }>(
+      "/projects/p1/draft",
+      { doc: {} },
+      { fetch: server, query: { x: 1 } },
+    );
+    assert.deepEqual(saved, { saved: true });
+    assert.deepEqual(
+      calls.map((call) => [call.init.method, call.url]),
+      [
+        ["PUT", "/api/projects/p1/draft?x=1"],
+        ["GET", "/api/me"],
+        ["PUT", "/api/projects/p1/draft?x=1"],
+      ],
+    );
+    // A refusal for any other reason is not sent again: the token was already the current one.
+    calls.length = 0;
+    const stillRefused = stubFetch(() => {
+      if (calls.at(-1)?.url === "/api/me") return Response.json({ csrfToken: "token-new" });
+      return refused();
+    }, calls);
+    await assert.rejects(post("/announcements", {}, { fetch: stillRefused }), ApiError);
+    assert.equal(calls.length, 2);
+  } finally {
+    setCsrfToken(null);
+  }
+});
+
 Deno.test("401 responses reach the sign-in handler unless the call opts out", async () => {
   const calls: Call[] = [];
   const unauthorized = stubFetch(
@@ -541,6 +587,22 @@ Deno.test("clearing kept work never fails when storage is blocked or missing", (
   };
   clearKeptChanges("u1", blocked);
   clearKeptChanges(null, null);
+});
+
+Deno.test("sign-out posts the ID token to Keycloak instead of putting it in an address", () => {
+  const form = endSessionForm({
+    endSessionUrl:
+      "https://idp.scottylabs.org/realms/scottylabs/protocol/openid-connect/logout?id_token_hint=eyJ.a.b&client_id=scottylabs-org#x",
+  });
+  assert.deepEqual(form, {
+    action: "https://idp.scottylabs.org/realms/scottylabs/protocol/openid-connect/logout",
+    fields: [
+      ["id_token_hint", "eyJ.a.b"],
+      ["client_id", "scottylabs-org"],
+    ],
+  });
+  assert.equal(endSessionForm({ endSessionUrl: "javascript:alert(1)" }), null);
+  assert.equal(endSessionForm({}), null);
 });
 
 Deno.test("sign-out follows Keycloak's end-session address only when it is a safe one", () => {

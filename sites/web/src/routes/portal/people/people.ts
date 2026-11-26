@@ -117,6 +117,13 @@ export function removedRole(name: string, assignment: RoleAssignment): string {
   return `Removed ${name} as ${rolePhrase(assignment.role, assignment.committee)}.`;
 }
 
+/** The toast after signing someone out everywhere, from how many sessions ended. */
+export function signedOutMessage(name: string, ended: number): string {
+  if (ended === 0) return `${name} was not signed in anywhere.`;
+  const sessions = ended === 1 ? "1 session" : `${ended} sessions`;
+  return `Signed ${name} out everywhere (${sessions}).`;
+}
+
 /** Project names by id, from GET /api/projects. */
 export type ProjectNames = ReadonlyMap<string, string>;
 

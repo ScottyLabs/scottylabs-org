@@ -26,6 +26,7 @@
     onchange,
     onedit,
     onremove,
+    onsignout,
   }: {
     rows: readonly AssignmentRow[];
     view: "admin" | "director";
@@ -38,6 +39,8 @@
     onchange: (row: AssignmentRow, role: Role) => void;
     onedit: (row: AssignmentRow) => void;
     onremove: (row: AssignmentRow) => void;
+    /** Admins only: end every session of the person. */
+    onsignout?: (row: AssignmentRow) => void;
   } = $props();
 
   const ROLES: readonly Role[] = ["lead", "director", "admin"];
@@ -74,6 +77,9 @@
       }
     }
     if (role === "lead") items.push({ label: "Edit projects and ticker", onSelect: () => onedit(row) });
+    if (view === "admin" && onsignout !== undefined) {
+      items.push({ label: "Sign out everywhere", onSelect: () => onsignout(row) });
+    }
     items.push("separator", {
       label: view === "director" && committee !== null ? `Remove from ${committeeName(committee)}` : "Remove role",
       danger: true,

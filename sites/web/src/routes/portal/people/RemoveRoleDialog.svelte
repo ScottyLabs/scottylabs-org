@@ -39,7 +39,9 @@
     const committee = row.assignment.committee === null ? "" : committeeName(row.assignment.committee);
     switch (row.assignment.role) {
       case "admin":
-        return "They lose admin access the next time they open a page. There must always be at least one admin.";
+        return row.assignment.source === "keycloak_group"
+          ? "They lose admin access the next time they open a page, and the Keycloak admin group does not make them an admin again until they leave it or you add the role back here. To take them out of the group, change governance. If their account may be in someone else's hands, also sign them out everywhere. There must always be at least one admin."
+          : "They lose admin access the next time they open a page, and stay out of the role until you add it back here, even while they are in the Keycloak admin group. There must always be at least one admin.";
       case "director":
         return `They can no longer edit the ${committee} page and projects or approve what its leads publish.`;
       case "lead":

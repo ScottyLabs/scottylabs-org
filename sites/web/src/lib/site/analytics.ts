@@ -3,6 +3,7 @@
 // - PostHog loads only when the page load starts on a public page, both public values are set, and the visitor has not asked not to be tracked (Do Not Track or Global Privacy Control). A page load that starts in the portal never loads it, even after the person moves on to public pages.
 // - Once it is loaded, moving into the portal is a full page load (see `opensInFull`, used by the root layout), so the portal never runs with PostHog in the page.
 // - As a second layer, every event is checked before it leaves (`scrubEvent`): one sent from a portal address is dropped, and portal addresses in the others, such as the referrer, are cut to /portal/.
+// - Portal addresses count however they are spelled: `/%70ortal/` is the portal too (`isPortalPath`).
 //
 // Plain logic, so it can be tested without a browser. It imports nothing from posthog-js, so the tests need no npm packages; the root layout passes these options to posthog.init, which checks them against the library's types.
 
@@ -18,9 +19,33 @@ export interface AnalyticsEvent {
 /** What portal addresses in event properties are cut to. */
 export const PORTAL_ROOT = "/portal/";
 
-/** True for /portal and every address under it. */
-export function isPortalPath(pathname: string): boolean {
+function isPortalPrefix(pathname: string): boolean {
   return pathname === "/portal" || pathname.startsWith("/portal/");
+}
+
+/**
+ * True for /portal and every address under it, however it is spelled: the router decodes a path
+ * before it picks the page (`/%70ortal/` opens the portal), and the service decodes `%2F` too. A
+ * path that does not decode counts as the portal, so a malformed address never loads analytics.
+ */
+export function isPortalPath(pathname: string): boolean {
+  if (isPortalPrefix(pathname)) return true;
+  if (!pathname.includes("%")) return false;
+  try {
+    // As SvelteKit's router decodes it, which leaves an encoded "%" alone.
+    const routed = pathname
+      .split("%25")
+      .map((part) => decodeURI(part))
+      .join("%25");
+    return isPortalPrefix(routed) || isPortalPrefix(decodeURIComponent(pathname));
+  } catch {
+    return true;
+  }
+}
+
+/** True for the route ids of portal pages, such as "/portal/projects/[id]". */
+export function isPortalRoute(routeId: string | null | undefined): boolean {
+  return routeId !== null && routeId !== undefined && isPortalPrefix(routeId);
 }
 
 /** The browser's "do not track me" signals, as `navigator` has them. */
@@ -150,12 +175,19 @@ export function scrubEvent<Event extends AnalyticsEvent>(
 /**
  * Whether a navigation from `from` to `to` has to load the page in full instead of in the router:
  * with analytics loaded, every move into the portal does, so the portal never runs with PostHog.
+ * `toRoute` is the id of the route the router matched, when it knows it, so a spelling of the
+ * address this module does not recognize still counts by the page it opens.
  */
-export function opensInFull(analyticsLoaded: boolean, from: URL, to: URL): boolean {
+export function opensInFull(
+  analyticsLoaded: boolean,
+  from: URL,
+  to: URL,
+  toRoute: string | null = null,
+): boolean {
   return (
     analyticsLoaded &&
     to.origin === from.origin &&
-    isPortalPath(to.pathname) &&
+    (isPortalPath(to.pathname) || isPortalRoute(toRoute)) &&
     !isPortalPath(from.pathname)
   );
 }

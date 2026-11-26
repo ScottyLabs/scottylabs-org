@@ -50,7 +50,8 @@
   beforeNavigate((navigation) => {
     const to = navigation.to?.url;
     if (to === undefined || navigation.willUnload || navigation.type === "popstate") return;
-    if (!opensInFull(analyticsLoaded, new URL(location.href), to)) return;
+    const route = navigation.to?.route.id ?? null;
+    if (!opensInFull(analyticsLoaded, new URL(location.href), to, route)) return;
     navigation.cancel();
     location.assign(to.href);
   });

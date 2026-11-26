@@ -38,7 +38,25 @@ Deno.test("portal paths are /portal and everything under it", () => {
   for (const path of ["/portal", "/portal/", "/portal/people/", "/portal/sign-in/"]) {
     assert.ok(isPortalPath(path), path);
   }
-  for (const path of ["/", "/portals/", "/projects/portal/", "/portalx", ""]) {
+  // However the address is spelled: the router and the service decode it before they pick a page.
+  for (const path of [
+    "/%70ortal/",
+    "/%70ortal",
+    "/%70%6F%72%74%61%6C/projects/01a21570/",
+    "/portal%2Fprojects%2F01a21570%2F",
+    "/portal%2fpeople",
+    "/%E0%A4%A",
+  ]) {
+    assert.ok(isPortalPath(path), path);
+  }
+  for (const path of [
+    "/",
+    "/portals/",
+    "/projects/portal/",
+    "/portalx",
+    "",
+    "/projects/%70ortal/",
+  ]) {
     assert.ok(!isPortalPath(path), path);
   }
 });
@@ -116,6 +134,12 @@ Deno.test("events from portal addresses never leave", () => {
     ),
     null,
   );
+  // Spelled with percent-encoding.
+  assert.equal(
+    scrubEvent(event({ $current_url: "http://localhost:8124/%70ortal/projects/01a2/" }), "/"),
+    null,
+  );
+  assert.equal(scrubEvent(event({ $current_url: "https://scottylabs.org/" }), "/%70ortal/"), null);
   // The browser already moved into the portal, whatever the event says.
   assert.equal(
     scrubEvent(event({ $current_url: "https://scottylabs.org/" }), "/portal/ticker/"),
@@ -181,4 +205,12 @@ Deno.test("with analytics loaded, moving into the portal loads the page in full"
   assert.ok(!opensInFull(true, portal, home));
   assert.ok(!opensInFull(true, home, new URL("https://scottylabs.org/committees/")));
   assert.ok(!opensInFull(true, home, new URL("https://other.example/portal/")));
+  // Spelled with percent-encoding, or known only by the route the router matched.
+  assert.ok(opensInFull(true, home, new URL("https://scottylabs.org/%70ortal/projects/01a2/")));
+  assert.ok(
+    opensInFull(true, home, new URL("https://scottylabs.org/elsewhere/"), "/portal/projects/[id]"),
+  );
+  assert.ok(
+    !opensInFull(true, home, new URL("https://scottylabs.org/projects/"), "/(site)/projects"),
+  );
 });

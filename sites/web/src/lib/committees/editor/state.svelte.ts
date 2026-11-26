@@ -48,6 +48,11 @@ export class PageEditor {
   lock = $state.raw<EditLock | null>(null);
   /** Why the page is read only right now, or null while this person may edit. */
   readOnlyReason = $state<string | null>(null);
+  /**
+   * True when someone else took the page while this person had changes the service does not have:
+   * the page still shows them, so they can copy what they need, until it loads the saved draft.
+   */
+  showsUnsavedChanges = $state(false);
   #historyVersion = $state(0);
 
   #history = new History<CommitteePageDoc>();
@@ -321,6 +326,7 @@ export class PageEditor {
       if (latest.lock !== null && !latest.lock.mine) {
         this.lock = latest.lock;
         this.readOnlyReason = message;
+        this.showsUnsavedChanges = this.#revision !== this.#savedRevision;
       }
     } catch {
       // The message from the save already says what to do.
@@ -453,6 +459,7 @@ export class PageEditor {
     this.lock = response.lock;
     this.#revision = 0;
     this.#savedRevision = 0;
+    this.showsUnsavedChanges = false;
     this.#history.clear();
     this.#historyVersion += 1;
     if (this.selectedId !== null && !this.doc.blocks.some((b) => b.id === this.selectedId)) {

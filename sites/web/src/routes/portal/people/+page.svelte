@@ -26,6 +26,7 @@
   import RemoveRoleDialog from "./RemoveRoleDialog.svelte";
   import RoleDialog, { type RoleDialogMode } from "./RoleDialog.svelte";
   import RolesPanel from "./RolesPanel.svelte";
+  import SignOutDialog from "./SignOutDialog.svelte";
   import SyncDialog from "./SyncDialog.svelte";
   import {
     type AssignmentRow,
@@ -128,6 +129,8 @@
   let removeOpen = $state(false);
   let removing = $state.raw<AssignmentRow | null>(null);
   let syncOpen = $state(false);
+  let signOutOpen = $state(false);
+  let signingOut = $state.raw<AssignmentRow | null>(null);
 
   function openRole(mode: RoleDialogMode) {
     roleMode = mode;
@@ -166,6 +169,12 @@
     if (table?.focusRoleNear(Math.max(index, 0)) !== true) {
       document.querySelector<HTMLElement>("#portal-main h1")?.focus();
     }
+  }
+
+  function signedOut(row: AssignmentRow, message: string) {
+    toasts.success(message);
+    // Signing yourself out everywhere ends this tab's session too.
+    if (row.isMe) session.markSignedOut("expired");
   }
 
   function dismissMessages() {
@@ -276,6 +285,12 @@
             removing = row;
             removeOpen = true;
           }}
+          onsignout={isAdmin
+            ? (row: AssignmentRow) => {
+                signingOut = row;
+                signOutOpen = true;
+              }
+            : undefined}
         />
       {/if}
     </div>
@@ -297,7 +312,10 @@
     actionLabel={isAdmin ? "Remove role" : "Remove lead"}
     onremoved={(row, message) => void removed(row, message)}
   />
-  {#if isAdmin}<SyncDialog bind:open={syncOpen} onsynced={synced} />{/if}
+  {#if isAdmin}
+    <SyncDialog bind:open={syncOpen} onsynced={synced} />
+    <SignOutDialog bind:open={signOutOpen} row={signingOut} onsignedout={signedOut} />
+  {/if}
 {/if}
 
 <style>

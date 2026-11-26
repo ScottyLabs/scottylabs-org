@@ -293,7 +293,13 @@
   {/if}
   {#if editor.readOnlyReason !== null && editor.canEdit}
     <Callout tone="warning" title="Someone else is editing this page" role="status">
-      {editor.readOnlyReason} You are looking at the latest saved draft.
+      {editor.readOnlyReason}
+      {#if editor.showsUnsavedChanges}
+        Your last changes were not saved. The page still shows them, so copy anything you want to
+        keep before you check again, which loads the latest saved draft.
+      {:else}
+        You are looking at the latest saved draft.
+      {/if}
       {#snippet actions()}
         <Button variant="outline" size="sm" loading={checking} onclick={checkAgain}>Check again</Button>
         {#if canTakeOver}
