@@ -22,8 +22,16 @@ pub mod subject {
     pub const MEDIA: &str = "media";
 }
 
-/// Uploads and the cleanup's deletions are logged with their details for review, but Recent activity leaves them out: an editor adding a gallery would fill it. Admins review uploads with `GET /api/media`.
-const HIDDEN_FROM_ACTIVITY: &[&str] = &["media.upload", "media.expire"];
+/// Logged for review, but left out of Recent activity and the overview. Uploads and the cleanup's deletions: an editor adding a gallery would fill it (admins review uploads with `GET /api/media`). Sign-in events with no actor: anyone with an account, or a preview key, can repeat them as often as the rate limits allow, which would push every other entry out of the newest 50. Admin actions on sign-in (`auth.sessions_end`, `auth.link_reset`) and first links (`auth.link`) still show.
+pub const HIDDEN_FROM_ACTIVITY: &[&str] = &[
+    "media.upload",
+    "media.expire",
+    "auth.sign_in",
+    "auth.sign_out",
+    "auth.sign_in_failed",
+    "auth.identity_refused",
+    "auth.session_end",
+];
 
 /// Actions about an announcement while it waits for approval. Their summaries quote what was sent, which only its author and those who manage its source may read, even after a later version goes live.
 const WAITING_ANNOUNCEMENT_ACTIONS: &[&str] = &[

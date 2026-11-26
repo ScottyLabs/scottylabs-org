@@ -23,6 +23,8 @@ pub struct Viewer {
     pub email: Option<String>,
     pub session_id: Uuid,
     pub csrf_token: String,
+    /// What a release before 0701 sent as this session's CSRF token, still accepted for tabs it loaded. `None` for sessions made since.
+    pub legacy_csrf_token: Option<String>,
     pub auth_mode: AuthMode,
     pub roles: Vec<Assignment>,
     /// Projects this person may edit as a lead.

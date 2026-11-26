@@ -1,6 +1,6 @@
 //! CSRF token and Origin checks for writes under /api.
 //!
-//! Every POST, PUT, PATCH and DELETE must come from this site's origin when the browser says where it came from, and must carry the session's CSRF token in `X-CSRF-Token` whenever a valid session cookie is sent. The token is derived from the session cookie (`session::csrf_token_for`), so the database holds nothing that passes this check. Dev login and its persona list are exempt from the token because they run before a session exists; they still get the Origin check, and their JSON bodies cannot be sent by a cross-site form.
+//! Every POST, PUT, PATCH and DELETE must come from this site's origin when the browser says where it came from, and must carry the session's CSRF token in `X-CSRF-Token` whenever a valid session cookie is sent. The token is derived from the session cookie (`session::csrf_token_for`), so the database holds nothing that passes this check, except for sessions from releases that stored the token: their stored token (`sessions.legacy_csrf_token`) still passes, so tabs opened before a deploy keep saving, until those sessions end within seven days. Dev login and its persona list are exempt from the token because they run before a session exists; they still get the Origin check, and their JSON bodies cannot be sent by a cross-site form.
 
 use axum::extract::{OriginalUri, Request, State};
 use axum::http::header::ORIGIN;
@@ -55,7 +55,11 @@ async fn check(state: &AppState, request: Request) -> Result<Request, AppError> 
             .get(CSRF_HEADER)
             .and_then(|value| value.to_str().ok())
             .unwrap_or_default();
-        if !secrets_match(sent, &viewer.csrf_token) {
+        let legacy = viewer
+            .legacy_csrf_token
+            .as_deref()
+            .is_some_and(|legacy| secrets_match(sent, legacy));
+        if !secrets_match(sent, &viewer.csrf_token) && !legacy {
             tracing::warn!(session = %viewer.session_id, "rejected a write with a missing or wrong CSRF token");
             return Err(AppError::Forbidden(
                 "Your session check failed. Reload the page and try again.".into(),
@@ -135,6 +139,43 @@ mod tests {
         assert_eq!(ok.status, StatusCode::NO_CONTENT);
         let after = Req::get("/api/me").user(&admin).send(&app).await;
         assert_eq!(after.status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn sessions_from_before_the_derived_token_keep_their_stored_one(db: PgPool) {
+        let app = testing::app(db.clone()).await;
+        let old = testing::user(&db, "oldtab", &[(Role::Admin, None)]).await;
+        let new = testing::user(&db, "newtab", &[(Role::Admin, None)]).await;
+        // What 0902 copies for sessions a release before 0701 made, whose /api/me sent the stored token.
+        sqlx::query(
+            "UPDATE sessions SET legacy_csrf_token = 'stored-token-from-an-old-release' WHERE user_id = $1",
+        )
+        .bind(old.id)
+        .execute(&db)
+        .await
+        .unwrap();
+        let res = Req::post("/api/auth/logout")
+            .cookie(&old)
+            .header(CSRF_HEADER, "stored-token-from-an-old-release")
+            .send(&app)
+            .await;
+        assert_eq!(res.status, StatusCode::NO_CONTENT);
+
+        // A session made since stores an unused value that never passes.
+        let stored: String =
+            sqlx::query_scalar("SELECT csrf_token FROM sessions WHERE user_id = $1")
+                .bind(new.id)
+                .fetch_one(&db)
+                .await
+                .unwrap();
+        for sent in [stored.as_str(), "stored-token-from-an-old-release"] {
+            let res = Req::post("/api/auth/logout")
+                .cookie(&new)
+                .header(CSRF_HEADER, sent)
+                .send(&app)
+                .await;
+            assert_eq!(res.status, StatusCode::FORBIDDEN);
+        }
     }
 
     #[sqlx::test(migrations = "./migrations")]

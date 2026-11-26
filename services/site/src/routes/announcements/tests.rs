@@ -171,6 +171,7 @@ fn viewer(user: &TestUser, role: Role, committee: Option<Committee>) -> Viewer {
         email: None,
         session_id: Uuid::now_v7(),
         csrf_token: user.csrf.clone(),
+        legacy_csrf_token: None,
         auth_mode: AuthMode::Dev,
         roles: vec![Assignment {
             role,

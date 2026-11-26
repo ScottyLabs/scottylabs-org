@@ -394,6 +394,7 @@ pub(crate) mod tests {
             email: None,
             session_id: Uuid::now_v7(),
             csrf_token: "csrf".into(),
+            legacy_csrf_token: None,
             auth_mode: AuthMode::Dev,
             roles: roles
                 .iter()

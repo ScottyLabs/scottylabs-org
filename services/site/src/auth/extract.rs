@@ -39,6 +39,10 @@ struct SessionUser {
     auth_mode: AuthMode,
     last_seen_at: DateTime<Utc>,
     dev_key_fingerprint: Option<Vec<u8>>,
+    /// The person has signed in here with Keycloak at some point (`users.keycloak_linked_at`), so on previews dev sign-in may not act as them.
+    keycloak_linked: bool,
+    /// The CSRF token a release before 0701 stored and gave the browser, accepted while such a session lasts.
+    legacy_csrf_token: Option<String>,
     /// Keycloak confirmed the session recently enough for an admin role from the Keycloak group to count.
     group_admin_trusted: bool,
     /// The session is due for a check with Keycloak.
@@ -54,6 +58,8 @@ async fn load_viewer(state: &AppState, headers: &HeaderMap) -> AppResult<Option<
     };
     let found = sqlx::query_as::<_, SessionUser>(
         "SELECT s.id AS session_id, s.user_id, s.auth_mode, s.last_seen_at, s.dev_key_fingerprint,
+                (u.keycloak_sub IS NOT NULL OR u.keycloak_linked_at IS NOT NULL) AS keycloak_linked,
+                s.legacy_csrf_token,
                 (s.auth_mode <> 'oidc'
                  OR coalesce(s.validated_at, s.created_at) > now() - make_interval(hours => $3))
                     AS group_admin_trusted,
@@ -79,6 +85,9 @@ async fn load_viewer(state: &AppState, headers: &HeaderMap) -> AppResult<Option<
     if found.auth_mode == AuthMode::Dev
         && !dev_session_allowed(&state.config.dev_login, state.config.seed_demo, &found)
     {
+        // Ended, not just refused: switching dev sign-in back on or restoring the old key must not bring it back.
+        session::delete_by_token(&state.db, &token).await?;
+        tracing::info!(session = %found.session_id, "ended a dev session that dev sign-in no longer allows");
         return Ok(None);
     }
     if found.check_due && state.oidc.is_some() {
@@ -102,13 +111,14 @@ async fn load_viewer(state: &AppState, headers: &HeaderMap) -> AppResult<Option<
         email: found.email,
         session_id: found.session_id,
         csrf_token: session::csrf_token_for(&token),
+        legacy_csrf_token: found.legacy_csrf_token,
         auth_mode: found.auth_mode,
         roles,
         lead_projects,
     }))
 }
 
-/// A dev session works only while dev sign-in is on, and on previews only with the key it was made with, so turning dev sign-in off or changing the key ends it.
+/// A dev session works only while dev sign-in is on, and on previews only with the key it was made with and only while the person has never signed in here with Keycloak, so turning dev sign-in off, changing the key or the person signing in for real ends it.
 fn dev_session_allowed(dev_login: &DevLogin, seed_demo: bool, session: &SessionUser) -> bool {
     if !seed_demo {
         return false;
@@ -116,12 +126,15 @@ fn dev_session_allowed(dev_login: &DevLogin, seed_demo: bool, session: &SessionU
     match dev_login {
         DevLogin::Off => false,
         DevLogin::Open => true,
-        DevLogin::Keyed(key) => session
-            .dev_key_fingerprint
-            .as_deref()
-            .is_some_and(|stored| {
-                session::secrets_match_bytes(stored, &session::dev_key_fingerprint(key))
-            }),
+        DevLogin::Keyed(key) => {
+            !session.keycloak_linked
+                && session
+                    .dev_key_fingerprint
+                    .as_deref()
+                    .is_some_and(|stored| {
+                        session::secrets_match_bytes(stored, &session::dev_key_fingerprint(key))
+                    })
+        }
     }
 }
 

@@ -1,6 +1,6 @@
 //! Signing in and out: Keycloak (through the Ricochet relay on previews and staging, straight back in production), dev sign-in as a seeded persona, and logout. Also two admin actions for the People page: ending all of a person's sessions, and resetting the link between their Andrew ID and a Keycloak account.
 //!
-//! Sign-ins, refused and failed sign-ins, sign-outs and ended sessions are written to the audit log with no actor and the person as the subject, so only admins see them. Failures are recorded only once a stored attempt was used up, which `/api/auth/login`'s rate limit bounds; callbacks that match no attempt are only logged.
+//! Sign-ins, sign-outs, ended sessions and refused identities are written to the audit log with no actor and the person as the subject. Recent activity leaves these out (`audit::HIDDEN_FROM_ACTIVITY`), so nobody can bury other entries by signing in over and over. Failures that need no proof of who someone is, such as a cancelled sign-in, a refused code or a wrong preview key, are only logged: anyone can cause them, and the log only grows.
 
 use axum::extract::{Path, RawQuery, State};
 use axum::http::header::LOCATION;
@@ -203,12 +203,10 @@ async fn callback(
                 );
                 response
             }
-            Err(failure) => {
-                failure.error.log();
-                if failure.audited {
-                    record_failure(&state, &failure.error).await;
-                }
-                sign_in_error(failure.error.code())
+            Err(error) => {
+                error.log();
+                record_refusal(&state, &error).await;
+                sign_in_error(error.code())
             }
         },
     };
@@ -224,62 +222,25 @@ async fn callback(
     response
 }
 
-/// A callback that did not sign anyone in. `audited` once it used up a stored attempt.
-struct Failure {
-    error: SignInError,
-    audited: bool,
-}
-
-impl Failure {
-    /// Before any stored attempt was found: logged, not audited.
-    fn quiet(error: SignInError) -> Self {
-        Self {
-            error,
-            audited: false,
-        }
-    }
-}
-
-impl From<SignInError> for Failure {
-    fn from(error: SignInError) -> Self {
-        Self {
-            error,
-            audited: true,
-        }
-    }
-}
-
-/// Writes the audit entry for a failed or refused sign-in, with its reason and never a code or token.
-async fn record_failure(state: &AppState, error: &SignInError) {
-    let (action, summary) = match error {
+/// Writes the audit entry for a refused identity: Keycloak vouched for the account, but it could not be matched to the Andrew ID it claims. Other failures are only logged (see the module comment). Never a code or token.
+async fn record_refusal(state: &AppState, error: &SignInError) {
+    let summary = match error {
         SignInError::NotAndrewId {
             reason,
             claimed: Some(andrew_id),
-        } => (
-            "auth.identity_refused",
-            format!(
-                "Refused a ScottyLabs sign-in as {andrew_id}: the account could not be matched to that CMU Andrew ID ({reason})"
-            ),
+        } => format!(
+            "Refused a ScottyLabs sign-in as {andrew_id}: the account could not be matched to that CMU Andrew ID ({reason})"
         ),
         SignInError::NotAndrewId {
             reason,
             claimed: None,
-        } => (
-            "auth.identity_refused",
-            format!("Refused a ScottyLabs sign-in: the account named no CMU Andrew ID ({reason})"),
+        } => format!("Refused a ScottyLabs sign-in: the account named no CMU Andrew ID ({reason})"),
+        SignInError::LinkedElsewhere { andrew_id } => format!(
+            "Refused a ScottyLabs sign-in as {andrew_id}: that Andrew ID is linked to a different ScottyLabs account"
         ),
-        SignInError::LinkedElsewhere { andrew_id } => (
-            "auth.identity_refused",
-            format!(
-                "Refused a ScottyLabs sign-in as {andrew_id}: that Andrew ID is linked to a different ScottyLabs account"
-            ),
-        ),
-        other => (
-            "auth.sign_in_failed",
-            format!("A ScottyLabs sign-in failed ({})", other.reason()),
-        ),
+        _ => return,
     };
-    record_auth_event(state, action, None, None, summary).await;
+    record_auth_event(state, "auth.identity_refused", None, None, summary).await;
 }
 
 /// Audits a sign-in event outside any other transaction. A failure to write it is logged, never shown.
@@ -333,15 +294,12 @@ async fn take_attempt(state: &AppState, csrf: &str) -> AppResult<Option<Attempt>
     Ok(attempt)
 }
 
-/// Uses up the attempt behind a refused callback, so its `state` cannot be tried again. True when there was one.
-async fn discard_attempt(state: &AppState, relay: Option<&RelayState>) -> Result<bool, Failure> {
-    match relay {
-        Some(relay) => Ok(take_attempt(state, &relay.csrf)
-            .await
-            .map_err(|error| Failure::quiet(internal(error)))?
-            .is_some()),
-        None => Ok(false),
+/// Uses up the attempt behind a refused callback, so its `state` cannot be tried again.
+async fn discard_attempt(state: &AppState, relay: Option<&RelayState>) -> Result<(), SignInError> {
+    if let Some(relay) = relay {
+        take_attempt(state, &relay.csrf).await.map_err(internal)?;
     }
+    Ok(())
 }
 
 /// The callback's checks, in order. Returns where to send the person and their new session.
@@ -350,7 +308,7 @@ async fn finish_sign_in(
     oidc: &OidcProvider,
     query: Option<&str>,
     headers: &HeaderMap,
-) -> Result<(String, NewSession), Failure> {
+) -> Result<(String, NewSession), SignInError> {
     let relay = query_param(query, "state")
         .as_deref()
         .and_then(decode_state);
@@ -359,52 +317,44 @@ async fn finish_sign_in(
     if let Some(iss) = query_param(query, "iss")
         && iss != oidc.issuer()
     {
-        let audited = discard_attempt(state, relay.as_ref()).await?;
-        return Err(Failure {
-            error: SignInError::Failed(anyhow::anyhow!(
-                "the callback names the issuer {:?}, not {:?}",
-                clip(&iss),
-                oidc.issuer()
-            )),
-            audited,
-        });
+        discard_attempt(state, relay.as_ref()).await?;
+        return Err(SignInError::Failed(anyhow::anyhow!(
+            "the callback names the issuer {:?}, not {:?}",
+            clip(&iss),
+            oidc.issuer()
+        )));
     }
 
     if let Some(error) = query_param(query, "error") {
-        let audited = discard_attempt(state, relay.as_ref()).await?;
-        return Err(Failure {
-            error: SignInError::provider(
-                &error,
-                query_param(query, "error_description").as_deref(),
-            ),
-            audited,
-        });
+        discard_attempt(state, relay.as_ref()).await?;
+        return Err(SignInError::provider(
+            &error,
+            query_param(query, "error_description").as_deref(),
+        ));
     }
 
-    let relay = relay.ok_or_else(|| Failure::quiet(failed("the callback has no valid state")))?;
+    let relay = relay.ok_or_else(|| failed("the callback has no valid state"))?;
     match session::read_cookie(headers, attempt_cookie_name(&state.config)) {
         None => {
-            return Err(Failure::quiet(SignInError::Expired(
+            return Err(SignInError::Expired(
                 "the browser came back without the sign-in cookie",
-            )));
+            ));
         }
         Some(cookie) if !secrets_match(&cookie, &relay.csrf) => {
-            return Err(Failure::quiet(failed(
-                "the state does not belong to this browser",
-            )));
+            return Err(failed("the state does not belong to this browser"));
         }
         Some(_) => {}
     }
     let attempt = take_attempt(state, &relay.csrf)
         .await
-        .map_err(|error| Failure::quiet(internal(error)))?
-        .ok_or_else(|| {
-            Failure::quiet(SignInError::Expired(
-                "the sign-in attempt is unknown or was already used",
-            ))
-        })?;
+        .map_err(internal)?
+        .ok_or(SignInError::Expired(
+            "the sign-in attempt is unknown or was already used",
+        ))?;
     if !attempt.fresh {
-        return Err(SignInError::Expired("the sign-in attempt is older than ten minutes").into());
+        return Err(SignInError::Expired(
+            "the sign-in attempt is older than ten minutes",
+        ));
     }
     let code = query_param(query, "code").ok_or_else(|| failed("the callback has no code"))?;
 
@@ -539,7 +489,8 @@ pub async fn upsert_user(
         }),
         Some((id, None)) => {
             sqlx::query(
-                "UPDATE users SET keycloak_sub = $2, name = coalesce($3, name), email = coalesce($4, email)
+                "UPDATE users SET keycloak_sub = $2, name = coalesce($3, name), email = coalesce($4, email),
+                     keycloak_linked_at = coalesce(keycloak_linked_at, now())
                  WHERE id = $1",
             )
             .bind(id)
@@ -572,7 +523,8 @@ pub async fn upsert_user(
         None => {
             let id = Uuid::now_v7();
             sqlx::query(
-                "INSERT INTO users (id, keycloak_sub, andrew_id, name, email) VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO users (id, keycloak_sub, andrew_id, name, email, keycloak_linked_at)
+                 VALUES ($1, $2, $3, $4, $5, now())",
             )
             .bind(id)
             .bind(&identity.subject)
@@ -640,14 +592,8 @@ async fn dev_login(
 ) -> AppResult<Response> {
     if let Err(refusal) = check_dev_login(&state.config, input.key.as_deref()) {
         if matches!(refusal, DevRefusal::WrongKey) {
-            record_auth_event(
-                &state,
-                "auth.sign_in_failed",
-                None,
-                None,
-                "A dev sign-in was refused (wrong_key)".into(),
-            )
-            .await;
+            // Logged, not audited: anyone can send a wrong key.
+            tracing::warn!("refused a dev sign-in with a wrong preview key");
         }
         return Err(refusal.into());
     }
@@ -655,13 +601,14 @@ async fn dev_login(
     let andrew_id = normalize_andrew_id(&input.andrew_id).ok_or_else(not_a_persona)?;
     persona(&andrew_id).ok_or_else(not_a_persona)?;
     let target = sqlx::query_as::<_, DevTarget>(
-        "SELECT id, name, keycloak_sub IS NOT NULL AS linked FROM users WHERE andrew_id = $1",
+        "SELECT id, name, (keycloak_sub IS NOT NULL OR keycloak_linked_at IS NOT NULL) AS linked
+         FROM users WHERE andrew_id = $1",
     )
     .bind(&andrew_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(not_a_persona)?;
-    // Away from localhost, never act as someone who signed in here with their real account: on previews the key is shared, and their actions would be recorded under their name.
+    // Away from localhost, never act as someone who signed in here with their real account, even after an admin reset that link: on previews the key is shared, and their actions would be recorded under their name.
     let keyed = matches!(state.config.dev_login, DevLogin::Keyed(_));
     if keyed && target.linked {
         record_auth_event(
@@ -896,7 +843,11 @@ async fn reset_keycloak_link(
     let mut tx = state.db.begin().await?;
     let (user_id, person) = person_for_sign_in_change(&mut tx, &viewer, &id).await?;
     if person.linked {
-        sqlx::query("UPDATE users SET keycloak_sub = NULL WHERE id = $1")
+        // keycloak_linked_at stays, so dev sign-in on a preview cannot act as them afterwards.
+        sqlx::query(
+            "UPDATE users SET keycloak_sub = NULL, keycloak_linked_at = coalesce(keycloak_linked_at, now())
+             WHERE id = $1",
+        )
             .bind(user_id)
             .execute(&mut *tx)
             .await?;

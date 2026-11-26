@@ -13,7 +13,7 @@ use sqlx::{FromRow, PgConnection, PgExecutor};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-use crate::config::Config;
+use crate::config::{Config, DevLogin};
 use crate::error::AppResult;
 use crate::models::AuthMode;
 
@@ -234,6 +234,36 @@ pub async fn end_if_roleless<'e>(db: impl PgExecutor<'e>, user_id: Uuid) -> AppR
             user = %user_id,
             ended = done.rows_affected(),
             "ended the sessions of someone left with no role"
+        );
+    }
+    Ok(done.rows_affected())
+}
+
+/// Ends, at startup, every dev session this configuration does not allow: all of them when dev sign-in is off or nothing is seeded, and on previews those made with another key or acting as someone who has signed in here with Keycloak. `extract::load_viewer` refuses them anyway; deleting them means that turning dev sign-in back on, or going back to an earlier key, does not bring them back. Returns how many ended.
+pub async fn end_disallowed_dev_sessions<'e>(
+    db: impl PgExecutor<'e>,
+    config: &Config,
+) -> AppResult<u64> {
+    let fingerprint = match &config.dev_login {
+        DevLogin::Keyed(key) => Some(dev_key_fingerprint(key)),
+        DevLogin::Open | DevLogin::Off => None,
+    };
+    let done = sqlx::query(
+        "DELETE FROM sessions s USING users u
+         WHERE u.id = s.user_id AND s.auth_mode = 'dev'
+           AND (NOT $1
+                OR ($2::bytea IS NOT NULL
+                    AND (s.dev_key_fingerprint IS DISTINCT FROM $2
+                         OR u.keycloak_sub IS NOT NULL OR u.keycloak_linked_at IS NOT NULL)))",
+    )
+    .bind(config.dev_login_available())
+    .bind(fingerprint)
+    .execute(db)
+    .await?;
+    if done.rows_affected() > 0 {
+        tracing::info!(
+            ended = done.rows_affected(),
+            "ended dev sessions that dev sign-in no longer allows"
         );
     }
     Ok(done.rows_affected())

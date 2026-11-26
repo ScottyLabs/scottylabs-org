@@ -20,6 +20,7 @@ use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
 use crate::audit::{self, subject};
+use crate::auth::groups;
 use crate::auth::roles::{RoleAssignmentDto, assignments_for};
 use crate::auth::{PortalViewer, Viewer, normalize_andrew_id};
 use crate::error::{AppError, AppResult, Problems};
@@ -800,6 +801,9 @@ async fn add(
     if let (Role::Lead, Some(committee)) = (input.role, input.committee) {
         set_lead_projects(&mut tx, user_id, committee, &projects, viewer.user_id).await?;
     }
+    if input.role == Role::Admin {
+        groups::opt_back_in(&mut tx, user_id).await?;
+    }
     let verb = if input.role == Role::Lead {
         "Added"
     } else {
@@ -918,6 +922,10 @@ async fn update_assignment(
     let moved = role != current.role || committee != current.committee;
     if current.role == Role::Admin && role != Role::Admin {
         check_admin_removal(&mut tx, &viewer, current.user_id).await?;
+        // Without this, the Keycloak admin group would give the admin role back at their next session check.
+        groups::opt_out(&mut tx, current.user_id, viewer.user_id).await?;
+    } else if role == Role::Admin && current.role != Role::Admin {
+        groups::opt_back_in(&mut tx, current.user_id).await?;
     }
     if moved {
         let existing = roles_of(&mut tx, current.user_id).await?;
@@ -1036,6 +1044,8 @@ async fn remove_assignment(
     require_manage(&viewer, current.role, current.committee)?;
     if current.role == Role::Admin {
         check_admin_removal(&mut tx, &viewer, current.user_id).await?;
+        // Without this, the Keycloak admin group would give the role back at their next session check, from any session they or someone else still holds.
+        groups::opt_out(&mut tx, current.user_id, viewer.user_id).await?;
     }
     let projects_before = match (current.role, current.committee) {
         (Role::Lead, Some(c)) => Some(lead_project_ids(&mut tx, current.user_id, c).await?),

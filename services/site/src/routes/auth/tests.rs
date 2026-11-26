@@ -978,14 +978,65 @@ async fn keycloak_failures_return_to_sign_in_with_a_reason(db: PgPool) {
 
     // Nobody was signed in by any of that.
     assert_eq!(session_count(&db).await, 0);
-    // Failures that used up a stored attempt are audited, with a reason; the rest only logged.
+    // None of these proved who anyone is, and anyone can cause them, so they are only logged: the audit log only grows.
+    assert!(testing::audit_summaries(&db).await.is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn anonymous_failures_cannot_fill_recent_activity(db: PgPool) {
+    let (app, mock) = keycloak_app(&db, "kcflood", None).await;
+    let admin = testing::user(&db, "feedadmin", &[(Role::Admin, None)]).await;
+    let director = testing::user(
+        &db,
+        "feeddirector",
+        &[(Role::Director, Some(Committee::Events))],
+    )
+    .await;
+    let res = Req::patch(&format!(
+        "/api/people/assignments/{}",
+        sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM role_assignments WHERE user_id = $1")
+            .bind(director.id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+    ))
+    .user(&admin)
+    .json(json!({ "role": "director", "committee": "labrador" }))
+    .send(&app)
+    .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    // A script starting sign-ins and coming back with an error, without cookies.
+    for _ in 0..12 {
+        let started = start_login(&app, &mock, "/portal/").await;
+        let res = Req::get(&format!(
+            "/api/auth/callback?error=access_denied&state={}",
+            started.state
+        ))
+        .send(&app)
+        .await;
+        assert_eq!(
+            res.header("location"),
+            Some("/portal/sign-in/?error=cancelled")
+        );
+    }
+    // Real sign-ins are audited but stay out of Recent activity, so they cannot bury other entries either.
+    keycloak_sign_in(&app, &mock).await;
+    let summaries = testing::audit_summaries(&db).await;
+    assert_eq!(summaries.len(), 2, "{summaries:?}");
+    let activity = Req::get("/api/activity?limit=10")
+        .user(&admin)
+        .send(&app)
+        .await;
+    assert_eq!(activity.status, StatusCode::OK);
+    let shown: Vec<&str> = activity.json["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|entry| entry["summary"].as_str())
+        .collect();
     assert_eq!(
-        testing::audit_summaries(&db).await,
-        [
-            "A ScottyLabs sign-in failed (code_refused)",
-            "A ScottyLabs sign-in failed (cancelled)",
-            "A ScottyLabs sign-in failed (expired)"
-        ]
+        shown,
+        ["Changed Test feeddirector from director of Events to director of Labrador"]
     );
 }
 
@@ -1431,6 +1482,76 @@ async fn keycloak_sessions_are_confirmed_and_follow_the_admin_group(db: PgPool) 
     );
 }
 
+async fn opt_outs(db: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM admin_group_opt_outs")
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn group_admins_removed_on_the_people_page_stay_removed(db: PgPool) {
+    let other = testing::user(&db, "otheradmin", &[(Role::Admin, None)]).await;
+    let (app, mock, state) = keycloak_state(&db, "kcstolen", Some(vec![ADMIN_GROUP]), |_| {}).await;
+    let oidc = state.oidc.clone().unwrap();
+    // Say this session was copied, and the person also leads in Events, so removing the admin role does not sign them out.
+    let cookie = keycloak_sign_in(&app, &mock).await;
+    let person = as_user(&db, &cookie).await;
+    testing::grant(&db, person.id, Role::Lead, Some(Committee::Events)).await;
+    let session = session_id_of(&db, &cookie).await;
+    let admin_role = || async {
+        sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT id FROM role_assignments WHERE user_id = $1 AND role = 'admin'",
+        )
+        .bind(person.id)
+        .fetch_one(&db)
+        .await
+        .unwrap()
+    };
+    let res = Req::delete(&format!("/api/people/assignments/{}", admin_role().await))
+        .user(&other)
+        .send(&app)
+        .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT, "{}", res.text());
+    assert_eq!(is_admin(&app, &cookie).await, false);
+
+    // The session's next check with Keycloak, which still lists the group, does not give it back.
+    confirmed_ago(&db, &cookie, 16).await;
+    assert_eq!(
+        revalidate::check(&state, &oidc, session).await.unwrap(),
+        Outcome::Confirmed
+    );
+    assert_eq!(is_admin(&app, &cookie).await, false);
+    // Nor does a new sign-in.
+    let again = keycloak_sign_in(&app, &mock).await;
+    assert_eq!(is_admin(&app, &again).await, false);
+    assert_eq!(opt_outs(&db).await, 1);
+
+    // Once Keycloak shows they left the group, the opt-out is forgotten, so being added again later counts.
+    mock.lock().unwrap().groups = Some(vec!["/projects/scottylabs-org".into()]);
+    keycloak_sign_in(&app, &mock).await;
+    assert_eq!(opt_outs(&db).await, 0);
+    mock.lock().unwrap().groups = Some(vec![ADMIN_GROUP.into()]);
+    let back = keycloak_sign_in(&app, &mock).await;
+    assert_eq!(is_admin(&app, &back).await, true);
+
+    // Lowering the role to a director also keeps the group from giving it back; giving the admin role on the People page again clears that.
+    let res = Req::patch(&format!("/api/people/assignments/{}", admin_role().await))
+        .user(&other)
+        .json(json!({ "role": "director", "committee": "tech" }))
+        .send(&app)
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    assert_eq!(opt_outs(&db).await, 1);
+    let res = Req::post("/api/people")
+        .user(&other)
+        .json(json!({ "andrewId": "kcstolen", "role": "admin" }))
+        .send(&app)
+        .await;
+    assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+    assert_eq!(opt_outs(&db).await, 0);
+}
+
 #[sqlx::test(migrations = "./migrations")]
 async fn sessions_keycloak_refuses_end_at_once(db: PgPool) {
     let (app, mock, state) = keycloak_state(&db, "kcgone", Some(vec![ADMIN_GROUP]), |_| {}).await;
@@ -1573,10 +1694,8 @@ async fn a_keycloak_outage_during_the_code_exchange_says_unavailable(db: PgPool)
         res.header("location"),
         Some("/portal/sign-in/?error=unavailable")
     );
-    assert_eq!(
-        testing::audit_summaries(&db).await,
-        ["A ScottyLabs sign-in failed (keycloak_unavailable)"]
-    );
+    // Logged, not audited: an outage would otherwise write one entry per visitor.
+    assert!(testing::audit_summaries(&db).await.is_empty());
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -1856,16 +1975,69 @@ async fn preview_dev_sessions_end_when_the_key_changes_or_dev_sign_in_turns_off(
         .send(&off)
         .await;
     assert_eq!(me.status, StatusCode::UNAUTHORIZED);
-    // Back to the key it was made with.
+    // Back to the key it was made with: the session ended for good, it was not only refused.
     let me = Req::get("/api/me")
         .header("cookie", &cookie)
         .send(&app)
         .await;
-    assert_eq!(me.status, StatusCode::OK);
+    assert_eq!(me.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(session_count(&db).await, 0);
     assert_eq!(
         testing::audit_summaries(&db).await,
         ["Thomas Kanz signed in with dev sign-in"]
     );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn startup_ends_dev_sessions_the_configuration_no_longer_allows(db: PgPool) {
+    testing::seed_personas(&db).await;
+    let app = testing::app_with(db.clone(), preview_config(PREVIEW_KEY)).await;
+    for andrew_id in ["tkanz", "evanfost"] {
+        let res = dev_login_as(&app, andrew_id, Some(PREVIEW_KEY)).await;
+        assert_eq!(res.status, StatusCode::NO_CONTENT);
+    }
+    // A Keycloak session is never touched.
+    let person = testing::user(&db, "kcperson", &[(Role::Admin, None)]).await;
+    sqlx::query("DELETE FROM sessions WHERE user_id = $1")
+        .bind(person.id)
+        .execute(&db)
+        .await
+        .unwrap();
+    let mut conn = db.acquire().await.unwrap();
+    session::create(&mut conn, person.id, crate::models::AuthMode::Oidc)
+        .await
+        .unwrap();
+    drop(conn);
+    let ended = session::end_disallowed_dev_sessions(&db, &preview_config(PREVIEW_KEY))
+        .await
+        .unwrap();
+    assert_eq!(ended, 0);
+    // The real evanfost signed in with Keycloak since.
+    sqlx::query("UPDATE users SET keycloak_sub = 'sub-real-evanfost' WHERE andrew_id = 'evanfost'")
+        .execute(&db)
+        .await
+        .unwrap();
+    let ended = session::end_disallowed_dev_sessions(&db, &preview_config(PREVIEW_KEY))
+        .await
+        .unwrap();
+    assert_eq!(ended, 1);
+    // A new key ends the rest; other sessions stay.
+    let ended =
+        session::end_disallowed_dev_sessions(&db, &preview_config("rotated-key-0000000000"))
+            .await
+            .unwrap();
+    assert_eq!(ended, 1);
+    let res = dev_login_as(&app, "tkanz", Some(PREVIEW_KEY)).await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+    let mut off = preview_config(PREVIEW_KEY);
+    off.dev_login = DevLogin::Off;
+    assert_eq!(
+        session::end_disallowed_dev_sessions(&db, &off)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(session_count(&db).await, 1);
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -1885,13 +2057,10 @@ async fn preview_dev_sign_in_never_acts_as_a_linked_account(db: PgPool) {
             .unwrap()
             .starts_with("That person has signed in here with their ScottyLabs account")
     );
-    assert_eq!(
-        dev_login_as(&app, "evanfost", Some(PREVIEW_KEY))
-            .await
-            .status,
-        StatusCode::NO_CONTENT
-    );
-    // A wrong key is refused and audited.
+    let evan = dev_login_as(&app, "evanfost", Some(PREVIEW_KEY)).await;
+    assert_eq!(evan.status, StatusCode::NO_CONTENT);
+    let evan = secure_session_cookie(&evan);
+    // A wrong key is refused and only logged: anyone can send one.
     assert_eq!(
         dev_login_as(&app, "evanfost", Some("wrong-key-000000000000"))
             .await
@@ -1902,9 +2071,42 @@ async fn preview_dev_sign_in_never_acts_as_a_linked_account(db: PgPool) {
         testing::audit_summaries(&db).await,
         [
             "A dev sign-in as apallati was refused: that person signs in with ScottyLabs here (linked_account)",
-            "Evan Foster signed in with dev sign-in",
-            "A dev sign-in was refused (wrong_key)"
+            "Evan Foster signed in with dev sign-in"
         ]
+    );
+
+    // The real evanfost signs in with Keycloak: the dev session made before that ends at its next request.
+    sqlx::query(
+        "UPDATE users SET keycloak_sub = 'sub-real-evanfost', keycloak_linked_at = now() WHERE andrew_id = 'evanfost'",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let me = Req::get("/api/me").header("cookie", &evan).send(&app).await;
+    assert_eq!(me.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(session_count(&db).await, 0);
+
+    // The persona admin resets the real apallati's link: dev sign-in still cannot act as them.
+    let tk = dev_login_as(&app, "tkanz", Some(PREVIEW_KEY)).await;
+    let tk = secure_session_cookie(&tk);
+    let me = Req::get("/api/me").header("cookie", &tk).send(&app).await;
+    let csrf = me.json["csrfToken"].as_str().unwrap().to_owned();
+    let apallati: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM users WHERE andrew_id = 'apallati'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let res = Req::delete(&format!("/api/people/{apallati}/keycloak-link"))
+        .header("cookie", &tk)
+        .header("x-csrf-token", &csrf)
+        .send(&app)
+        .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT, "{}", res.text());
+    assert_eq!(
+        dev_login_as(&app, "apallati", Some(PREVIEW_KEY))
+            .await
+            .status,
+        StatusCode::UNPROCESSABLE_ENTITY
     );
     // On localhost a developer may still act as anyone seeded.
     let local = testing::app(db).await;

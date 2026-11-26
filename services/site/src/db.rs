@@ -83,7 +83,11 @@ pub async fn prepare(options: &PgConnectOptions, config: &Config) -> Result<(), 
         migrate(&db).await?;
         crate::seed::run(&db, config)
             .await
-            .context("seeding content")
+            .context("seeding content")?;
+        crate::auth::session::end_disallowed_dev_sessions(&db, config)
+            .await
+            .context("ending dev sessions dev sign-in no longer allows")?;
+        anyhow::Ok(())
     }
     .await;
     db.close().await;
