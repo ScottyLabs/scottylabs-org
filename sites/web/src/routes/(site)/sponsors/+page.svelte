@@ -8,7 +8,7 @@
   <h1 class="header">Sponsors</h1>
   <p class="description">
     Interested in becoming a sponsor? View our
-    <a href={sponsorPacketURL} target="_blank" rel="noreferrer">sponsorship packet</a>
+    <a href={sponsorPacketURL} target="_blank" rel="noopener noreferrer">sponsorship packet</a>
     or contact us at <a href="mailto:sponsorship@scottylabs.org">sponsorship@scottylabs.org</a>.
   </p>
   <SponsorSection />

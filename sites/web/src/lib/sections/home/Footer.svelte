@@ -60,7 +60,7 @@
         class="social-link"
         href={url}
         target="_blank"
-        rel="noreferrer"
+        rel="noopener noreferrer"
         aria-label={name}
         style:--bg-color={color}
       >
@@ -80,7 +80,7 @@
     <div class="footer__legal-docs">
       {#each legalDocs as { label, url }, i (url)}
         {#if i > 0}{" · "}{/if}
-        <a href={url} target="_blank" rel="noreferrer">{label}</a>
+        <a href={url} target="_blank" rel="noopener noreferrer">{label}</a>
       {/each}
     </div>
   </div>

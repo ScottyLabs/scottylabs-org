@@ -45,7 +45,7 @@
           <div class="location">
             <dt class="location__department">{department}</dt>
             <dd class="location__room">
-              <a href={mapUrl} target="_blank" rel="noreferrer">
+              <a href={mapUrl} target="_blank" rel="noopener noreferrer">
                 <MapPin size={14} />
                 {location}
               </a>

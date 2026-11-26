@@ -284,7 +284,7 @@
             <a href={projectPath(featuredProjects[panel.index].slug)}>
               About {featuredProjects[panel.index].name}
             </a>
-            <a href={featuredProjects[panel.index].link} target="_blank">
+            <a href={featuredProjects[panel.index].link} target="_blank" rel="noopener noreferrer">
               <img src={externalLinkIcon} alt="" />
               Visit
             </a>
