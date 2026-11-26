@@ -217,6 +217,16 @@ pub fn can_sync_governance(viewer: &Viewer) -> bool {
     is_admin(viewer)
 }
 
+/// Whether the viewer may give a role to someone who already holds `other_roles` (their roles besides the one being changed). Directors add only people with no role at all; anyone who is an admin or has a role elsewhere needs an admin, so a director cannot pull them into their committee and read their details.
+pub fn can_appoint_person_with(viewer: &Viewer, other_roles: &[Role]) -> bool {
+    is_admin(viewer) || other_roles.is_empty()
+}
+
+/// Email addresses and when someone was last seen. Directors see only what managing their leads needs: names, Andrew IDs, roles, and whether each has signed in since getting their role.
+pub fn sees_contact_details(viewer: &Viewer) -> bool {
+    is_admin(viewer)
+}
+
 /// Take over a committee page's edit lock from someone else, for an urgent fix. Audited.
 pub fn can_take_over_page(viewer: &Viewer) -> bool {
     is_admin(viewer)
@@ -552,6 +562,18 @@ pub(crate) mod tests {
         assert_eq!(both.committees, [Committee::Tech]);
         assert_eq!(both.limited_committees, [Committee::Events]);
         assert_eq!(both.projects, None);
+    }
+
+    #[test]
+    fn directors_appoint_only_people_without_roles() {
+        let admin = viewer(&[(Role::Admin, None, true)], vec![]);
+        let director = viewer(&[(Role::Director, Some(Committee::Events), true)], vec![]);
+        assert!(can_appoint_person_with(&director, &[]));
+        assert!(!can_appoint_person_with(&director, &[Role::Admin]));
+        assert!(!can_appoint_person_with(&director, &[Role::Lead]));
+        assert!(can_appoint_person_with(&admin, &[Role::Admin, Role::Lead]));
+        assert!(sees_contact_details(&admin));
+        assert!(!sees_contact_details(&director));
     }
 
     #[test]
