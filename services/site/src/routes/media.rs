@@ -68,6 +68,12 @@ fn processing_error(error: ProcessError) -> AppError {
         ProcessError::TooLarge => AppError::PayloadTooLarge(
             "That image has too many pixels. Resize it to at most 8,000 by 5,000 pixels and try again.".into(),
         ),
+        ProcessError::TooMuchData => AppError::PayloadTooLarge(
+            "That image holds too much data to process. Export it as a JPEG and try again.".into(),
+        ),
+        ProcessError::Busy => AppError::Unavailable(
+            "Many images are being processed right now. Try again in a few seconds.".into(),
+        ),
         ProcessError::Unreadable(cause) => {
             tracing::debug!(cause, "an upload could not be decoded");
             AppError::field(

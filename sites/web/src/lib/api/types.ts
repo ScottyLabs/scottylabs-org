@@ -48,6 +48,7 @@ export interface ApiErrorBody {
       | "unsupported_media_type"
       | "rate_limited"
       | "upstream_failed"
+      | "unavailable"
       | "auth_not_configured"
       | "internal";
     message: string;

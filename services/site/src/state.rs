@@ -3,24 +3,36 @@ use std::time::Duration;
 
 use anyhow::Context;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 
 use crate::auth::oidc::OidcProvider;
 use crate::config::Config;
+use crate::db::{Phase, Readiness};
+use crate::last_good::LastGood;
 use crate::media::MediaStore;
 use crate::ratelimit::RateLimiter;
+
+/// Searches of published projects that run at once. Each reads every published project's text, so a burst of them waits here instead of taking every worker.
+const CONCURRENT_SEARCHES: usize = 4;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,
+    /// Whether `db` has been migrated and seeded. Until then the API answers 503.
+    pub database: Arc<Readiness>,
     pub config: Arc<Config>,
     pub http: reqwest::Client,
     /// Present only when every OIDC variable is set.
     pub oidc: Option<Arc<OidcProvider>>,
     pub media: Arc<MediaStore>,
     pub limits: Arc<RateLimiter>,
+    /// The last good answer of each public endpoint, served when the database fails.
+    pub last_good: Arc<LastGood>,
+    pub search_slots: Arc<Semaphore>,
 }
 
 impl AppState {
+    /// State over a database that is already migrated and seeded, as in tests.
     pub async fn new(db: PgPool, config: Arc<Config>) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
@@ -39,11 +51,21 @@ impl AppState {
         )?);
         Ok(Self {
             db,
+            database: Readiness::new(Phase::Ready),
             config,
             http,
             oidc,
             media,
             limits: Arc::new(RateLimiter::new()),
+            last_good: Arc::new(LastGood::default()),
+            search_slots: Arc::new(Semaphore::new(CONCURRENT_SEARCHES)),
         })
+    }
+
+    /// State for a service whose database is prepared in the background: the API answers 503 until `database` is marked ready.
+    pub async fn starting(db: PgPool, config: Arc<Config>) -> anyhow::Result<Self> {
+        let state = Self::new(db, config).await?;
+        state.database.set(Phase::Starting);
+        Ok(state)
     }
 }

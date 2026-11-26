@@ -8,8 +8,11 @@ use url::Url;
 #[derive(Clone, Debug)]
 pub struct Config {
     pub database_url: String,
+    /// Connections in the request pool, from `DATABASE_POOL_SIZE`.
+    pub db_pool_size: u32,
     /// The public origin, for example `https://scottylabs.org`.
     pub app_url: Url,
+    /// Loopback unless `SITE_BIND_ADDR` names another address: kennel's Caddy and health probe reach the service on localhost.
     pub bind_addr: String,
     /// The SvelteKit build. Unset in local development, where Vite serves pages.
     pub static_dir: Option<PathBuf>,
@@ -79,11 +82,8 @@ impl Config {
             bail!("APP_URL must be http or https");
         }
 
-        let bind_addr = match (var("PORT"), var("SITE_BIND_ADDR")) {
-            (Some(port), _) => format!("0.0.0.0:{port}"),
-            (None, Some(addr)) => addr,
-            (None, None) => "127.0.0.1:8080".into(),
-        };
+        let bind_addr = bind_address(var("SITE_BIND_ADDR"), var("PORT"));
+        let db_pool_size = pool_size(var("DATABASE_POOL_SIZE").as_deref())?;
 
         let static_dir = var("STATIC_DIR").map(PathBuf::from);
         let oidc = oidc_settings(&var);
@@ -100,6 +100,7 @@ impl Config {
 
         Ok(Self {
             database_url,
+            db_pool_size,
             app_url,
             bind_addr,
             static_dir,
@@ -136,6 +137,29 @@ impl Config {
     /// `scheme://host[:port]` of `APP_URL`, for comparing with `Origin` headers.
     pub fn origin(&self) -> String {
         self.app_url.origin().ascii_serialization()
+    }
+}
+
+/// Where to listen. `SITE_BIND_ADDR` is an explicit choice and wins. Kennel sets only `PORT`, and its Caddy (dialing `localhost`) and health probe (dialing `127.0.0.1`) are on the same host, so the port is bound on loopback only and the service is never reachable from outside whatever the firewall allows.
+fn bind_address(explicit: Option<String>, port: Option<String>) -> String {
+    match (explicit, port) {
+        (Some(addr), _) => addr,
+        (None, Some(port)) => format!("127.0.0.1:{port}"),
+        (None, None) => "127.0.0.1:8080".into(),
+    }
+}
+
+/// `DATABASE_POOL_SIZE`, from 1 to [`db::MAX_POOL_SIZE`](crate::db::MAX_POOL_SIZE); [`db::DEFAULT_POOL_SIZE`](crate::db::DEFAULT_POOL_SIZE) when unset.
+fn pool_size(setting: Option<&str>) -> anyhow::Result<u32> {
+    let Some(setting) = setting else {
+        return Ok(crate::db::DEFAULT_POOL_SIZE);
+    };
+    match setting.trim().parse::<u32>() {
+        Ok(size) if (1..=crate::db::MAX_POOL_SIZE).contains(&size) => Ok(size),
+        _ => bail!(
+            "DATABASE_POOL_SIZE must be a whole number from 1 to {}",
+            crate::db::MAX_POOL_SIZE
+        ),
     }
 }
 
@@ -209,6 +233,11 @@ fn s3_settings(var: &impl Fn(&str) -> Option<String>) -> anyhow::Result<Option<S
             Ok(None)
         }
     }
+}
+
+/// Whether `host` is where production is served: `scottylabs.org` or `www.scottylabs.org`.
+pub fn is_production_host(host: &str) -> bool {
+    PRODUCTION_HOSTS.contains(&host)
 }
 
 /// Applies the dev login rules from docs/implementation/contract.md.
@@ -363,6 +392,45 @@ mod tests {
         assert!(governance_sync_enabled(Some("1"), &DevLogin::Open).unwrap());
         assert!(!governance_sync_enabled(Some("0"), &DevLogin::Off).unwrap());
         assert!(governance_sync_enabled(Some("yes"), &DevLogin::Off).is_err());
+    }
+
+    #[test]
+    fn binds_loopback_unless_told_otherwise() {
+        let config = Config::from_vars(vars(&[BASE[0], BASE[1], ("PORT", "10234")])).unwrap();
+        assert_eq!(config.bind_addr, "127.0.0.1:10234");
+        let explicit = [
+            BASE[0],
+            BASE[1],
+            ("PORT", "10234"),
+            ("SITE_BIND_ADDR", "0.0.0.0:9000"),
+        ];
+        assert_eq!(
+            Config::from_vars(vars(&explicit)).unwrap().bind_addr,
+            "0.0.0.0:9000"
+        );
+        assert_eq!(
+            Config::from_vars(vars(&BASE)).unwrap().bind_addr,
+            "127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn the_pool_size_is_checked() {
+        assert_eq!(
+            Config::from_vars(vars(&BASE)).unwrap().db_pool_size,
+            crate::db::DEFAULT_POOL_SIZE
+        );
+        let sized = [BASE[0], BASE[1], ("DATABASE_POOL_SIZE", " 20 ")];
+        assert_eq!(Config::from_vars(vars(&sized)).unwrap().db_pool_size, 20);
+        for bad in ["0", "51", "ten", "-1"] {
+            let error = Config::from_vars(vars(&[BASE[0], BASE[1], ("DATABASE_POOL_SIZE", bad)]))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.starts_with("DATABASE_POOL_SIZE must be"),
+                "{bad}: {error}"
+            );
+        }
     }
 
     #[test]

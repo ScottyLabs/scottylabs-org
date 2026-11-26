@@ -4,12 +4,15 @@
   // search text live in the address (?committee=&q=), so filtered lists can be shared and the
   // project pages' breadcrumb leads back to the same list. Searches filter the loaded cards at
   // once; from two characters the service also looks through whole descriptions, and what it finds
-  // is added (filter.ts).
+  // is added (filter.ts). When the projects cannot load, the page shows the ones from the last
+  // visit with a note, and an error only when it has none.
   import { onDestroy, tick, untrack } from "svelte";
   import { afterNavigate, goto } from "$app/navigation";
   import Plus from "@lucide/svelte/icons/plus";
   import SearchX from "@lucide/svelte/icons/search-x";
   import { get, isAbortError, isApiError } from "#lib/api/client.ts";
+  import LastGoodNote from "#lib/site/LastGoodNote.svelte";
+  import { isRecord, recall, remember } from "#lib/site/last-good.ts";
   import type { CommitteeSlug, ProjectCard as Card, PublicProjectsResponse } from "#lib/api/types.ts";
   import { COMMITTEES } from "#lib/portal/committees.ts";
   import Skeleton from "#lib/portal/ui/Skeleton.svelte";
@@ -44,6 +47,8 @@
 
   let projects = $state.raw<Card[] | null>(null);
   let loadError = $state<string | null>(null);
+  /** When the projects shown were saved, if they come from the last visit's copy. */
+  let savedAt = $state<number | null>(null);
   let filters = $state<ProjectFilters>({ ...NO_FILTERS });
   let searchText = $state("");
   let showAll = $state(false);
@@ -142,13 +147,27 @@
     if (!awaiting) announced = resultsLine(matching.length, filters);
   }
 
+  const SAVED_KEY = "projects";
+  const isCards = (value: unknown): value is Card[] =>
+    Array.isArray(value) && value.every((card) => isRecord(card) && typeof card.id === "string");
+
   async function load(): Promise<void> {
     loadError = null;
     try {
       const response = await get<PublicProjectsResponse>("/public/projects");
       projects = response.projects;
+      savedAt = null;
+      remember(SAVED_KEY, response.projects);
       announce();
     } catch (error) {
+      const saved = projects === null ? recall(SAVED_KEY, isCards) : null;
+      if (saved !== null) {
+        projects = saved.value;
+        savedAt = saved.savedAt;
+        announce();
+        return;
+      }
+      if (projects !== null) return;
       loadError = isApiError(error)
         ? "We couldn\u2019t load the projects. Check your connection and try again."
         : "We couldn\u2019t load the projects. Try again in a moment.";
@@ -239,6 +258,9 @@
       </p>
       <p class="p-sr-only" aria-live="polite">{announced}</p>
 
+      {#if savedAt !== null}
+        <LastGoodNote {savedAt} onretry={() => void load()} />
+      {/if}
       {#if loadError !== null}
         <div class="notice" role="alert">
           <p class="notice__text">{loadError}</p>

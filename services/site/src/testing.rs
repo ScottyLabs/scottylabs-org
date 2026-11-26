@@ -48,6 +48,7 @@ use crate::state::AppState;
 pub fn config() -> Config {
     Config {
         database_url: String::new(),
+        db_pool_size: crate::db::DEFAULT_POOL_SIZE,
         app_url: Url::parse("http://localhost:5173").unwrap(),
         bind_addr: "127.0.0.1:0".into(),
         static_dir: None,

@@ -1,6 +1,8 @@
 <script lang="ts">
   // The Committees index (spec C-1 to C-5): an introduction with jump chips, one row per committee
   // with its picture alternating sides, and the Saturday work sessions with links to CMU Maps.
+  // When the committees cannot load, the page shows what loaded before, in this visit or the last
+  // one, with a note, and an error only when it has nothing.
   import "#lib/committees/committees.css";
   import MapPin from "@lucide/svelte/icons/map-pin";
   import Users from "@lucide/svelte/icons/users";
@@ -12,10 +14,19 @@
   import { COMMITTEE_LIST, committeeNames } from "#lib/portal/committees.ts";
   import Skeleton from "#lib/portal/ui/Skeleton.svelte";
   import { SelectionBox } from "#lib/site/index.ts";
+  import LastGoodNote from "#lib/site/LastGoodNote.svelte";
+  import { isRecord, recall, remember } from "#lib/site/last-good.ts";
+
+  const SAVED_KEY = "committees";
 
   let committees = $state.raw<CommitteeSummary[] | null>(null);
   let problem = $state<string | null>(null);
   let attempt = $state(0);
+  /** Shown from a saved copy: when it was saved, null for what loaded earlier in this visit. */
+  let stale = $state<{ savedAt: number | null } | null>(null);
+
+  const isList = (value: unknown): value is CommitteeSummary[] =>
+    Array.isArray(value) && value.every((item) => isRecord(item) && typeof item.slug === "string");
 
   $effect(() => {
     void attempt;
@@ -24,9 +35,22 @@
     loadPublicCommittees(controller.signal).then(
       (response) => {
         committees = response.committees;
+        stale = null;
+        remember(SAVED_KEY, response.committees);
       },
       (error: unknown) => {
         if (isAbortError(error)) return;
+        // Keep what this visit already shows.
+        if (committees !== null) {
+          stale ??= { savedAt: null };
+          return;
+        }
+        const saved = recall(SAVED_KEY, isList);
+        if (saved !== null) {
+          committees = saved.value;
+          stale = { savedAt: saved.savedAt };
+          return;
+        }
         problem =
           isApiError(error) && error.code !== "network"
             ? error.message
@@ -128,6 +152,9 @@
       {/each}
     </div>
   {:else}
+    {#if stale !== null}
+      <LastGoodNote savedAt={stale.savedAt} onretry={() => (attempt += 1)} />
+    {/if}
     <div class="rows">
       {#each committees as committee, index (committee.slug)}
         <article

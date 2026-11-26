@@ -7,6 +7,10 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+/// `Cache-Control` for public answers: browsers and the CDN keep them a minute, may serve one up to ten minutes old while fetching a new one, and up to a day old while the service fails.
+pub const PUBLIC_CACHE: &str =
+    "public, max-age=60, stale-while-revalidate=600, stale-if-error=86400";
+
 /// Marks a response as never cached. `static_files::security_headers` already adds this to API responses that set no `Cache-Control`; handlers use it where they say so on purpose.
 pub fn no_store(mut response: Response) -> Response {
     response

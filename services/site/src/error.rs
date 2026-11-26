@@ -34,6 +34,9 @@ pub enum AppError {
     /// A service this one depends on, such as the governance repository, is down or answered with something unusable. The request itself was fine.
     #[error("{0}")]
     Upstream(String),
+    /// The service cannot answer right now: it is still starting, the database is unreachable or too slow, or it is too busy. Sent with `Retry-After`.
+    #[error("{0}")]
+    Unavailable(String),
     /// One of the error codes in the contract, which the web client understands. Sign-in answers with redirects instead today, so nothing builds it yet.
     #[allow(dead_code)]
     #[error("Sign-in with ScottyLabs is not set up for this site yet.")]
@@ -45,6 +48,13 @@ pub enum AppError {
 pub type AppResult<T> = Result<T, AppError>;
 
 impl AppError {
+    /// The database cannot be reached or did not answer in time. Says nothing about why, which the log has.
+    pub fn database_unavailable() -> Self {
+        Self::Unavailable(
+            "This part of the site is not available right now. Try again in a minute.".into(),
+        )
+    }
+
     pub fn not_found(what: &str) -> Self {
         Self::NotFound(format!("We couldn't find that {what}."))
     }
@@ -70,6 +80,7 @@ impl AppError {
             Self::UnsupportedMediaType(_) => "unsupported_media_type",
             Self::RateLimited => "rate_limited",
             Self::Upstream(_) => "upstream_failed",
+            Self::Unavailable(_) => "unavailable",
             Self::AuthNotConfigured => "auth_not_configured",
             Self::Internal(_) => "internal",
         }
@@ -88,6 +99,7 @@ impl AppError {
             Self::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::RateLimited => StatusCode::TOO_MANY_REQUESTS,
             Self::Upstream(_) => StatusCode::BAD_GATEWAY,
+            Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::AuthNotConfigured => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -154,22 +166,45 @@ impl IntoResponse for AppError {
             },
         };
         let mut response = (self.status(), Json(body)).into_response();
-        response.headers_mut().insert(
+        let headers = response.headers_mut();
+        headers.insert(
             axum::http::header::CACHE_CONTROL,
             axum::http::HeaderValue::from_static("no-store"),
         );
+        if matches!(self, Self::Unavailable(_)) {
+            headers.insert(
+                axum::http::header::RETRY_AFTER,
+                axum::http::HeaderValue::from(RETRY_AFTER_SECONDS),
+            );
+        }
         response
     }
 }
 
+/// How long `Retry-After` asks clients to wait after a 503.
+pub const RETRY_AFTER_SECONDS: u32 = 5;
+
+/// A database that is down, unreachable or too slow answers 503 `unavailable`, which clients may retry; anything else is a 500.
 impl From<sqlx::Error> for AppError {
     fn from(error: sqlx::Error) -> Self {
+        if crate::db::is_unavailable(&error) {
+            tracing::warn!(error = %error, "the database is unavailable");
+            return Self::database_unavailable();
+        }
         Self::Internal(error.into())
     }
 }
 
 impl From<anyhow::Error> for AppError {
     fn from(error: anyhow::Error) -> Self {
+        let unavailable = error
+            .chain()
+            .filter_map(|cause| cause.downcast_ref::<sqlx::Error>())
+            .any(crate::db::is_unavailable);
+        if unavailable {
+            tracing::warn!(error = %format!("{error:#}"), "the database is unavailable");
+            return Self::database_unavailable();
+        }
         Self::Internal(error)
     }
 }

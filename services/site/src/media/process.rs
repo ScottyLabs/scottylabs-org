@@ -16,7 +16,10 @@ pub const MAX_UPLOAD_BYTES: usize = 5 * 1024 * 1024;
 pub const MAX_DIMENSION: u32 = 12_000;
 /// Most pixels decoded, such as 8000 by 5000. A small, highly compressed file can describe a far larger image, which would take seconds and gigabytes to decode and resize; no page needs one.
 pub const MAX_PIXELS: u64 = 40_000_000;
-const MAX_DECODE_ALLOC: u64 = 512 * 1024 * 1024;
+/// Most bytes of decoded pixels: 40 megapixels at 4 bytes each. Checked from the header with the pixel count, so an image of 16 bits per channel, which decodes to twice the bytes, is refused above 20 megapixels instead of taking 320 MB or more.
+pub const MAX_DECODED_BYTES: u64 = MAX_PIXELS * 4;
+/// What the decoder may allocate in all: the pixels plus its own working buffers.
+const MAX_DECODE_ALLOC: u64 = 256 * 1024 * 1024;
 /// Resampling with a filter first builds a floating point copy of (source width x new height) pixels, 16 bytes each. Past this size the cheaper box filter is used.
 const RESAMPLE_BUDGET_BYTES: u64 = 160 * 1024 * 1024;
 /// Widths made for every upload, never wider than the original.
@@ -63,6 +66,12 @@ pub enum ProcessError {
     Unsupported,
     #[error("the image is too large to decode")]
     TooLarge,
+    /// Within the pixel limit, but too many bytes per pixel, such as 16 bits per channel.
+    #[error("the image holds too much data to decode")]
+    TooMuchData,
+    /// Too many uploads are already being processed or waiting.
+    #[error("too many uploads are being processed")]
+    Busy,
     #[error("the image could not be decoded: {0}")]
     Unreadable(String),
     #[error("the image could not be encoded: {0}")]
@@ -92,8 +101,33 @@ pub fn target_widths(original: u32) -> Vec<u32> {
 
 pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
     let format = sniff(bytes).ok_or(ProcessError::Unsupported)?;
-    let mut current = decode(bytes, format)?;
-    let widths = target_widths(current.width());
+    let (mut current, orientation) = decode(bytes, format)?;
+    // A quarter or three quarter turn swaps width and height, and the widths are for the image as it is shown.
+    let turned = matches!(
+        orientation,
+        Orientation::Rotate90
+            | Orientation::Rotate270
+            | Orientation::Rotate90FlipH
+            | Orientation::Rotate270FlipH
+    );
+    let (shown_width, shown_height) = if turned {
+        (current.height(), current.width())
+    } else {
+        (current.width(), current.height())
+    };
+    let widths = target_widths(shown_width);
+
+    // Shrink to the widest version first and turn that, so the turn never copies the full-size original.
+    let widest = widths[widths.len() - 1];
+    if widest != shown_width {
+        let shown_height = scaled_height(shown_width, shown_height, widest);
+        current = if turned {
+            shrink_to(&current, shown_height, widest)
+        } else {
+            shrink_to(&current, widest, shown_height)
+        };
+    }
+    current.apply_orientation(orientation);
 
     // Resize from the widest down, each step from the previous one, which is much faster than resizing the original every time and looks the same. Each version is encoded as soon as it exists, so only one is held at a time.
     let mut output = None;
@@ -126,6 +160,11 @@ pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
 /// `image` scaled down to `width`, keeping its proportions.
 fn shrink(image: &DynamicImage, width: u32) -> DynamicImage {
     let height = scaled_height(image.width(), image.height(), width);
+    shrink_to(image, width, height)
+}
+
+/// `image` scaled down to `width` by `height`.
+fn shrink_to(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
     // Most of a large original is first averaged down to twice the size with the fast integer box filter, which looks the same at that ratio and needs no floating point copy of the original.
     let halfway = (image.width() > 2 * width).then(|| image.thumbnail_exact(2 * width, 2 * height));
     let source = halfway.as_ref().unwrap_or(image);
@@ -138,7 +177,8 @@ fn shrink(image: &DynamicImage, width: u32) -> DynamicImage {
     }
 }
 
-fn decode(bytes: &[u8], format: ImageFormat) -> Result<DynamicImage, ProcessError> {
+/// The decoded image as stored in the file, and the EXIF orientation it is shown in.
+fn decode(bytes: &[u8], format: ImageFormat) -> Result<(DynamicImage, Orientation), ProcessError> {
     let mut limits = Limits::default();
     limits.max_image_width = Some(MAX_DIMENSION);
     limits.max_image_height = Some(MAX_DIMENSION);
@@ -151,13 +191,15 @@ fn decode(bytes: &[u8], format: ImageFormat) -> Result<DynamicImage, ProcessErro
     if u64::from(width) * u64::from(height) > MAX_PIXELS {
         return Err(ProcessError::TooLarge);
     }
+    if decoder.total_bytes() > MAX_DECODED_BYTES {
+        return Err(ProcessError::TooMuchData);
+    }
     let orientation = decoder.orientation().unwrap_or(Orientation::NoTransforms);
-    let mut image = DynamicImage::from_decoder(decoder).map_err(decode_error)?;
-    image.apply_orientation(orientation);
+    let image = DynamicImage::from_decoder(decoder).map_err(decode_error)?;
     if image.width() == 0 || image.height() == 0 {
         return Err(ProcessError::Unreadable("empty image".into()));
     }
-    Ok(image)
+    Ok((image, orientation))
 }
 
 fn decode_error(error: ImageError) -> ProcessError {
@@ -297,6 +339,12 @@ pub(crate) mod tests {
 
     /// A PNG that claims to be `width` by `height` but holds a single row of data. Its pixels are never needed: the size alone must stop it.
     fn png_header_only(width: u32, height: u32) -> Vec<u8> {
+        // 8-bit grayscale.
+        png_header(width, height, 8, 0)
+    }
+
+    /// [`png_header_only`] with a bit depth and PNG color type, such as 16 and 6 for 16-bit RGBA.
+    fn png_header(width: u32, height: u32, depth: u8, color: u8) -> Vec<u8> {
         fn crc32(bytes: &[u8]) -> u32 {
             let mut crc = u32::MAX;
             for byte in bytes {
@@ -321,8 +369,8 @@ pub(crate) mod tests {
         let mut header = Vec::new();
         header.extend_from_slice(&width.to_be_bytes());
         header.extend_from_slice(&height.to_be_bytes());
-        // 8-bit grayscale, no interlacing.
-        header.extend_from_slice(&[8, 0, 0, 0, 0]);
+        // No interlacing.
+        header.extend_from_slice(&[depth, color, 0, 0, 0]);
         let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
         chunk(&mut out, b"IHDR", &header);
         // A stored zlib block of one empty row.
@@ -354,6 +402,81 @@ pub(crate) mod tests {
             process(&png_header_only(8_000, 5_000)),
             Err(ProcessError::Unreadable(_))
         ));
+    }
+
+    #[test]
+    fn deep_images_are_refused_from_the_header_by_their_bytes() {
+        // 30 megapixels is within the pixel limit, but at 16 bits per channel it decodes to 240 MB.
+        assert!(matches!(
+            process(&png_header(6_000, 5_000, 16, 6)),
+            Err(ProcessError::TooMuchData)
+        ));
+        assert!(matches!(
+            process(&png_header(8_000, 5_000, 16, 2)),
+            Err(ProcessError::TooMuchData)
+        ));
+        // 16 megapixels at 16 bits per channel is 128 MB: the header passes, and the missing rows fail.
+        assert!(matches!(
+            process(&png_header(4_000, 4_000, 16, 6)),
+            Err(ProcessError::Unreadable(_))
+        ));
+        // 40 megapixels of 8-bit RGBA is exactly the budget.
+        assert!(matches!(
+            process(&png_header(8_000, 5_000, 8, 6)),
+            Err(ProcessError::Unreadable(_))
+        ));
+    }
+
+    /// EXIF with only an orientation, as a big-endian TIFF block.
+    fn exif_orientation(value: u16) -> Vec<u8> {
+        let mut exif = b"MM\0\x2a\0\0\0\x08".to_vec();
+        exif.extend_from_slice(&1u16.to_be_bytes());
+        exif.extend_from_slice(&0x0112u16.to_be_bytes());
+        // One SHORT.
+        exif.extend_from_slice(&3u16.to_be_bytes());
+        exif.extend_from_slice(&1u32.to_be_bytes());
+        exif.extend_from_slice(&value.to_be_bytes());
+        exif.extend_from_slice(&[0, 0]);
+        // No next directory.
+        exif.extend_from_slice(&0u32.to_be_bytes());
+        exif
+    }
+
+    #[test]
+    fn turned_photos_are_shrunk_before_they_are_turned() {
+        use image::{ExtendedColorType, ImageEncoder};
+
+        // Stored 1000 wide and 2400 tall, left half red and right half blue, shown turned a quarter clockwise.
+        let (width, height) = (1_000, 2_400);
+        let stored = RgbImage::from_fn(width, height, |x, _| {
+            if x < width / 2 {
+                Rgb([220, 20, 20])
+            } else {
+                Rgb([20, 20, 220])
+            }
+        });
+        let mut bytes = Vec::new();
+        let mut encoder = PngEncoder::new(&mut bytes);
+        encoder.set_exif_metadata(exif_orientation(6)).unwrap();
+        encoder
+            .write_image(stored.as_raw(), width, height, ExtendedColorType::Rgb8)
+            .unwrap();
+
+        let processed = process(&bytes).unwrap();
+        let sizes: Vec<(u32, u32)> = processed
+            .variants
+            .iter()
+            .map(|v| (v.width, v.height))
+            .collect();
+        assert_eq!(sizes, [(480, 200), (960, 400), (1920, 800)]);
+        // The stored left edge is shown on top.
+        let shown = image::load_from_memory(&processed.variants[2].bytes)
+            .unwrap()
+            .to_rgb8();
+        let top = shown.get_pixel(960, 100).0;
+        let bottom = shown.get_pixel(960, 700).0;
+        assert!(top[0] > 150 && top[2] < 100, "{top:?}");
+        assert!(bottom[2] > 150 && bottom[0] < 100, "{bottom:?}");
     }
 
     #[test]
