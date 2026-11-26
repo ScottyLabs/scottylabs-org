@@ -18,6 +18,7 @@ import {
   sanitize,
   textToHtml,
 } from "../src/lib/editor/sanitize.ts";
+import { ShownRichText } from "../src/lib/editor/shown.ts";
 
 const LINK = 'target="_blank" rel="noopener noreferrer nofollow"';
 
@@ -278,4 +279,48 @@ Deno.test("a parent cannot hide text over the limit by passing invalid={false}",
   assert.ok(editorInvalid({ over: false, fieldInvalid: true }));
   assert.ok(!editorInvalid({ invalid: false, over: false, fieldInvalid: false }));
   assert.ok(!editorInvalid({ over: false }));
+});
+
+Deno.test("the editor writes only sanitized markup, when a value loads and when focus leaves", () => {
+  const element = { innerHTML: "" };
+  const shown = new ShownRichText();
+  const raw = "<p>Nova is our hackathon.</p><img src=x onerror=\"document.title='RAN'\">";
+
+  assert.ok(shown.show(element, raw));
+  assert.equal(element.innerHTML, "<p>Nova is our hackathon.</p>");
+  assert.equal(shown.html, "<p>Nova is our hackathon.</p>");
+
+  // Focus goes in and out without typing: what was shown goes back, never the raw value.
+  element.innerHTML = "<p>Nova is our hackathon.</p><p><br></p>";
+  assert.ok(shown.restore(element));
+  assert.equal(element.innerHTML, "<p>Nova is our hackathon.</p>");
+  assert.ok(!shown.restore(element));
+  for (const bad of ["<img", "onerror", "RAN"]) {
+    assert.ok(!element.innerHTML.includes(bad), `${bad} reached the page`);
+  }
+
+  // The same value again is not an outside change, so the text is left alone.
+  element.innerHTML = "<p>Nova is our hackathon. Typing</p>";
+  assert.ok(!shown.show(element, raw));
+  assert.equal(element.innerHTML, "<p>Nova is our hackathon. Typing</p>");
+});
+
+Deno.test("the editor's own changes are recorded once and put back cleaned", () => {
+  const element = { innerHTML: "" };
+  const shown = new ShownRichText();
+  assert.ok(shown.record("<p>Hello <strong>there</strong></p>"));
+  assert.ok(!shown.record("<p>Hello <strong>there</strong></p>"));
+  // The bound value comes back from the page: it is the editor's own, so nothing is rewritten.
+  assert.ok(!shown.show(element, "<p>Hello <strong>there</strong></p>"));
+  assert.equal(element.innerHTML, "");
+  assert.ok(shown.restore(element));
+  assert.equal(element.innerHTML, "<p>Hello <strong>there</strong></p>");
+
+  // Undo brings back a value from history, which is cleaned like any other.
+  assert.ok(shown.show(element, '<p>Old <a href="javascript:alert(1)">link</a></p>'));
+  assert.equal(element.innerHTML, "<p>Old link</p>");
+  const empty = new ShownRichText();
+  const blank = { innerHTML: "<p><br></p>" };
+  assert.ok(empty.restore(blank));
+  assert.equal(blank.innerHTML, "");
 });
