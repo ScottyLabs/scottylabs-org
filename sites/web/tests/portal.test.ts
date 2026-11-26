@@ -35,7 +35,9 @@ import {
 } from "../src/lib/portal/access.ts";
 import {
   KEPT_FOR_MS,
+  type KeptListStore,
   type KeptStore,
+  clearKeptChanges,
   forgetChanges,
   keepChanges,
   keptChanges,
@@ -45,6 +47,7 @@ import { replaceLocation } from "../src/lib/portal/navigation.ts";
 import { safeReturnTo, signInHref } from "../src/lib/portal/paths.ts";
 import { describeRoles, firstName, primaryRoleLabel } from "../src/lib/portal/roles.ts";
 import { signInNotice } from "../src/lib/portal/sign-in-messages.ts";
+import { endSessionUrl } from "../src/lib/portal/sign-out.ts";
 import { focusAfterDialog } from "../src/lib/portal/ui/focus.ts";
 
 const NOW = "2026-11-24T17:00:00Z";
@@ -407,6 +410,21 @@ function memoryStore(): KeptStore & { items: Map<string, string> } {
   };
 }
 
+/** A stand-in for sessionStorage that can list its keys, in insertion order as browsers do. */
+function listStore(): KeptListStore & { items: Map<string, string> } {
+  const items = new Map<string, string>();
+  return {
+    items,
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => void items.set(key, value),
+    removeItem: (key) => void items.delete(key),
+    key: (index) => [...items.keys()][index] ?? null,
+    get length() {
+      return items.size;
+    },
+  };
+}
+
 const isText = (value: unknown): value is string => typeof value === "string";
 
 Deno.test("work kept when the session ends comes back only to the person who made it", () => {
@@ -478,4 +496,75 @@ Deno.test("kept work goes back on its own only when nothing changed underneath i
   assert.equal(restorePlan(kept, { base: "7", value: { summary: "Saved" } }), "restore");
   // Someone saved since: putting it back would replace their work, so the person chooses.
   assert.equal(restorePlan(kept, { base: "8", value: { summary: "Theirs" } }), "ask");
+});
+
+Deno.test("signing out clears every piece of kept work in the tab", () => {
+  const store = listStore();
+  const noon = Date.UTC(2026, 10, 25, 12);
+  keepChanges("project:p1", { userId: "u1", base: "v1", value: "Mine" }, noon, store);
+  keepChanges("committee-page:tech", { userId: "u2", base: "3", value: "Theirs" }, noon, store);
+  store.setItem("sl:kept-changes:broken", "{not json");
+  store.setItem("sl:ticker-paused", "1");
+  clearKeptChanges(null, store);
+  assert.deepEqual([...store.items.keys()], ["sl:ticker-paused"]);
+});
+
+Deno.test("when a session ends or someone signs in, only that person's kept work stays", () => {
+  const store = listStore();
+  const noon = Date.UTC(2026, 10, 25, 12);
+  keepChanges("project:p1", { userId: "u1", base: "v1", value: "First" }, noon, store);
+  keepChanges("announcement:new", { userId: "u2", base: "", value: "Second" }, noon, store);
+  keepChanges("committee-page:tech", { userId: "u1", base: "3", value: "Third" }, noon, store);
+  store.setItem("sl:kept-changes:broken", "{not json");
+  store.setItem("sl:kept-changes:nobody", JSON.stringify({ value: "x" }));
+  store.setItem("other", "left alone");
+
+  clearKeptChanges("u1", store);
+  assert.deepEqual(
+    [...store.items.keys()],
+    ["sl:kept-changes:project:p1", "sl:kept-changes:committee-page:tech", "other"],
+  );
+  // Then u1 signs out: nothing of theirs waits for the next person.
+  clearKeptChanges(null, store);
+  assert.deepEqual([...store.items.keys()], ["other"]);
+});
+
+Deno.test("clearing kept work never fails when storage is blocked or missing", () => {
+  const blocked: KeptListStore = {
+    ...memoryStore(),
+    key: () => {
+      throw new DOMException("blocked", "SecurityError");
+    },
+    get length(): number {
+      throw new DOMException("blocked", "SecurityError");
+    },
+  };
+  clearKeptChanges("u1", blocked);
+  clearKeptChanges(null, null);
+});
+
+Deno.test("sign-out follows Keycloak's end-session address only when it is a safe one", () => {
+  const url =
+    "https://idp.scottylabs.org/realms/scottylabs/protocol/openid-connect/logout?id_token_hint=t&client_id=c";
+  assert.equal(endSessionUrl({ endSessionUrl: url }), url);
+  assert.equal(
+    endSessionUrl({ endSessionUrl: "http://localhost:8180/realms/x/logout" }),
+    "http://localhost:8180/realms/x/logout",
+  );
+  // The usual empty answer, and anything that is not a web address to leave for.
+  for (const answer of [
+    undefined,
+    null,
+    "",
+    {},
+    { endSessionUrl: null },
+    { endSessionUrl: 42 },
+    { endSessionUrl: "/portal/" },
+    { endSessionUrl: "javascript:alert(1)" },
+    { endSessionUrl: "http://idp.scottylabs.org/logout" },
+    { endSessionUrl: "https://user:pass@idp.scottylabs.org/logout" },
+    { endSessionUrl: "not a url" },
+  ]) {
+    assert.equal(endSessionUrl(answer), null, JSON.stringify(answer));
+  }
 });
