@@ -313,7 +313,7 @@
             <span class="picker__option-text">
               <span class="picker__option-name">{option.person.name || option.person.andrewId}</span>
               <span class="picker__option-id">
-                {option.person.andrewId}{#if !option.person.hasSignedIn}<span class="picker__option-note">
+                {option.person.andrewId}{#if option.person.hasSignedIn === false}<span class="picker__option-note">
                     &middot; has not signed in yet</span
                   >{/if}
               </span>

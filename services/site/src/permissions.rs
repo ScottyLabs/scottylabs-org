@@ -2,9 +2,11 @@
 //! the UI hiding a control is never the check.
 
 use serde::Serialize;
+use sqlx::PgConnection;
 use uuid::Uuid;
 
-use crate::auth::Viewer;
+use crate::auth::{Assignment, Viewer};
+use crate::error::AppResult;
 use crate::models::{Committee, Role, TickerSource};
 
 pub fn is_admin(viewer: &Viewer) -> bool {
@@ -95,6 +97,7 @@ pub fn can_view_announcement(
     !waiting || created_by == Some(viewer.user_id) || can_manage_ticker(viewer, source)
 }
 
+/// Any director may reorder the whole loop, not only their committee's rows: the contract's matrix gives directors "Reorder live announcements" and the ticker is one shared order (spec TK-3). Every reorder is audited.
 pub fn can_reorder_ticker(viewer: &Viewer) -> bool {
     is_admin(viewer) || !director_of(viewer).is_empty()
 }
@@ -159,7 +162,7 @@ pub fn project_access(viewer: &Viewer, owner: Committee, project_id: Uuid) -> Pr
     }
 }
 
-/// Open a project in the portal, read only unless [`project_access`] allows more. Mirrors `GET /api/projects`: admins and directors see every project, leads the ones they edit.
+/// Open a project in the portal, read only unless [`project_access`] allows more. Mirrors `GET /api/projects`: admins and directors see every project, drafts included, as the contract grants ("directors and admins see all with `canEdit` set per row"); leads the ones they edit.
 pub fn can_view_project(viewer: &Viewer, project_id: Uuid) -> bool {
     is_admin(viewer)
         || !director_of(viewer).is_empty()
@@ -217,6 +220,76 @@ pub fn can_sync_governance(viewer: &Viewer) -> bool {
 /// End someone's sessions everywhere, or reset the link between their Andrew ID and a Keycloak account (sign-in recovery).
 pub fn can_manage_sign_in(viewer: &Viewer) -> bool {
     is_admin(viewer)
+}
+
+/// Whether the viewer may give a role to someone who already holds `other_roles` (their roles besides the one being changed). Directors add only people with no role at all; anyone who is an admin or has a role elsewhere needs an admin, so a director cannot pull them into their committee and read their details.
+pub fn can_appoint_person_with(viewer: &Viewer, other_roles: &[Role]) -> bool {
+    is_admin(viewer) || other_roles.is_empty()
+}
+
+/// Email addresses and when someone was last seen. Directors see only what managing their leads needs: names, Andrew IDs, roles, and whether each has signed in since getting their role.
+pub fn sees_contact_details(viewer: &Viewer) -> bool {
+    is_admin(viewer)
+}
+
+/// Take over a committee page's edit lock from someone else, for an urgent fix. Audited.
+pub fn can_take_over_page(viewer: &Viewer) -> bool {
+    is_admin(viewer)
+}
+
+/// List uploaded images and delete one, from storage too.
+pub fn can_manage_media(viewer: &Viewer) -> bool {
+    is_admin(viewer)
+}
+
+// ---------------------------------------------------------------------------
+// Checking again inside a write
+
+/// The viewer with their roles and lead projects read again inside the write's transaction, so a request that was already running when an admin removed a role cannot finish with it. The viewer's role rows stay share-locked until the transaction ends, so a removal waits for the write instead of racing it. Check the rules above against the result.
+pub async fn recheck(conn: &mut PgConnection, viewer: &Viewer) -> AppResult<Viewer> {
+    let roles = sqlx::query_as::<_, Assignment>(
+        "SELECT role, committee, can_post_ticker FROM role_assignments
+         WHERE user_id = $1 ORDER BY created_at, id FOR SHARE",
+    )
+    .bind(viewer.user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let lead_projects = sqlx::query_scalar::<_, Uuid>(
+        "SELECT pe.project_id FROM project_editors pe
+         JOIN projects p ON p.id = pe.project_id
+         WHERE pe.user_id = $1
+           AND EXISTS (
+               SELECT 1 FROM role_assignments r
+               WHERE r.user_id = pe.user_id AND r.role = 'lead' AND r.committee = p.committee
+           )
+         ORDER BY pe.project_id",
+    )
+    .bind(viewer.user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    // Only ever narrows what the request was loaded with: a role the loader left out on purpose (a Keycloak-group admin not confirmed for 24 hours, see auth::extract) must not come back here.
+    let roles = roles
+        .into_iter()
+        .filter_map(|current| {
+            viewer
+                .roles
+                .iter()
+                .find(|loaded| loaded.role == current.role && loaded.committee == current.committee)
+                .map(|loaded| Assignment {
+                    can_post_ticker: current.can_post_ticker && loaded.can_post_ticker,
+                    ..current
+                })
+        })
+        .collect();
+    let lead_projects = lead_projects
+        .into_iter()
+        .filter(|id| viewer.lead_projects.contains(id))
+        .collect();
+    Ok(Viewer {
+        roles,
+        lead_projects,
+        ..viewer.clone()
+    })
 }
 
 /// Which audit entries "Recent activity" shows. Entries name what they are about, so they follow the rules for opening it.
@@ -512,6 +585,31 @@ pub(crate) mod tests {
         assert_eq!(both.committees, [Committee::Tech]);
         assert_eq!(both.limited_committees, [Committee::Events]);
         assert_eq!(both.projects, None);
+    }
+
+    #[test]
+    fn directors_appoint_only_people_without_roles() {
+        let admin = viewer(&[(Role::Admin, None, true)], vec![]);
+        let director = viewer(&[(Role::Director, Some(Committee::Events), true)], vec![]);
+        assert!(can_appoint_person_with(&director, &[]));
+        assert!(!can_appoint_person_with(&director, &[Role::Admin]));
+        assert!(!can_appoint_person_with(&director, &[Role::Lead]));
+        assert!(can_appoint_person_with(&admin, &[Role::Admin, Role::Lead]));
+        assert!(sees_contact_details(&admin));
+        assert!(!sees_contact_details(&director));
+    }
+
+    #[test]
+    fn only_admins_take_over_pages_and_manage_media() {
+        let admin = viewer(&[(Role::Admin, None, true)], vec![]);
+        let director = viewer(&[(Role::Director, Some(Committee::Events), true)], vec![]);
+        let lead = viewer(&[(Role::Lead, Some(Committee::Events), true)], vec![]);
+        assert!(can_take_over_page(&admin));
+        assert!(can_manage_media(&admin));
+        for other in [&director, &lead] {
+            assert!(!can_take_over_page(other));
+            assert!(!can_manage_media(other));
+        }
     }
 
     #[test]

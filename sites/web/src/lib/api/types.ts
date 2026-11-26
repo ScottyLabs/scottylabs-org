@@ -421,6 +421,25 @@ export interface UploadResponse {
   image: ImageRef;
 }
 
+/** One upload in GET /api/media (admins). */
+export interface MediaItem {
+  id: string;
+  /** `src` is `/media/<id>`; `alt` is empty, since each page keeps its own. */
+  image: ImageRef;
+  contentType: string;
+  /** Bytes of every stored width together. */
+  bytes: number;
+  uploadedBy: PersonRef | null;
+  createdAt: string;
+  /** Shown by a draft, a published version or an open submission. */
+  inUse: boolean;
+}
+
+/** GET /api/media?limit=&uploadedBy= (admins). DELETE /api/media/:id answers 204. */
+export interface MediaListResponse {
+  media: MediaItem[];
+}
+
 // ---------------------------------------------------------------------------
 // Approvals
 
@@ -470,14 +489,40 @@ export interface RoleAssignment {
   source: "keycloak_group" | "governance" | "portal";
 }
 
+/** A role on the People page, with what admins need to review roles governance does not list. GET /api/people always sends these fields; they are optional so a plain RoleAssignment still fits. */
+export interface PeopleRoleAssignment extends RoleAssignment {
+  /** When the role last changed, and who changed it (null for the governance sync and sign-in). */
+  changedAt?: string;
+  changedBy?: PersonRef | null;
+  /** Whether governance listed this person in this role at the last sync. Null for admins, Tech leads and before the first sync. */
+  governanceListed?: boolean | null;
+}
+
 export interface PersonRow {
+  /**
+   * `email` and `lastSeenAt` are null for directors. For directors, `hasSignedIn` says whether
+   * the person signed in since getting their role in the director's committee.
+   */
   person: PersonRef & { email: string | null; hasSignedIn: boolean; lastSeenAt: string | null };
-  roles: RoleAssignment[];
+  /** For directors, only the roles in the committees they direct. */
+  roles: PeopleRoleAssignment[];
+}
+
+/** The last governance sync, by the Sync button or the service itself. */
+export interface GovernanceSyncStatus {
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  /** Why the last attempt failed; null when it worked. */
+  lastError: string | null;
+  /** What the last successful run said, as in GovernanceSyncResponse. */
+  messages: string[];
 }
 
 /** GET /api/people?committee= */
 export interface PeopleResponse {
   people: PersonRow[];
+  /** Admins only. */
+  governance?: GovernanceSyncStatus;
 }
 
 /** POST /api/people */
@@ -498,9 +543,10 @@ export interface UpdateAssignmentInput {
   projectIds?: string[];
 }
 
-/** GET /api/people/search?q= */
+/** GET /api/people/search?q=. Searches of fewer than 2 characters find nobody. */
 export interface PeopleSearchResponse {
-  people: (PersonRef & { hasSignedIn: boolean })[];
+  /** `hasSignedIn` is for admins only; directors get the name and Andrew ID. */
+  people: (PersonRef & { hasSignedIn?: boolean })[];
 }
 
 /** POST /api/people/sync-governance. Directors and committee heads from governance's committees.yaml; Tech heads are not synced. */

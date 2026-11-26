@@ -12,13 +12,18 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, PgConnection, PgExecutor};
 use uuid::Uuid;
 
-use super::{CommitteeRef, PageRow, PageStatus, all_pages, committee_from_slug, one_page};
+use serde_json::json;
+
+use super::{
+    CommitteeRef, PageRow, PageStatus, all_pages, cleaned_for_reading, committee_from_slug,
+    one_page,
+};
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
-use crate::blocks::{self, CommitteePageDoc};
+use crate::blocks::{self, BlockContent, CommitteePageDoc};
 use crate::error::{AppError, AppResult, Problems};
 use crate::json::Json as JsonBody;
-use crate::models::{Committee, ImageRef, PersonRef};
+use crate::models::{Committee, ImageRef, PersonRef, is_direction_control};
 use crate::permissions;
 use crate::routes::common::blocking;
 use crate::routes::projects::public::{ProjectCard, published_cards};
@@ -176,8 +181,8 @@ async fn editor_response(
         lock: lock_of(&row, viewer),
         draft_version: row.draft_version,
         can_edit: permissions::can_edit_page(viewer, committee),
-        draft: row.draft.0,
-        published: row.published.map(|json| json.0),
+        draft: cleaned_for_reading(row.draft.0),
+        published: row.published.map(|json| cleaned_for_reading(json.0)),
         projects,
     })
 }
@@ -270,8 +275,64 @@ pub(super) async fn lock(
     let committee = committee_from_slug(&slug)?;
     require_editor(&viewer, committee)?;
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    require_editor(&viewer, committee)?;
     let row = locked_page(&mut tx, committee).await?;
     claim_lock(&mut tx, &row, &viewer).await?;
+    let row = one_page(&mut tx, committee).await?;
+    tx.commit().await?;
+    lock_of(&row, &viewer)
+        .map(Json)
+        .ok_or_else(|| AppError::Internal(anyhow::anyhow!("the edit lock was not taken")))
+}
+
+/// POST /api/committee-pages/:slug/lock/take-over: an admin takes the edit lock from whoever holds it, for an urgent fix. The holder can no longer save and sees who took over; the takeover is audited. Answers with the admin's `EditLock`.
+pub(super) async fn take_over(
+    State(state): State<AppState>,
+    viewer: PortalViewer,
+    Path(slug): Path<String>,
+) -> AppResult<Json<EditLock>> {
+    let committee = committee_from_slug(&slug)?;
+    let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    if !permissions::can_take_over_page(&viewer) {
+        return Err(AppError::Forbidden(
+            "Only admins can take over a page someone else is editing.".into(),
+        ));
+    }
+    let row = locked_page(&mut tx, committee).await?;
+    sqlx::query(
+        "UPDATE committee_pages
+         SET lock_user_id = $2, lock_since = now(), lock_heartbeat_at = now()
+         WHERE committee = $1",
+    )
+    .bind(committee)
+    .bind(viewer.user_id)
+    .execute(&mut *tx)
+    .await?;
+    if let Some(holder) = row
+        .lock_holder()
+        .filter(|holder| holder.id != viewer.user_id)
+    {
+        audit::record_details(
+            &mut tx,
+            audit_entry(
+                &viewer,
+                committee,
+                "committee_page.take_over",
+                format!(
+                    "Took over editing the {} page from {}",
+                    committee.name(),
+                    holder.name
+                ),
+            ),
+            json!({
+                "before": { "lockedBy": holder.id, "andrewId": holder.andrew_id },
+                "after": { "lockedBy": viewer.user_id, "andrewId": viewer.andrew_id },
+            }),
+        )
+        .await?;
+    }
     let row = one_page(&mut tx, committee).await?;
     tx.commit().await?;
     lock_of(&row, &viewer)
@@ -316,7 +377,10 @@ pub(super) async fn save_draft(
     // Sanitizing rich text takes CPU time, so it runs off the async runtime.
     let doc = input.doc;
     let mut doc = blocking(move || blocks::clean_draft(doc)).await??;
+    refuse_direction_controls(&doc)?;
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    require_editor(&viewer, committee)?;
     check_media(&mut tx, &mut doc).await?;
     let row = locked_page(&mut tx, committee).await?;
     claim_lock(&mut tx, &row, &viewer).await?;
@@ -418,14 +482,30 @@ fn audit_entry<'a>(
     }
 }
 
-/// Uploaded images must exist. Their stored sizes replace whatever the browser sent, so pages reserve the right space.
+/// Rich text keeps no bidirectional embeddings, overrides or isolates: inside a link they make the text that shows differ from what it says. Checked after sanitizing, which turns character references into the characters themselves.
+fn refuse_direction_controls(doc: &CommitteePageDoc) -> AppResult<()> {
+    let mut problems = Problems::new();
+    for (index, block) in doc.blocks.iter().enumerate() {
+        if let BlockContent::Text(text) = &block.content
+            && text.body.chars().any(is_direction_control)
+        {
+            problems.add(
+                format!("blocks.{index}.body"),
+                "Remove the special characters that change the direction of the text.",
+            );
+        }
+    }
+    problems.finish()
+}
+
+/// Uploaded images must exist. Their stored sizes replace whatever the browser sent, so pages reserve the right space. The rows stay share-locked until the save commits, so the cleanup task cannot delete an image this draft starts to use again.
 async fn check_media(conn: &mut PgConnection, doc: &mut CommitteePageDoc) -> AppResult<()> {
     let ids = doc.media_ids();
     if ids.is_empty() {
         return Ok(());
     }
     let sizes: HashMap<Uuid, (i32, i32)> = sqlx::query_as::<_, (Uuid, i32, i32)>(
-        "SELECT id, width, height FROM media WHERE id = ANY($1)",
+        "SELECT id, width, height FROM media WHERE id = ANY($1) FOR SHARE",
     )
     .bind(&ids)
     .fetch_all(&mut *conn)
@@ -462,6 +542,8 @@ pub(super) async fn publish(
     let committee = committee_from_slug(&slug)?;
     require_editor(&viewer, committee)?;
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    require_editor(&viewer, committee)?;
     let row = locked_page(&mut tx, committee).await?;
     claim_lock(&mut tx, &row, &viewer).await?;
     if input.draft_version != row.draft_version {
@@ -482,7 +564,8 @@ pub(super) async fn publish(
     .bind(viewer.user_id)
     .execute(&mut *tx)
     .await?;
-    audit::record(
+    // What visitors saw before and see now, so a change can be traced and put back.
+    audit::record_details(
         &mut tx,
         audit_entry(
             &viewer,
@@ -490,6 +573,7 @@ pub(super) async fn publish(
             "committee_page.publish",
             format!("Published the {} page", committee.name()),
         ),
+        audit::change(row.published.as_ref().map(|doc| &doc.0), &row.draft.0),
     )
     .await?;
     let response = editor_response(&mut tx, &viewer, committee).await?;
@@ -506,6 +590,8 @@ pub(super) async fn discard(
     let committee = committee_from_slug(&slug)?;
     require_editor(&viewer, committee)?;
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    require_editor(&viewer, committee)?;
     let row = locked_page(&mut tx, committee).await?;
     claim_lock(&mut tx, &row, &viewer).await?;
     if row.published.is_none() {
@@ -524,7 +610,8 @@ pub(super) async fn discard(
     .bind(viewer.user_id)
     .execute(&mut *tx)
     .await?;
-    audit::record(
+    // The draft that was thrown away, in case it is wanted back.
+    audit::record_details(
         &mut tx,
         audit_entry(
             &viewer,
@@ -535,6 +622,7 @@ pub(super) async fn discard(
                 committee.name()
             ),
         ),
+        audit::change(&row.draft.0, row.published.as_ref().map(|doc| &doc.0)),
     )
     .await?;
     let response = editor_response(&mut tx, &viewer, committee).await?;

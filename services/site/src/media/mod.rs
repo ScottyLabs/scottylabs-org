@@ -14,7 +14,7 @@ use axum::body::Body;
 use bytes::Bytes;
 use futures::future::try_join_all;
 use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -102,7 +102,8 @@ impl MediaStore {
         }
     }
 
-    fn storage(&self) -> &'static str {
+    /// Where new uploads go: `s3` or `database`, as `media.storage` records it.
+    pub fn storage(&self) -> &'static str {
         if self.s3.is_some() { "s3" } else { "database" }
     }
 
@@ -120,21 +121,17 @@ impl MediaStore {
     }
 
     /// Stores every variant, then records the image. Without a database row nothing is served.
+    #[cfg(test)]
     pub async fn save(&self, id: Uuid, processed: &Processed, uploaded_by: Uuid) -> AppResult<()> {
-        let largest = processed
-            .largest()
-            .ok_or_else(|| AppError::Internal(anyhow!("an upload produced no variants")))?;
-        let widths: Vec<i32> = processed
-            .variants
-            .iter()
-            .map(|v| i32::try_from(v.width).unwrap_or(i32::MAX))
-            .collect();
-        let total: i64 = processed
-            .variants
-            .iter()
-            .map(|v| v.bytes.len() as i64)
-            .sum();
+        self.store_objects(id, processed).await?;
+        let mut tx = self.db.begin().await?;
+        self.insert(&mut tx, id, processed, uploaded_by).await?;
+        tx.commit().await?;
+        Ok(())
+    }
 
+    /// Uploads every variant to S3, when it is configured. Nothing is served until [`MediaStore::insert`] records the image; if that never happens, remove the objects with [`MediaStore::remove_objects`].
+    pub async fn store_objects(&self, id: Uuid, processed: &Processed) -> AppResult<()> {
         if let Some(s3) = &self.s3 {
             let uploads = processed.variants.iter().map(|variant| {
                 self.put_object(
@@ -147,8 +144,25 @@ impl MediaStore {
             });
             try_join_all(uploads).await?;
         }
+        Ok(())
+    }
 
-        let mut tx = self.db.begin().await?;
+    /// Records an image whose variants [`MediaStore::store_objects`] stored, in the caller's transaction: the `media` row, and the variants themselves when there is no S3.
+    pub async fn insert(
+        &self,
+        conn: &mut PgConnection,
+        id: Uuid,
+        processed: &Processed,
+        uploaded_by: Uuid,
+    ) -> AppResult<()> {
+        let largest = processed
+            .largest()
+            .ok_or_else(|| AppError::Internal(anyhow!("an upload produced no variants")))?;
+        let widths: Vec<i32> = processed
+            .variants
+            .iter()
+            .map(|v| i32::try_from(v.width).unwrap_or(i32::MAX))
+            .collect();
         sqlx::query(
             "INSERT INTO media (id, content_type, width, height, variants, bytes, storage, uploaded_by)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
@@ -158,10 +172,10 @@ impl MediaStore {
         .bind(i32::try_from(largest.width).unwrap_or(i32::MAX))
         .bind(i32::try_from(largest.height).unwrap_or(i32::MAX))
         .bind(&widths)
-        .bind(total)
+        .bind(stored_bytes(processed))
         .bind(self.storage())
         .bind(uploaded_by)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await?;
         if self.s3.is_none() {
             for variant in &processed.variants {
@@ -169,11 +183,46 @@ impl MediaStore {
                     .bind(id)
                     .bind(i32::try_from(variant.width).unwrap_or(i32::MAX))
                     .bind(&variant.bytes)
-                    .execute(&mut *tx)
+                    .execute(&mut *conn)
                     .await?;
             }
         }
-        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Deletes an image's files from S3. Images kept in Postgres need nothing here: their `media_blobs` rows go with the `media` row. An object that is already gone counts as deleted, so a cleanup that stopped halfway can run again.
+    pub async fn remove_objects(&self, id: Uuid, storage: &str, variants: &[i32]) -> AppResult<()> {
+        if storage != "s3" {
+            return Ok(());
+        }
+        let s3 = self.s3.as_ref().ok_or_else(|| {
+            AppError::Internal(anyhow!("media {id} is in S3, but S3 is not configured"))
+        })?;
+        let deletes = variants
+            .iter()
+            .map(|width| self.delete_object(s3, id, u32::try_from(*width).unwrap_or_default()));
+        try_join_all(deletes).await?;
+        Ok(())
+    }
+
+    async fn delete_object(&self, s3: &S3Backend, id: Uuid, width: u32) -> AppResult<()> {
+        let key = object_key(id, width);
+        let url = s3
+            .bucket
+            .delete_object(Some(&s3.credentials), &key)
+            .sign(PRESIGN_FOR);
+        let response = self
+            .upload_http
+            .delete(url)
+            .send()
+            .await
+            .with_context(|| format!("deleting {key}"))?;
+        if !response.status().is_success() && response.status() != reqwest::StatusCode::NOT_FOUND {
+            return Err(AppError::Internal(anyhow!(
+                "S3 answered {} when deleting {key}",
+                response.status()
+            )));
+        }
         Ok(())
     }
 
@@ -367,6 +416,15 @@ fn object_key(id: Uuid, width: u32) -> String {
     format!("media/{id}/{width}")
 }
 
+/// The bytes every variant of an upload takes, as `media.bytes` records them.
+pub fn stored_bytes(processed: &Processed) -> i64 {
+    processed
+        .variants
+        .iter()
+        .map(|v| i64::try_from(v.bytes.len()).unwrap_or(i64::MAX))
+        .sum()
+}
+
 /// The narrowest stored width at least `wanted` wide, or the widest when none is.
 pub fn choose_variant(stored: &[i32], wanted: Option<u32>) -> Option<i32> {
     let mut widths = stored.to_vec();
@@ -469,6 +527,10 @@ pub(crate) mod tests {
         if method == Method::PUT {
             s3.objects.lock().unwrap().insert(key, body);
             return StatusCode::OK.into_response();
+        }
+        if method == Method::DELETE {
+            s3.objects.lock().unwrap().remove(&key);
+            return StatusCode::NO_CONTENT.into_response();
         }
         let Some(object) = s3.objects.lock().unwrap().get(&key).cloned() else {
             return StatusCode::NOT_FOUND.into_response();
@@ -640,6 +702,28 @@ pub(crate) mod tests {
         // An image never looked up still needs the database.
         let error = store.open(Uuid::now_v7(), None).await.err().unwrap();
         assert_eq!(error.code(), "unavailable");
+    }
+
+    #[tokio::test]
+    async fn removing_an_image_deletes_its_objects() {
+        let isolated = testing::IsolatedDb::new().await;
+        let db = &isolated.pool;
+        let (store, id, processed) = stored_in_s3(db, Duration::ZERO, DOWNLOAD_STALL).await;
+        assert!(store.open(id, None).await.unwrap().is_some());
+        let widths: Vec<i32> = processed
+            .variants
+            .iter()
+            .map(|v| i32::try_from(v.width).unwrap())
+            .collect();
+        store.remove_objects(id, "s3", &widths).await.unwrap();
+        assert!(store.open(id, None).await.unwrap().is_none());
+        // Objects already gone count as removed, so a cleanup can run again.
+        store.remove_objects(id, "s3", &widths).await.unwrap();
+        // Images kept in Postgres have nothing to remove here.
+        store
+            .remove_objects(Uuid::now_v7(), "database", &[480])
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

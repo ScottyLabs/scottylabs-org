@@ -52,6 +52,9 @@
   let publishOpen = $state(false);
   let discardOpen = $state(false);
   let discarding = $state(false);
+  let takeOverOpen = $state(false);
+  let takingOver = $state(false);
+  let takeOverError = $state<string | null>(null);
   let notice = $state<UndoNotice | null>(null);
   let noticeCount = 0;
   let checking = $state(false);
@@ -209,6 +212,26 @@
     }
   }
 
+  // Admins can take the page from whoever is editing it, for an urgent fix (the service records it).
+  const canTakeOver = $derived(session.current.permissions.isAdmin);
+  const holderName = $derived(editor.lock !== null && !editor.lock.mine ? editor.lock.holder.name : "The person editing");
+
+  async function takeOver() {
+    takingOver = true;
+    takeOverError = null;
+    try {
+      await editor.takeOver();
+      takeOverOpen = false;
+      toasts.success("You are editing this page now.");
+      offerKeptChanges();
+    } catch (error) {
+      if (!isApiError(error)) throw error;
+      takeOverError = error.message;
+    } finally {
+      takingOver = false;
+    }
+  }
+
   async function checkAgain() {
     checking = true;
     try {
@@ -273,6 +296,9 @@
       {editor.readOnlyReason} You are looking at the latest saved draft.
       {#snippet actions()}
         <Button variant="outline" size="sm" loading={checking} onclick={checkAgain}>Check again</Button>
+        {#if canTakeOver}
+          <Button variant="outline" size="sm" onclick={() => (takeOverOpen = true)}>Take over editing</Button>
+        {/if}
       {/snippet}
     </Callout>
   {:else if !editor.canEdit}
@@ -353,6 +379,22 @@
   {#snippet footer()}
     <Button variant="outline" disabled={discarding} onclick={() => (discardOpen = false)}>Keep editing</Button>
     <Button variant="danger" loading={discarding} onclick={discard}>Discard changes</Button>
+  {/snippet}
+</Dialog>
+
+<Dialog
+  bind:open={takeOverOpen}
+  title="Take over editing?"
+  description={`${holderName} can no longer save their changes, and anything they have not saved yet is lost. You start from the latest saved draft. Admins can see that you took over.`}
+  dismissible={!takingOver}
+  size="sm"
+>
+  {#if takeOverError !== null}
+    <Callout tone="error" role="alert" title={takeOverError} />
+  {/if}
+  {#snippet footer()}
+    <Button variant="outline" disabled={takingOver} onclick={() => (takeOverOpen = false)}>Keep looking</Button>
+    <Button variant="danger" loading={takingOver} onclick={takeOver}>Take over editing</Button>
   {/snippet}
 </Dialog>
 

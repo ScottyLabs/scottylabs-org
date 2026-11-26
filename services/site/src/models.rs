@@ -222,6 +222,8 @@ impl ImageRef {
                 "Keep the image description under {MAX_ALT_LEN} characters."
             ));
         }
+        // The one-line rules, as for the description sent with an upload: screen readers and link previews read it aloud as it is.
+        check_line(&self.alt, 0, MAX_ALT_LEN, "the image description")?;
         if require_alt && self.alt.trim().is_empty() {
             return Err("Describe the image for people using screen readers.".into());
         }
@@ -363,13 +365,28 @@ pub fn check_line(raw: &str, min: usize, max: usize, label: &str) -> Result<Stri
     Ok(value)
 }
 
-/// Characters a one-line field refuses besides line breaks: control characters such as NUL and tab, the Unicode line and paragraph separators, and the bidirectional embeddings, overrides and isolates, which can make text read backwards or spoof what it says.
+/// Characters a one-line field refuses besides line breaks: control characters such as NUL and tab, the Unicode line and paragraph separators, the bidirectional embeddings, overrides and isolates, which can make text read backwards or spoof what it says, and invisible characters that split words without showing (zero width space, word joiner, the byte order mark and the Mongolian vowel separator). Joiners inside emoji and the directional marks stay, since real names and emoji use them.
 fn is_hidden_control(c: char) -> bool {
     c.is_control()
+        || is_direction_control(c)
         || matches!(
             c,
-            '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+            '\u{2028}' | '\u{2029}' | '\u{200B}' | '\u{2060}' | '\u{FEFF}' | '\u{180E}'
         )
+}
+
+/// The bidirectional embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069). Rich text refuses them too: inside a link they make the text that shows differ from what it says.
+pub fn is_direction_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
+}
+
+/// Rich text without bidirectional embeddings, overrides and isolates, for stored text read back from before they were refused.
+pub fn without_direction_controls(text: &str) -> String {
+    if text.chars().any(is_direction_control) {
+        text.chars().filter(|c| !is_direction_control(*c)).collect()
+    } else {
+        text.to_owned()
+    }
 }
 
 #[cfg(test)]
@@ -424,10 +441,51 @@ mod tests {
         }
         let no_alt = ImageRef {
             alt: " ".into(),
-            ..ok
+            ..ok.clone()
         };
         assert!(no_alt.check(false).is_ok());
         assert!(no_alt.check(true).is_err());
+    }
+
+    #[test]
+    fn alt_text_follows_the_one_line_rules() {
+        let image = |alt: &str| ImageRef {
+            src: "/media/0190e0a4-7c1b-7d2e-9f00-000000000001".into(),
+            alt: alt.into(),
+            width: None,
+            height: None,
+        };
+        assert_eq!(
+            image("line1\nline2").check(false),
+            Err("Keep the image description on one line.".to_owned())
+        );
+        for hidden in [
+            "\t", "\u{7}", "\u{2028}", "\u{202E}", "\u{2066}", "\u{200B}", "\u{FEFF}",
+        ] {
+            assert_eq!(
+                image(&format!("Students{hidden} at a table")).check(false),
+                Err("Remove the special characters from the image description.".to_owned()),
+                "{hidden:?}"
+            );
+        }
+        assert!(
+            image("Students at a table \u{1F469}\u{200D}\u{1F4BB}")
+                .check(true)
+                .is_ok()
+        );
+        assert!(image(&"x".repeat(MAX_ALT_LEN + 1)).check(false).is_err());
+    }
+
+    #[test]
+    fn direction_controls_are_found_and_removed() {
+        assert!(is_direction_control('\u{202E}'));
+        assert!(is_direction_control('\u{2069}'));
+        assert!(!is_direction_control('\u{200F}'));
+        assert_eq!(
+            without_direction_controls("<a>scottylabs.org\u{202E}</a> \u{2067}x\u{2069}"),
+            "<a>scottylabs.org</a> x"
+        );
+        assert_eq!(without_direction_controls("plain"), "plain");
     }
 
     #[test]
@@ -501,7 +559,10 @@ mod tests {
         assert_eq!(check_line("  hi  ", 1, 10, "a name").unwrap(), "hi");
         assert!(check_line("", 1, 10, "a name").is_err());
         assert!(check_line("a\nb", 1, 10, "a name").is_err());
-        for hidden in ["\0", "\t", "\u{7}", "\u{2028}", "\u{202E}", "\u{2067}"] {
+        for hidden in [
+            "\0", "\t", "\u{7}", "\u{2028}", "\u{202E}", "\u{2067}", "\u{200B}", "\u{2060}",
+            "\u{FEFF}", "\u{180E}",
+        ] {
             assert_eq!(
                 check_line(&format!("a{hidden}b"), 1, 10, "the message"),
                 Err("Remove the special characters from the message.".to_owned()),

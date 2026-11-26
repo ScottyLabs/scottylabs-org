@@ -531,22 +531,45 @@ async fn search_matches_names_and_ids_literally(db: PgPool) {
         .await;
     assert_eq!(res.status, StatusCode::OK);
     assert_eq!(ids(&res), ["spchoksh", "sarah2", "asara"]);
-    assert_eq!(res.json["people"][0]["hasSignedIn"], true);
+    // Directors get what adding a lead needs: no sign-in history.
+    assert!(
+        res.json["people"][0].get("hasSignedIn").is_none(),
+        "{}",
+        res.json
+    );
+    assert!(res.json["people"][0].get("email").is_none());
 
     assert_eq!(
-        ids(&Req::get("/api/people/search?q=_")
+        ids(&Req::get("/api/people/search?q=r_s")
             .user(&director)
             .send(&app)
             .await),
         ["under_score"]
     );
     assert_eq!(
-        ids(&Req::get("/api/people/search?q=%25")
+        ids(&Req::get("/api/people/search?q=0%25")
             .user(&director)
             .send(&app)
             .await),
         ["percent"]
     );
+    // One character finds nobody, so nobody can list everyone a letter at a time.
+    for short in ["s", "_", "%25", "%20s%20"] {
+        assert_eq!(
+            ids(&Req::get(&format!("/api/people/search?q={short}"))
+                .user(&director)
+                .send(&app)
+                .await),
+            Vec::<String>::new(),
+            "{short}"
+        );
+    }
+    let admin = UserSpec::new("sradmin").admin().create(&db).await;
+    let res = Req::get("/api/people/search?q=sara")
+        .user(&admin)
+        .send(&app)
+        .await;
+    assert_eq!(res.json["people"][0]["hasSignedIn"], true);
     assert_eq!(
         ids(&Req::get("/api/people/search?q=CHOKSHI")
             .user(&director)
@@ -592,4 +615,239 @@ async fn search_matches_names_and_ids_literally(db: PgPool) {
 fn like_patterns_are_escaped() {
     assert_eq!(escape_like("a_b%c\\d"), "a\\_b\\%c\\\\d");
     assert_eq!(escape_like("plain"), "plain");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn directors_add_only_people_without_a_role(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let director = UserSpec::new("evanfost")
+        .director(Committee::Events)
+        .create(&db)
+        .await;
+    let admin = UserSpec::new("tkanz")
+        .name("Thomas Kanz")
+        .admin()
+        .create(&db)
+        .await;
+    UserSpec::new("techlead")
+        .lead(Committee::Tech, true)
+        .create(&db)
+        .await;
+    let member = UserSpec::new("newmember")
+        .name("New Member")
+        .create(&db)
+        .await;
+
+    // An admin, or anyone with a role elsewhere, needs an admin to be given a role here.
+    let res = add(&app, &director, lead_input("tkanz", "events", &[])).await;
+    assert_eq!(res.status, StatusCode::FORBIDDEN, "{}", res.text());
+    assert_eq!(
+        res.message(),
+        "Thomas Kanz already has a role in the portal. Only an admin can give them another one."
+    );
+    assert!(res.json.get("person").is_none());
+    let res = add(&app, &director, lead_input("techlead", "events", &[])).await;
+    assert_eq!(res.status, StatusCode::FORBIDDEN);
+    let roles: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM role_assignments WHERE committee = 'events'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(roles, 1);
+
+    // Someone without a role can be added, and the answer says nothing of their sign-in history or email.
+    sqlx::query("UPDATE users SET email = 'nm@andrew.cmu.edu', last_seen_at = now() - interval '3 days' WHERE id = $1")
+        .bind(member.id)
+        .execute(&db)
+        .await
+        .unwrap();
+    let res = add(&app, &director, lead_input("newmember", "events", &[])).await;
+    assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+    assert!(res.json["person"]["email"].is_null());
+    assert!(res.json["person"]["lastSeenAt"].is_null());
+    assert_eq!(res.json["person"]["hasSignedIn"], false);
+
+    // The director's list shows the same, and only roles in their committee.
+    let list = Req::get("/api/people").user(&director).send(&app).await;
+    let row = list.json["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["person"]["andrewId"] == "newmember")
+        .unwrap()
+        .clone();
+    assert!(row["person"]["email"].is_null());
+    assert_eq!(row["person"]["hasSignedIn"], false);
+    assert!(list.json.get("governance").is_none());
+
+    // Once they use the role, the director can tell.
+    sqlx::query("UPDATE users SET last_seen_at = now() + interval '1 second' WHERE id = $1")
+        .bind(member.id)
+        .execute(&db)
+        .await
+        .unwrap();
+    let list = Req::get("/api/people").user(&director).send(&app).await;
+    let signed_in = list.json["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["person"]["andrewId"] == "newmember" && p["person"]["hasSignedIn"] == true);
+    assert!(signed_in, "{}", list.json);
+
+    // Admins still see everything, and can give the admin a lead role.
+    let res = add(&app, &admin, lead_input("tkanz", "events", &[])).await;
+    assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+    let all = Req::get("/api/people").user(&admin).send(&app).await;
+    let member_row = all.json["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["person"]["andrewId"] == "newmember")
+        .unwrap()
+        .clone();
+    assert_eq!(member_row["person"]["email"], "nm@andrew.cmu.edu");
+    assert!(member_row["person"]["lastSeenAt"].is_string());
+    // A director sees an admin who is also their lead only as that lead.
+    let list = Req::get("/api/people").user(&director).send(&app).await;
+    let thomas = list.json["people"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["person"]["andrewId"] == "tkanz")
+        .unwrap()
+        .clone();
+    assert_eq!(thomas["roles"].as_array().unwrap().len(), 1);
+    assert_eq!(thomas["roles"][0]["role"], "lead");
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn role_changes_keep_before_and_after_and_who_changed_them(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let nova = testing::project(&db, Committee::Events, "nova").await;
+    let director = UserSpec::new("evanfost")
+        .director(Committee::Events)
+        .create(&db)
+        .await;
+    let admin = UserSpec::new("tkanz").admin().create(&db).await;
+    let res = add(&app, &director, lead_input("helenf", "events", &[nova])).await;
+    assert_eq!(res.status, StatusCode::CREATED, "{}", res.text());
+    let id = assignment_id(&db, "helenf", Some(Committee::Events)).await;
+    let res = Req::patch(&format!("/api/people/assignments/{id}"))
+        .user(&director)
+        .json(json!({ "canPostTicker": true, "projectIds": [] }))
+        .send(&app)
+        .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    let role = &res.json["roles"][0];
+    assert_eq!(role["changedBy"]["andrewId"], "evanfost");
+    assert!(role["changedAt"].is_string());
+    // Before the first governance sync nobody knows whether governance lists them.
+    assert!(role["governanceListed"].is_null());
+    let res = Req::delete(&format!("/api/people/assignments/{id}"))
+        .user(&admin)
+        .send(&app)
+        .await;
+    assert_eq!(res.status, StatusCode::NO_CONTENT);
+
+    let details: Vec<(String, Value)> = sqlx::query_as(
+        "SELECT action, details FROM audit_log WHERE subject_type = 'person' ORDER BY created_at, id",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    let lead = |ticker: bool, projects: Vec<Uuid>| {
+        json!({
+            "andrewId": "helenf", "role": "lead", "committee": "events",
+            "canPostTicker": ticker, "projectIds": projects,
+        })
+    };
+    assert_eq!(
+        details,
+        [
+            (
+                "role.add".to_owned(),
+                json!({ "before": null, "after": lead(false, vec![nova]) })
+            ),
+            (
+                "role.update".to_owned(),
+                json!({ "before": lead(false, vec![nova]), "after": lead(true, vec![]) })
+            ),
+            (
+                "role.remove".to_owned(),
+                json!({ "before": lead(true, vec![]), "after": null })
+            ),
+        ]
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn writes_use_the_roles_the_viewer_has_now(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let director = UserSpec::new("evanfost")
+        .director(Committee::Events)
+        .create(&db)
+        .await;
+    // The request carries the session; the role went away after it started (the extractor is per request, so remove it first and send).
+    sqlx::query("DELETE FROM role_assignments WHERE user_id = $1")
+        .bind(director.id)
+        .execute(&db)
+        .await
+        .unwrap();
+    let res = add(&app, &director, lead_input("helenf", "events", &[])).await;
+    assert_eq!(res.status, StatusCode::FORBIDDEN);
+
+    // In a transaction, the viewer's roles are read again and stay locked until it ends.
+    let lead = UserSpec::new("sara")
+        .lead(Committee::Events, true)
+        .create(&db)
+        .await;
+    let stale = crate::permissions::tests::viewer(
+        &[(Role::Director, Some(Committee::Events), true)],
+        vec![],
+    );
+    let stale = Viewer {
+        user_id: lead.id,
+        ..stale
+    };
+    let mut tx = db.begin().await.unwrap();
+    let fresh = permissions::recheck(&mut tx, &stale).await.unwrap();
+    assert!(!permissions::can_manage_role(
+        &fresh,
+        Role::Lead,
+        Some(Committee::Events)
+    ));
+    // Rechecking only narrows: the lead role came after the request was loaded, so it does not count for this write.
+    assert!(fresh.roles.is_empty());
+    let mut other = db.acquire().await.unwrap();
+    sqlx::query("SET lock_timeout = '300ms'")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    let removal = sqlx::query("DELETE FROM role_assignments WHERE user_id = $1")
+        .bind(lead.id)
+        .execute(&mut *other)
+        .await;
+    assert!(removal.is_err(), "the removal waits for the write");
+    tx.rollback().await.unwrap();
+
+    // A Keycloak-group admin role the loader left out (not confirmed for 24 hours) does not come back inside a write.
+    sqlx::query(
+        "INSERT INTO role_assignments (id, user_id, role, committee, can_post_ticker, source)
+         VALUES ($1, $2, 'admin', NULL, true, 'keycloak_group')",
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(lead.id)
+    .execute(&db)
+    .await
+    .unwrap();
+    let loaded = Viewer {
+        user_id: lead.id,
+        ..crate::permissions::tests::viewer(&[(Role::Lead, Some(Committee::Events), true)], vec![])
+    };
+    let mut tx = db.begin().await.unwrap();
+    let fresh = permissions::recheck(&mut tx, &loaded).await.unwrap();
+    tx.rollback().await.unwrap();
+    assert!(!permissions::is_admin(&fresh));
+    assert_eq!(fresh.roles.len(), 1);
+    assert_eq!(fresh.roles[0].role, Role::Lead);
 }

@@ -18,7 +18,7 @@ import { NO_PROBLEMS, type PageProblems, problemsFor } from "../errors.ts";
 import { History } from "../history.ts";
 import { type FreeSlot, moveBlock, placeInSlot } from "../layout.ts";
 import type { CommitteeInfo } from "../render/types.ts";
-import { loadEditor, releaseLock, saveDraft, takeLock } from "../api.ts";
+import { loadEditor, releaseLock, saveDraft, takeLock, takeOverLock } from "../api.ts";
 import { HEARTBEAT_MS, LockClock } from "./lock-clock.ts";
 
 /** Saved within this long after the last change, and never later than MAX_WAIT_MS after the first. */
@@ -398,6 +398,28 @@ export class PageEditor {
   /** Tries again to edit a page someone else was editing, with their latest draft. */
   retry(): Promise<void> {
     return this.start();
+  }
+
+  /**
+   * Admins only: takes the page from whoever is editing it, starting from their latest saved
+   * draft. Their editor turns read only at its next save or heartbeat. Throws the service's error.
+   */
+  async takeOver(): Promise<void> {
+    if (!this.canEdit || this.#destroyed) return;
+    const lock = await takeOverLock(this.slug);
+    this.#lockClock.claimed(Date.now());
+    const latest = await loadEditor(this.slug);
+    if (this.#destroyed) {
+      void this.#releaseQuietly();
+      return;
+    }
+    this.#apply(latest);
+    this.lock = lock;
+    this.readOnlyReason = null;
+    this.saveState = "saved";
+    this.#heartbeat ??= setInterval(() => {
+      if (this.#lockClock.due) void this.#claim();
+    }, HEARTBEAT_MS);
   }
 
   /** Loads the latest draft from the service, dropping the history. Only while nothing waits to be saved. */

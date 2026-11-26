@@ -15,9 +15,10 @@ use sqlx::types::Json as JsonColumn;
 use sqlx::{FromRow, PgConnection, PgExecutor};
 use uuid::Uuid;
 
-use crate::blocks::CommitteePageDoc;
+use crate::blocks::{BlockContent, CommitteePageDoc};
 use crate::error::{AppError, AppResult};
-use crate::models::Committee;
+use crate::models::{Committee, without_direction_controls};
+use crate::richtext;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -30,6 +31,10 @@ pub fn router() -> Router<AppState> {
             "/committee-pages/{slug}/lock",
             post(editor::lock).delete(editor::unlock),
         )
+        .route(
+            "/committee-pages/{slug}/lock/take-over",
+            post(editor::take_over),
+        )
         .route("/committee-pages/{slug}/draft", put(editor::save_draft))
         .route("/committee-pages/{slug}/changes", get(editor::changes))
         .route("/committee-pages/{slug}/publish", post(editor::publish))
@@ -38,6 +43,16 @@ pub fn router() -> Router<AppState> {
 
 /// A lock older than this without a heartbeat is free for anyone to take.
 pub const LOCK_MINUTES: i32 = 5;
+
+/// A stored page as it is sent to a browser: text bodies sanitized again and without bidirectional controls, so a bad row, from before a rule existed or written by hand, never reaches the editor or a visitor as markup. Saving cleans on the way in; this is the second line, as approvals clean the snapshots they show.
+fn cleaned_for_reading(mut doc: CommitteePageDoc) -> CommitteePageDoc {
+    for block in &mut doc.blocks {
+        if let BlockContent::Text(text) = &mut block.content {
+            text.body = without_direction_controls(&richtext::sanitize(&text.body));
+        }
+    }
+    doc
+}
 
 fn committee_from_slug(slug: &str) -> AppResult<Committee> {
     Committee::from_slug(slug).ok_or_else(|| AppError::not_found("committee page"))

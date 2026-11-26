@@ -14,6 +14,7 @@ mod media;
 mod models;
 mod permissions;
 mod ratelimit;
+mod retention;
 mod richtext;
 mod routes;
 mod seed;
@@ -62,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
         let state = state.clone();
         async move {
             db::prepare_until_ready(&options, &state.config, &state.database).await;
+            // Deletes expired sessions, old announcements, unused uploads and audit entries past retention, hourly.
+            retention::spawn(state.clone());
             if state.config.governance_sync {
                 // After seeding, so a slow or failing governance fetch never delays startup.
                 routes::spawn_governance_sync(state);

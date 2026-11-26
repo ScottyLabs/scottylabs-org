@@ -228,7 +228,7 @@ mod tests {
         let full = Req::get("/api/activity").user(&director).send(&app).await;
         assert!(seen(&full, waiting) && seen(&full, project));
 
-        // Once it is live, the announcement is for everyone to see.
+        // Once it is live, its approval is for everyone to see, but what was sent while it waited stays with its author.
         let approval: uuid::Uuid =
             sqlx::query_scalar("SELECT id FROM approvals WHERE status = 'waiting'")
                 .fetch_one(&db)
@@ -240,11 +240,169 @@ mod tests {
             .await;
         assert_eq!(approved.status, StatusCode::OK, "{}", approved.json);
         let other = Req::get("/api/activity").user(&newcomer).send(&app).await;
+        let live =
+            "Approved \u{201c}Private draft about the surprise speaker\u{201d} for the ticker";
         assert!(
-            seen(&other, waiting) && !seen(&other, project),
+            seen(&other, live) && !seen(&other, waiting) && !seen(&other, project),
             "{}",
             other.json
         );
+        let own = Req::get("/api/activity").user(&sara).send(&app).await;
+        assert!(seen(&own, waiting) && seen(&own, live));
+    }
+
+    /// A version the director sent back and the lead rewrote never reaches other leads, even after the rewrite goes live (AUTHZ-2).
+    #[sqlx::test(migrations = "./migrations")]
+    async fn rewritten_submissions_stay_private_after_going_live(db: PgPool) {
+        let app = testing::app(db.clone()).await;
+        let director = UserSpec::new("evdir")
+            .director(Committee::Events)
+            .create(&db)
+            .await;
+        let sara = UserSpec::new("sara")
+            .lead(Committee::Events, true)
+            .create(&db)
+            .await;
+        let newcomer = UserSpec::new("newcomer")
+            .lead(Committee::Events, false)
+            .create(&db)
+            .await;
+
+        let expires = chrono::Utc::now() + chrono::TimeDelta::days(5);
+        let sent = Req::post("/api/announcements")
+            .user(&sara)
+            .json(serde_json::json!({
+                "kind": "event", "committee": "events",
+                "message": "SECRET v1 sponsor pulled out", "expiresAt": expires,
+            }))
+            .send(&app)
+            .await;
+        assert_eq!(sent.status, StatusCode::CREATED, "{}", sent.json);
+        let id = sent.json["announcement"]["id"].as_str().unwrap().to_owned();
+        let waiting = |db: PgPool| async move {
+            sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM approvals WHERE status = 'waiting'")
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        };
+        let first = waiting(db.clone()).await;
+        let back = Req::post(&format!("/api/approvals/{first}/send-back"))
+            .user(&director)
+            .json(serde_json::json!({ "note": "Too sensitive" }))
+            .send(&app)
+            .await;
+        assert_eq!(back.status, StatusCode::OK, "{}", back.json);
+        let edited = Req::patch(&format!("/api/announcements/{id}"))
+            .user(&sara)
+            .json(serde_json::json!({ "message": "Volunteer shifts posted" }))
+            .send(&app)
+            .await;
+        assert_eq!(edited.status, StatusCode::OK, "{}", edited.json);
+        let second = waiting(db.clone()).await;
+        let approved = Req::post(&format!("/api/approvals/{second}/approve"))
+            .user(&director)
+            .send(&app)
+            .await;
+        assert_eq!(approved.status, StatusCode::OK, "{}", approved.json);
+
+        let mentions_secret =
+            |res: &testing::Res| summaries(res).iter().any(|s| s.contains("SECRET"));
+        let other = Req::get("/api/activity?limit=50")
+            .user(&newcomer)
+            .send(&app)
+            .await;
+        assert!(!mentions_secret(&other), "{}", other.json);
+        assert!(
+            summaries(&other).contains(
+                &"Approved \u{201c}Volunteer shifts posted\u{201d} for the ticker".to_owned()
+            ),
+            "{}",
+            other.json
+        );
+        let overview = Req::get("/api/overview").user(&newcomer).send(&app).await;
+        assert!(!overview.text().contains("SECRET"), "{}", overview.json);
+
+        // The author and the director still have the whole story.
+        for user in [&sara, &director] {
+            let full = Req::get("/api/activity?limit=50")
+                .user(user)
+                .send(&app)
+                .await;
+            assert!(mentions_secret(&full), "{}", full.json);
+        }
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn leads_see_role_entries_only_about_themselves(db: PgPool) {
+        let app = testing::app(db.clone()).await;
+        let director = UserSpec::new("evdir")
+            .director(Committee::Events)
+            .create(&db)
+            .await;
+        let sara = UserSpec::new("sara")
+            .lead(Committee::Events, true)
+            .create(&db)
+            .await;
+        for andrew_id in ["helenf"] {
+            let added = Req::post("/api/people")
+                .user(&director)
+                .json(serde_json::json!({
+                    "andrewId": andrew_id, "role": "lead", "committee": "events",
+                    "canPostTicker": false, "projectIds": [],
+                }))
+                .send(&app)
+                .await;
+            assert_eq!(added.status, StatusCode::CREATED, "{}", added.json);
+        }
+        let mut conn = db.acquire().await.unwrap();
+        record(
+            &mut conn,
+            Entry {
+                actor: Some(director.id),
+                action: "role.update",
+                subject_type: subject::PERSON,
+                subject_id: Some(sara.id.to_string()),
+                committee: Some(Committee::Events),
+                summary: "Updated what Sara can do as a lead in Events".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let lead_view = Req::get("/api/activity").user(&sara).send(&app).await;
+        assert_eq!(
+            summaries(&lead_view),
+            ["Updated what Sara can do as a lead in Events"]
+        );
+        let director_view = Req::get("/api/activity").user(&director).send(&app).await;
+        assert_eq!(summaries(&director_view).len(), 2);
+    }
+
+    #[sqlx::test(migrations = "./migrations")]
+    async fn uploads_stay_out_of_recent_activity(db: PgPool) {
+        let app = testing::app(db.clone()).await;
+        let admin = UserSpec::new("actadmin").admin().create(&db).await;
+        let mut conn = db.acquire().await.unwrap();
+        for (action, summary) in [
+            ("media.upload", "Uploaded an image"),
+            ("media.delete", "Deleted an uploaded image"),
+        ] {
+            record(
+                &mut conn,
+                Entry {
+                    actor: Some(admin.id),
+                    action,
+                    subject_type: subject::MEDIA,
+                    subject_id: None,
+                    committee: None,
+                    summary: summary.into(),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let res = Req::get("/api/activity").user(&admin).send(&app).await;
+        assert_eq!(summaries(&res), ["Deleted an uploaded image"]);
+        assert!(res.json["entries"][0]["href"].is_null());
     }
 
     #[sqlx::test(migrations = "./migrations")]

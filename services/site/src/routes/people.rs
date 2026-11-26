@@ -6,6 +6,8 @@ mod governance;
 
 pub use governance::spawn_sync as spawn_governance_sync;
 
+use std::collections::HashMap;
+
 use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -13,6 +15,7 @@ use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::json;
 use sqlx::{FromRow, PgConnection};
 use uuid::Uuid;
 
@@ -45,8 +48,11 @@ pub fn router() -> Router<AppState> {
 struct PersonDetail {
     #[serde(flatten)]
     person: PersonRef,
+    /// Null unless the viewer is an admin.
     email: Option<String>,
+    /// For admins, whether the person ever signed in; for directors, whether they signed in since getting their role in the director's committee.
     has_signed_in: bool,
+    /// Null unless the viewer is an admin.
     last_seen_at: Option<DateTime<Utc>>,
 }
 
@@ -54,7 +60,48 @@ struct PersonDetail {
 #[derive(Serialize)]
 pub struct PersonRow {
     person: PersonDetail,
-    roles: Vec<RoleAssignmentDto>,
+    roles: Vec<PeopleRole>,
+}
+
+/// A role as the People page shows it: `RoleAssignment` and what admins need to review roles governance does not list. Mirrors `PeopleRoleAssignment` in types.ts.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PeopleRole {
+    #[serde(flatten)]
+    assignment: RoleAssignmentDto,
+    /// When the role last changed, and who changed it (null for the governance sync and sign-in).
+    changed_at: DateTime<Utc>,
+    changed_by: Option<PersonRef>,
+    /// Whether governance listed this person in this role at the last successful sync: a director as their committee's director, a lead as one of its heads. Null for admins, Tech leads (governance's team files, not synced) and before the first sync.
+    governance_listed: Option<bool>,
+}
+
+#[derive(FromRow)]
+struct RoleReview {
+    id: Uuid,
+    changed_at: DateTime<Utc>,
+    changer_id: Option<Uuid>,
+    changer_andrew_id: Option<String>,
+    changer_name: Option<String>,
+    governance_listed: Option<bool>,
+}
+
+/// What a viewer may learn about the people they see.
+enum Disclosure {
+    /// Admins: everything.
+    Full,
+    /// Directors: roles in the committees they direct, and sign-ins only since those roles were given.
+    Committees(Vec<Committee>),
+}
+
+impl Disclosure {
+    fn of(viewer: &Viewer) -> Self {
+        if permissions::sees_contact_details(viewer) {
+            Self::Full
+        } else {
+            Self::Committees(permissions::director_of(viewer))
+        }
+    }
 }
 
 #[derive(FromRow)]
@@ -70,31 +117,111 @@ struct UserRow {
 const USER_COLUMNS: &str = "u.id, u.andrew_id, u.name, u.email, u.last_seen_at,
      (u.keycloak_sub IS NOT NULL OR u.last_seen_at IS NOT NULL) AS has_signed_in";
 
-async fn person_rows(conn: &mut PgConnection, users: Vec<UserRow>) -> AppResult<Vec<PersonRow>> {
+/// When each role last changed and whether governance lists it, keyed by assignment id.
+async fn role_reviews(
+    conn: &mut PgConnection,
+    user_ids: &[Uuid],
+) -> AppResult<HashMap<Uuid, RoleReview>> {
+    let rows = sqlx::query_as::<_, RoleReview>(
+        "WITH synced AS (
+             SELECT EXISTS (
+                 SELECT 1 FROM governance_sync_status WHERE last_success_at IS NOT NULL
+             ) AS done
+         )
+         SELECT r.id, r.updated_at AS changed_at,
+                c.id AS changer_id, c.andrew_id AS changer_andrew_id, c.name AS changer_name,
+                CASE
+                    WHEN r.role = 'admin' OR NOT synced.done THEN NULL
+                    WHEN r.role = 'director' THEN EXISTS (
+                        SELECT 1 FROM governance_directors g
+                        WHERE g.committee = r.committee AND g.user_id = r.user_id)
+                    WHEN r.committee = 'tech' THEN NULL
+                    ELSE EXISTS (
+                        SELECT 1 FROM governance_heads g
+                        WHERE g.committee = r.committee AND g.user_id = r.user_id)
+                END AS governance_listed
+         FROM role_assignments r
+         CROSS JOIN synced
+         LEFT JOIN users c ON c.id = r.updated_by
+         WHERE r.user_id = ANY($1)",
+    )
+    .bind(user_ids)
+    .fetch_all(conn)
+    .await?;
+    Ok(rows.into_iter().map(|row| (row.id, row)).collect())
+}
+
+async fn person_rows(
+    conn: &mut PgConnection,
+    viewer: &Viewer,
+    users: Vec<UserRow>,
+) -> AppResult<Vec<PersonRow>> {
+    let disclosure = Disclosure::of(viewer);
     let ids: Vec<Uuid> = users.iter().map(|u| u.id).collect();
     let mut roles = assignments_for(&mut *conn, &ids).await?;
+    let mut reviews = role_reviews(conn, &ids).await?;
     Ok(users
         .into_iter()
-        .map(|user| PersonRow {
-            roles: roles.remove(&user.id).unwrap_or_default(),
-            person: PersonDetail {
-                person: PersonRef::new(user.id, user.andrew_id, user.name),
-                email: user.email,
-                has_signed_in: user.has_signed_in,
-                last_seen_at: user.last_seen_at,
-            },
+        .map(|user| {
+            let mut assignments = roles.remove(&user.id).unwrap_or_default();
+            if let Disclosure::Committees(committees) = &disclosure {
+                assignments.retain(|role| role.committee.is_some_and(|c| committees.contains(&c)));
+            }
+            let (email, last_seen_at, has_signed_in) = match &disclosure {
+                Disclosure::Full => (user.email, user.last_seen_at, user.has_signed_in),
+                // Only what managing the role needs: whether they have used it yet.
+                Disclosure::Committees(_) => (
+                    None,
+                    None,
+                    user.last_seen_at.is_some_and(|seen| {
+                        assignments.iter().any(|role| seen >= role.appointed_at)
+                    }),
+                ),
+            };
+            PersonRow {
+                roles: assignments
+                    .into_iter()
+                    .map(|assignment| {
+                        let review = reviews.remove(&assignment.id);
+                        PeopleRole {
+                            changed_at: review
+                                .as_ref()
+                                .map_or(assignment.appointed_at, |r| r.changed_at),
+                            changed_by: review.as_ref().and_then(|r| {
+                                Some(PersonRef::new(
+                                    r.changer_id?,
+                                    r.changer_andrew_id.clone()?,
+                                    r.changer_name.clone().unwrap_or_default(),
+                                ))
+                            }),
+                            governance_listed: review.and_then(|r| r.governance_listed),
+                            assignment,
+                        }
+                    })
+                    .collect(),
+                person: PersonDetail {
+                    person: PersonRef::new(user.id, user.andrew_id, user.name),
+                    email,
+                    has_signed_in,
+                    last_seen_at,
+                },
+            }
         })
         .collect())
 }
 
-async fn person_row(conn: &mut PgConnection, user_id: Uuid) -> AppResult<PersonRow> {
+async fn person_row(
+    conn: &mut PgConnection,
+    viewer: &Viewer,
+    user_id: Uuid,
+) -> AppResult<PersonRow> {
     let user = sqlx::query_as::<_, UserRow>(&format!(
         "SELECT {USER_COLUMNS} FROM users u WHERE u.id = $1"
     ))
     .bind(user_id)
     .fetch_one(&mut *conn)
     .await?;
-    person_rows(conn, vec![user])
+    person_rows(conn, viewer, vec![user])
         .await?
         .pop()
         .ok_or_else(|| AppError::not_found("person"))
@@ -106,6 +233,9 @@ async fn person_row(conn: &mut PgConnection, user_id: Uuid) -> AppResult<PersonR
 #[derive(Serialize)]
 struct PeopleResponse {
     people: Vec<PersonRow>,
+    /// The last governance sync, for admins only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    governance: Option<governance::SyncStatus>,
 }
 
 /// The committees the list covers, or `None` for everyone with a role.
@@ -154,8 +284,15 @@ async fn list(
     .bind(slugs)
     .fetch_all(&mut *conn)
     .await?;
-    let people = person_rows(&mut conn, users).await?;
-    Ok(no_store(Json(PeopleResponse { people }).into_response()))
+    let people = person_rows(&mut conn, &viewer, users).await?;
+    let governance = if permissions::can_sync_governance(&viewer) {
+        Some(governance::status(&mut conn).await?)
+    } else {
+        None
+    };
+    Ok(no_store(
+        Json(PeopleResponse { people, governance }).into_response(),
+    ))
 }
 
 #[derive(Serialize)]
@@ -163,7 +300,9 @@ async fn list(
 struct SearchResult {
     #[serde(flatten)]
     person: PersonRef,
-    has_signed_in: bool,
+    /// For admins only. Directors get what adding a lead needs: the name and Andrew ID.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    has_signed_in: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -173,6 +312,8 @@ struct PeopleSearchResponse {
 
 const SEARCH_LIMIT: i64 = 10;
 const MAX_QUERY_LEN: usize = 64;
+/// Shorter searches answer with no one, so nobody can list everyone a letter at a time.
+const MIN_QUERY_LEN: usize = 2;
 
 /// Escapes `%`, `_` and the escape character itself for `LIKE ... ESCAPE '\'`.
 pub fn escape_like(text: &str) -> String {
@@ -198,10 +339,11 @@ async fn search(
     }
     let q: String = query_param(query.as_deref(), "q")
         .unwrap_or_default()
+        .trim()
         .chars()
         .take(MAX_QUERY_LEN)
         .collect();
-    let people = if q.is_empty() {
+    let people = if q.chars().count() < MIN_QUERY_LEN {
         Vec::new()
     } else {
         let escaped = escape_like(&q.to_lowercase());
@@ -220,11 +362,12 @@ async fn search(
         .fetch_all(&state.db)
         .await?
     };
+    let full = permissions::sees_contact_details(&viewer);
     let people = people
         .into_iter()
         .map(|user| SearchResult {
             person: PersonRef::new(user.id, user.andrew_id, user.name),
-            has_signed_in: user.has_signed_in,
+            has_signed_in: full.then_some(user.has_signed_in),
         })
         .collect();
     Ok(no_store(
@@ -439,6 +582,7 @@ async fn clear_lead_projects(
     Ok(())
 }
 
+/// Writes a role change to the audit log, with the role before and after it as `details`.
 async fn record(
     conn: &mut PgConnection,
     viewer: Option<&Viewer>,
@@ -446,8 +590,9 @@ async fn record(
     user_id: Uuid,
     committee: Option<Committee>,
     summary: String,
+    details: serde_json::Value,
 ) -> AppResult<()> {
-    audit::record(
+    audit::record_details(
         conn,
         audit::Entry {
             actor: viewer.map(|v| v.user_id),
@@ -457,8 +602,43 @@ async fn record(
             committee,
             summary,
         },
+        details,
     )
     .await
+}
+
+/// One role as the audit log's `details` keep it. `projects` is `None` for roles that have none.
+fn role_state(
+    andrew_id: &str,
+    role: Role,
+    committee: Option<Committee>,
+    can_post_ticker: bool,
+    projects: Option<&[Uuid]>,
+) -> serde_json::Value {
+    json!({
+        "andrewId": andrew_id,
+        "role": role,
+        "committee": committee,
+        "canPostTicker": can_post_ticker,
+        "projectIds": projects,
+    })
+}
+
+/// A lead's projects in one committee, for the audit log.
+async fn lead_project_ids(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    committee: Committee,
+) -> AppResult<Vec<Uuid>> {
+    let ids = sqlx::query_scalar(
+        "SELECT pe.project_id FROM project_editors pe JOIN projects p ON p.id = pe.project_id
+         WHERE pe.user_id = $1 AND p.committee = $2 ORDER BY pe.project_id",
+    )
+    .bind(user_id)
+    .bind(committee)
+    .fetch_all(conn)
+    .await?;
+    Ok(ids)
 }
 
 // ---------------------------------------------------------------------------
@@ -577,6 +757,9 @@ async fn add(
     let can_post_ticker = input.role != Role::Lead || input.can_post_ticker;
 
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    require_manage(&viewer, input.role, input.committee)?;
     let projects = match (input.role, input.committee) {
         (Role::Lead, Some(committee)) => {
             check_projects(&mut tx, committee, &input.project_ids).await?
@@ -595,10 +778,16 @@ async fn add(
         input.role,
         input.committee,
     )?;
+    let other_roles: Vec<Role> = existing.iter().map(|other| other.role).collect();
+    if !permissions::can_appoint_person_with(&viewer, &other_roles) {
+        return Err(AppError::Forbidden(format!(
+            "{shown} already has a role in the portal. Only an admin can give them another one."
+        )));
+    }
 
     sqlx::query(
-        "INSERT INTO role_assignments (id, user_id, role, committee, can_post_ticker, appointed_by, source)
-         VALUES ($1, $2, $3, $4, $5, $6, 'portal')",
+        "INSERT INTO role_assignments (id, user_id, role, committee, can_post_ticker, appointed_by, source, updated_by)
+         VALUES ($1, $2, $3, $4, $5, $6, 'portal', $6)",
     )
     .bind(Uuid::now_v7())
     .bind(user_id)
@@ -617,6 +806,13 @@ async fn add(
         "Made"
     };
     let joiner = if input.role == Role::Lead { "as " } else { "" };
+    let after = role_state(
+        &person.andrew_id,
+        input.role,
+        input.committee,
+        can_post_ticker,
+        (input.role == Role::Lead).then_some(projects.as_slice()),
+    );
     record(
         &mut tx,
         Some(&viewer),
@@ -627,9 +823,10 @@ async fn add(
             "{verb} {shown} {joiner}{}",
             role_phrase(input.role, input.committee)
         ),
+        audit::change(serde_json::Value::Null, after),
     )
     .await?;
-    let row = person_row(&mut tx, user_id).await?;
+    let row = person_row(&mut tx, &viewer, user_id).await?;
     tx.commit().await?;
     Ok(no_store((StatusCode::CREATED, Json(row)).into_response()))
 }
@@ -693,6 +890,7 @@ async fn update_assignment(
 ) -> AppResult<Response> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let current = lock_assignment(&mut tx, id).await?;
     require_manage(&viewer, current.role, current.committee)?;
 
@@ -734,12 +932,23 @@ async fn update_assignment(
     } else {
         true
     };
+    let projects_before = match (current.role, current.committee) {
+        (Role::Lead, Some(c)) => Some(lead_project_ids(&mut tx, current.user_id, c).await?),
+        _ => None,
+    };
+    let before = role_state(
+        &current.andrew_id,
+        current.role,
+        current.committee,
+        current.can_post_ticker,
+        projects_before.as_deref(),
+    );
 
     if moved {
         sqlx::query(
             "UPDATE role_assignments
              SET role = $2, committee = $3, can_post_ticker = $4, appointed_by = $5,
-                 source = 'portal', created_at = now()
+                 source = 'portal', created_at = now(), updated_at = now(), updated_by = $5
              WHERE id = $1",
         )
         .bind(id)
@@ -756,18 +965,20 @@ async fn update_assignment(
         if let Some(old) = current.committee
             && !(role == Role::Director && committee == Some(old))
         {
-            governance::opt_out(&mut tx, current.user_id, old).await?;
+            governance::opt_out(&mut tx, current.user_id, old, current.role).await?;
         }
     } else {
         // A lead edited here is the portal's from now on, so a governance sync no longer removes it.
         sqlx::query(
             "UPDATE role_assignments
              SET can_post_ticker = $2,
-                 source = CASE WHEN role = 'lead' THEN 'portal' ELSE source END
+                 source = CASE WHEN role = 'lead' THEN 'portal' ELSE source END,
+                 updated_at = now(), updated_by = $3
              WHERE id = $1",
         )
         .bind(id)
         .bind(can_post_ticker)
+        .bind(viewer.user_id)
         .execute(&mut *tx)
         .await?;
     }
@@ -787,6 +998,17 @@ async fn update_assignment(
             role_phrase(role, committee)
         )
     };
+    let projects_after = match (role, committee) {
+        (Role::Lead, Some(c)) => Some(lead_project_ids(&mut tx, current.user_id, c).await?),
+        _ => None,
+    };
+    let after = role_state(
+        &current.andrew_id,
+        role,
+        committee,
+        can_post_ticker,
+        projects_after.as_deref(),
+    );
     record(
         &mut tx,
         Some(&viewer),
@@ -794,9 +1016,10 @@ async fn update_assignment(
         current.user_id,
         committee,
         summary,
+        audit::change(before, after),
     )
     .await?;
-    let row = person_row(&mut tx, current.user_id).await?;
+    let row = person_row(&mut tx, &viewer, current.user_id).await?;
     tx.commit().await?;
     Ok(no_store(Json(row).into_response()))
 }
@@ -808,11 +1031,23 @@ async fn remove_assignment(
 ) -> AppResult<Response> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let current = lock_assignment(&mut tx, id).await?;
     require_manage(&viewer, current.role, current.committee)?;
     if current.role == Role::Admin {
         check_admin_removal(&mut tx, &viewer, current.user_id).await?;
     }
+    let projects_before = match (current.role, current.committee) {
+        (Role::Lead, Some(c)) => Some(lead_project_ids(&mut tx, current.user_id, c).await?),
+        _ => None,
+    };
+    let before = role_state(
+        &current.andrew_id,
+        current.role,
+        current.committee,
+        current.can_post_ticker,
+        projects_before.as_deref(),
+    );
     sqlx::query("DELETE FROM role_assignments WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -822,7 +1057,7 @@ async fn remove_assignment(
     }
     // Without this, the governance sync would give the role back while governance lists them.
     if let Some(committee) = current.committee {
-        governance::opt_out(&mut tx, current.user_id, committee).await?;
+        governance::opt_out(&mut tx, current.user_id, committee, current.role).await?;
     }
     // Someone left with no role is signed out everywhere, so a copied cookie stops working and no session gets an admin role back from the Keycloak group.
     crate::auth::session::end_if_roleless(&mut *tx, current.user_id).await?;
@@ -837,6 +1072,7 @@ async fn remove_assignment(
             "Removed {shown} as {}",
             role_phrase(current.role, current.committee)
         ),
+        audit::change(before, serde_json::Value::Null),
     )
     .await?;
     tx.commit().await?;

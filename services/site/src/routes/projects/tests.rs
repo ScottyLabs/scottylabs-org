@@ -1347,8 +1347,27 @@ async fn admins_change_addresses_and_feature_one_project(db: PgPool) {
     assert_eq!(public["project"]["slug"], "nova");
 
     let summaries = testing::audit_summaries(&db).await;
-    assert!(summaries.contains(&"Moved Nova to /projects/nova-hackathon/".to_owned()));
+    assert!(
+        summaries
+            .contains(&"Moved Nova from /projects/nova/ to /projects/nova-hackathon/".to_owned())
+    );
     assert!(summaries.contains(&"Featured Nova on the Projects page".to_owned()));
+    // The log keeps the old and new values, so the change can be traced.
+    let details: Vec<serde_json::Value> = sqlx::query_scalar(
+        "SELECT details FROM audit_log WHERE action IN ('project.slug', 'project.feature')
+         ORDER BY created_at, id",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        details[0],
+        json!({ "before": { "slug": "nova" }, "after": { "slug": "nova-hackathon" } })
+    );
+    assert_eq!(
+        details[1],
+        json!({ "before": { "featured": false }, "after": { "featured": true } })
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -1597,4 +1616,191 @@ fn the_doc_type_reads_what_the_testing_helpers_write() {
     let doc: ProjectDoc =
         serde_json::from_value(testing::project_doc(Committee::Tech, "x")).unwrap();
     assert_eq!(doc.committee, Committee::Tech);
+}
+
+// ---------------------------------------------------------------------------
+// Security audit fixes
+
+/// A director approving while the lead's editor autosaves: both take the approval before the project, so neither fails with a deadlock (AUTHZ-6).
+#[sqlx::test(migrations = "./migrations")]
+async fn approving_while_the_lead_saves_does_not_deadlock(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let lead = UserSpec::new("sara")
+        .lead(Committee::Events, true)
+        .edits(nova)
+        .create(&db)
+        .await;
+    let draft = editor(&app, &lead, nova).await["draft"].clone();
+    let (status, body) = save(
+        &app,
+        &lead,
+        nova,
+        with(&draft, json!({ "summary": "Sent for approval" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = act(&app, &lead, nova, "publish").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let approval_id: Uuid = sqlx::query_scalar("SELECT id FROM approvals WHERE status = 'waiting'")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+
+    // The approver's transaction takes its locks as routes/approvals.rs does: the approval, then the project.
+    let mut decide = db.begin().await.unwrap();
+    let approval = approvals_core::lock_for_decision(&mut decide, approval_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let saving = tokio::spawn({
+        let app = app.clone();
+        let lead = lead.clone();
+        let doc = with(&draft, json!({ "summary": "Edited again" }));
+        async move { save(&app, &lead, nova, doc).await }
+    });
+    // Let the autosave reach its locks before the approver goes on to the project.
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    let approver = as_viewer(
+        &p.director,
+        &[(Role::Director, Some(Committee::Events), true)],
+    );
+    crate::routes::apply_project_approval(&mut decide, &approval, &approver)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE approvals SET status = 'approved', decided_by = $2, decided_at = now() WHERE id = $1")
+        .bind(approval_id)
+        .bind(p.director.id)
+        .execute(&mut *decide)
+        .await
+        .unwrap();
+    decide.commit().await.unwrap();
+
+    let (status, body) = saving.await.unwrap();
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let project = editor(&app, &p.director, nova).await;
+    assert_eq!(project["published"]["summary"], "Sent for approval");
+    assert_eq!(project["draft"]["summary"], "Edited again");
+}
+
+/// The editor never receives markup the rules refuse, even from a row written by hand (WEB-XSS-1, server half), and saving refuses text that changes direction (TEXT-1).
+#[sqlx::test(migrations = "./migrations")]
+async fn the_editor_gets_clean_text_and_refuses_direction_controls(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let bad = full(
+        Committee::Events,
+        "Nova",
+        json!({
+            "description": "<p>Hi<img src=x onerror=alert(1)><a href=\"javascript:alert(1)\">x</a> \u{202E}gro.sbalyttocs</p>",
+            "repoUrl": "javascript:alert(1)",
+            "media": [cover(), { "src": "https://evil.example/x.png", "alt": "x" }],
+        }),
+    );
+    sqlx::query("UPDATE projects SET draft = $2, published = $2 WHERE id = $1")
+        .bind(nova)
+        .bind(&bad)
+        .execute(&db)
+        .await
+        .unwrap();
+    let project = editor(&app, &p.director, nova).await;
+    for doc in [&project["draft"], &project["published"]] {
+        let description = doc["description"].as_str().unwrap();
+        assert!(
+            !description.contains("onerror") && !description.contains("javascript"),
+            "{description}"
+        );
+        assert!(!description.contains('\u{202E}'), "{description}");
+        assert!(doc["repoUrl"].is_null());
+        assert_eq!(doc["media"].as_array().unwrap().len(), 1);
+    }
+
+    let draft = project["draft"].clone();
+    for description in [
+        "<p><a href=\"https://evil.example/\">https://scottylabs.org\u{202E}</a></p>",
+        "<p>Read &#x2067;this&#x2069;</p>",
+    ] {
+        let (status, body) = save(
+            &app,
+            &p.director,
+            nova,
+            with(&draft, json!({ "description": description })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert!(body["error"]["fields"]["description"].is_string(), "{body}");
+    }
+    let alt = json!([{ "src": "/seed/projects/maps.jpg", "alt": "A map\u{200B} of campus" }]);
+    let (status, body) = save(
+        &app,
+        &p.director,
+        nova,
+        with(&draft, json!({ "media": alt })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"]["media.0"],
+        "Remove the special characters from the image description."
+    );
+}
+
+/// Publishing and approving keep what visitors saw before and after, and the log cannot be changed afterwards (AUD-1).
+#[sqlx::test(migrations = "./migrations")]
+async fn publishes_are_kept_in_an_append_only_log(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let p = people(&db).await;
+    let nova = published(&db, Committee::Events, "nova", "Nova").await;
+    let draft = editor(&app, &p.director, nova).await["draft"].clone();
+    let phishing = with(
+        &draft,
+        json!({ "repoUrl": "https://example.com/not-the-real-repo" }),
+    );
+    let (status, _) = save(&app, &p.director, nova, phishing).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = act(&app, &p.director, nova, "publish").await;
+    assert_eq!(status, StatusCode::OK);
+    // Saving again within 15 minutes adds no second "Edited" entry, and changes none.
+    let (status, _) = save(
+        &app,
+        &p.director,
+        nova,
+        with(&draft, json!({ "name": "Nova Renamed" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let details: Value =
+        sqlx::query_scalar("SELECT details FROM audit_log WHERE action = 'project.publish'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(details["before"]["repoUrl"].is_null());
+    assert_eq!(
+        details["after"]["repoUrl"],
+        "https://example.com/not-the-real-repo"
+    );
+    let edits: Vec<String> =
+        sqlx::query_scalar("SELECT summary FROM audit_log WHERE action = 'project.edit'")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(edits, ["Edited Nova"]);
+
+    // The database refuses deletes and skips edits of entries.
+    let deleted = sqlx::query("DELETE FROM audit_log").execute(&db).await;
+    assert!(deleted.is_err());
+    sqlx::query("UPDATE audit_log SET summary = 'Nothing happened'")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert!(
+        !testing::audit_summaries(&db)
+            .await
+            .contains(&"Nothing happened".to_owned())
+    );
+    let truncated = sqlx::query("TRUNCATE audit_log").execute(&db).await;
+    assert!(truncated.is_err());
 }

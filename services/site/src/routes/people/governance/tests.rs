@@ -389,9 +389,14 @@ async fn governance_heads_become_leads_without_touching_existing_roles(db: PgPoo
         ),
         (2, 2, 2)
     );
-    assert_eq!(report.messages.len(), 6, "{:?}", report.messages);
+    assert_eq!(report.messages.len(), 7, "{:?}", report.messages);
     assert!(report.messages.contains(
         &"Test oldhead is no longer a lead in Events. Governance no longer lists them as a head."
+            .to_owned()
+    ));
+    // Foundry is missing from the file, so its governance lead stays, and the run says so.
+    assert!(report.messages.contains(
+        &"Governance does not list Foundry any more, so its directors and leads from governance were kept. Check data/committees.yaml in governance, or remove them here."
             .to_owned()
     ));
     assert!(report.messages.contains(
@@ -870,4 +875,287 @@ async fn only_admins_sync_governance(db: PgPool) {
         res.message(),
         "Only admins can sync directors and heads from governance."
     );
+}
+
+/// Removing someone's lead role on the People page keeps the sync from making them a lead again, but never from making them director: that is a new appointment (AUTHZ-3).
+#[sqlx::test(migrations = "./migrations")]
+async fn a_removed_lead_can_still_be_appointed_director(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let first = r#"
+committees:
+  events:
+    director: evanfost
+    roles:
+      head-of-logistics:
+        members: [helenf]
+"#;
+    sync_yaml(&db, first, None).await;
+    // Evan, the outgoing director, removes Helen's lead role before governance promotes her.
+    let user_id = |andrew_id: &'static str| {
+        let db = db.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE andrew_id = $1")
+                .bind(andrew_id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    let evan = testing::session_for(&db, user_id("evanfost").await).await;
+    let helen = assignment_id(&db, "helenf", Committee::Events).await;
+    send_ok(
+        &app,
+        Req::delete(&format!("/api/people/assignments/{helen}")).user(&evan),
+    )
+    .await;
+    let level: String = sqlx::query_scalar("SELECT role FROM governance_opt_outs")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(level, "lead");
+
+    let second = r#"
+committees:
+  events:
+    director: helenf
+"#;
+    let report = sync_yaml(&db, second, None).await;
+    assert_eq!(
+        (report.added, report.updated),
+        (1, 1),
+        "{:?}",
+        report.messages
+    );
+    let synced: Vec<_> = roles(&db)
+        .await
+        .into_iter()
+        .map(|(andrew_id, role, committee, source, _, _)| (andrew_id, role, committee, source))
+        .collect();
+    assert_eq!(
+        synced,
+        [(
+            "helenf".to_owned(),
+            "director".to_owned(),
+            Some("events".to_owned()),
+            "governance".to_owned()
+        )]
+    );
+
+    // A lead role removed by hand still is not given back while governance lists the head.
+    let third = r#"
+committees:
+  events:
+    director: helenf
+    roles:
+      head-of-logistics:
+        members: [sam]
+"#;
+    sync_yaml(&db, third, None).await;
+    let helen = testing::session_for(&db, user_id("helenf").await).await;
+    let sam = assignment_id(&db, "sam", Committee::Events).await;
+    send_ok(
+        &app,
+        Req::delete(&format!("/api/people/assignments/{sam}")).user(&helen),
+    )
+    .await;
+    let report = sync_yaml(&db, third, None).await;
+    assert_eq!(report.heads_added, 0);
+    assert!(report.messages[0].starts_with("Governance lists sam as a head in Events"));
+}
+
+/// A director governance stops listing loses the role even when no successor is named (GOV-2), and the run says the committee has none.
+#[sqlx::test(migrations = "./migrations")]
+async fn governance_directors_leave_without_a_successor(db: PgPool) {
+    testing::ensure_committees(&db).await;
+    let first = r#"
+committees:
+  events:
+    director: evanfost
+  design:
+    director: jeanchen
+  finance:
+    director: findir
+"#;
+    sync_yaml(&db, first, None).await;
+    // Finance's director was made on the People page; the sync keeps them.
+    sqlx::query("UPDATE role_assignments SET source = 'portal' WHERE committee = 'finance'")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let second = r#"
+committees:
+  events:
+    name: Events
+  design:
+    director: jeanchen
+  finance:
+    director: "Not An ID"
+"#;
+    let report = sync_yaml(&db, second, None).await;
+    assert_eq!(report.updated, 1);
+    assert_eq!(
+        report.messages,
+        [
+            "Governance lists no director for Events.",
+            "Skipped Finance: its director is not a valid Andrew ID.",
+            "evanfost is no longer director of Events. Governance lists no director for it.",
+            "Events has no director now. Make someone director on this page if it should have one.",
+            "findir is still director of Finance, but governance lists no director for Finance. Remove them here if they should no longer direct Finance.",
+        ]
+    );
+    let directors: Vec<String> = sqlx::query_scalar(
+        "SELECT u.andrew_id FROM role_assignments r JOIN users u ON u.id = r.user_id
+         WHERE r.role = 'director' ORDER BY u.andrew_id",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+    assert_eq!(directors, ["findir", "jeanchen"]);
+    let removal: (Option<Uuid>, Value) = sqlx::query_as(
+        "SELECT actor_id, details FROM audit_log WHERE summary LIKE 'Removed evanfost%'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        removal,
+        (
+            None,
+            json!({
+                "before": { "andrewId": "evanfost", "role": "director", "committee": "events", "source": "governance" },
+                "after": null,
+            })
+        )
+    );
+
+    // A file that drops more directors at once than a sync removes looks broken: nobody is removed.
+    let third = r#"
+committees:
+  events:
+    director: newevents
+  design:
+    name: Design
+  finance:
+    name: Finance
+  tech:
+    name: Tech
+  foundry:
+    name: Foundry
+"#;
+    sync_yaml(
+        &db,
+        "committees:\n  tech:\n    director: techdir\n  foundry:\n    director: founddir\n",
+        None,
+    )
+    .await;
+    let report = sync_yaml(&db, third, None).await;
+    assert!(
+        report.messages.contains(
+            &"Governance lists no director for 3 committees that have one from governance, more than a sync removes at once, so nobody was removed. Check data/committees.yaml in governance."
+                .to_owned()
+        ),
+        "{:?}",
+        report.messages
+    );
+    let directors: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM role_assignments WHERE role = 'director'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(directors, 5);
+}
+
+/// Roles the People page gave and governance does not list are kept, reported on every run, audited once, and marked for admins on the People page (GOV-3).
+#[sqlx::test(migrations = "./migrations")]
+async fn roles_governance_does_not_list_are_reported_for_review(db: PgPool) {
+    let app = testing::app(db.clone()).await;
+    let admin = UserSpec::new("govadmin").admin().create(&db).await;
+    UserSpec::new("evanfost")
+        .name("Evan Foster")
+        .director(Committee::Events)
+        .create(&db)
+        .await;
+    UserSpec::new("techlead")
+        .lead(Committee::Tech, true)
+        .create(&db)
+        .await;
+    let yaml = r#"
+committees:
+  events:
+    director: newdir
+    roles:
+      head-of-logistics:
+        members: [helenf]
+"#;
+    for _ in 0..2 {
+        let report = sync_yaml(&db, yaml, None).await;
+        assert!(
+            report.messages.contains(
+                &"Evan Foster is still director of Events, but governance lists newdir. Remove them here if they should no longer direct Events."
+                    .to_owned()
+            ),
+            "{:?}",
+            report.messages
+        );
+    }
+    let kept: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM audit_log WHERE summary = 'Kept Evan Foster as director of Events; governance lists newdir'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(kept, 1);
+
+    let res = Req::get("/api/people").user(&admin).send(&app).await;
+    assert_eq!(res.status, StatusCode::OK);
+    let listed = |andrew_id: &str| -> Value {
+        res.json["people"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["person"]["andrewId"] == andrew_id)
+            .map(|p| p["roles"][0].clone())
+            .unwrap()
+    };
+    assert_eq!(listed("evanfost")["governanceListed"], false);
+    assert_eq!(listed("evanfost")["source"], "portal");
+    assert!(listed("evanfost")["changedAt"].is_string());
+    assert_eq!(listed("newdir")["governanceListed"], true);
+    assert_eq!(listed("helenf")["governanceListed"], true);
+    assert!(listed("techlead")["governanceListed"].is_null());
+    assert!(listed("govadmin")["governanceListed"].is_null());
+    let status = &res.json["governance"];
+    assert!(status["lastSuccessAt"].is_string());
+    assert!(status["lastError"].is_null());
+    assert!(
+        status["messages"].as_array().unwrap().iter().any(|m| m
+            .as_str()
+            .unwrap()
+            .starts_with("Evan Foster is still director")),
+        "{status}"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn failed_runs_are_kept_for_admins(db: PgPool) {
+    testing::ensure_committees(&db).await;
+    let http = http();
+    let missing = serve_with(StatusCode::NOT_FOUND, "Not found".into()).await;
+    sync_in_background(&db, &http, &missing).await;
+    let mut conn = db.acquire().await.unwrap();
+    let failed = serde_json::to_value(status(&mut conn).await.unwrap()).unwrap();
+    assert_eq!(
+        failed["lastError"],
+        "We couldn't reach the governance repository. Try again in a few minutes."
+    );
+    assert!(failed["lastSuccessAt"].is_null());
+    assert!(failed["lastAttemptAt"].is_string());
+
+    let good = serve(GOVERNANCE_SAMPLE).await;
+    sync_in_background(&db, &http, &good).await;
+    let worked = serde_json::to_value(status(&mut conn).await.unwrap()).unwrap();
+    assert!(worked["lastError"].is_null());
+    assert!(worked["lastSuccessAt"].is_string());
+    assert!(!worked["messages"].as_array().unwrap().is_empty());
 }

@@ -680,3 +680,163 @@ async fn a_director_of_two_committees_edits_both(db: PgPool) {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
+
+/// An admin who must fix a page now can take over the edit lock; the holder can no longer save, and the takeover is in the log (AUTHZ-8).
+#[sqlx::test(migrations = "./migrations")]
+async fn admins_can_take_over_a_page_someone_is_editing(db: PgPool) {
+    let app = setup(&db).await;
+    let anish = testing::persona(&db, "apallati").await;
+    let thomas = testing::persona(&db, "tkanz").await;
+    let evan = testing::persona(&db, "evanfost").await;
+    let (status, _) = testing::post(
+        &app,
+        "/api/committee-pages/tech/lock",
+        Some(&anish),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Directors cannot take over, not even their own committee's page from someone else.
+    for user in [&evan, &anish] {
+        let (status, body) = testing::post(
+            &app,
+            "/api/committee-pages/tech/lock/take-over",
+            Some(user),
+            json!({}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    }
+    let (status, lock) = testing::post(
+        &app,
+        "/api/committee-pages/tech/lock/take-over",
+        Some(&thomas),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{lock}");
+    assert_eq!(lock["holder"]["andrewId"], "tkanz");
+    assert_eq!(lock["mine"], true);
+
+    // Anish's next heartbeat and save now meet Thomas's lock.
+    let (status, body) = testing::post(
+        &app,
+        "/api/committee-pages/tech/lock",
+        Some(&anish),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("Thomas Kanz is editing")
+    );
+    let page = editor(&app, &anish, "tech").await;
+    let (status, _) = save(&app, &anish, "tech", &page["draft"], &page["draftVersion"]).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _) = save(&app, &thomas, "tech", &page["draft"], &page["draftVersion"]).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let taken: (Option<Uuid>, String, Value) = sqlx::query_as(
+        "SELECT actor_id, summary, details FROM audit_log WHERE action = 'committee_page.take_over'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(taken.0, Some(thomas.id));
+    assert_eq!(
+        taken.1,
+        "Took over editing the Tech page from Anish Pallati"
+    );
+    assert_eq!(taken.2["before"]["andrewId"], "apallati");
+}
+
+/// Stored text bodies reach the editor and visitors sanitized again, and saving refuses text that changes direction (WEB-XSS-1 server half, TEXT-1).
+#[sqlx::test(migrations = "./migrations")]
+async fn page_text_is_cleaned_on_the_way_out_and_checked_on_the_way_in(db: PgPool) {
+    let app = setup(&db).await;
+    let anish = testing::persona(&db, "apallati").await;
+    let page = editor(&app, &anish, "tech").await;
+    let text = page["draft"]["blocks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .position(|b| b["type"] == "text")
+        .unwrap();
+    let mut doc = page["draft"].clone();
+    doc["blocks"][text]["props"]["body"] =
+        json!("<p>Hi<img src=x onerror=alert(1)> \u{202E}gro.sbalyttocs</p>");
+    sqlx::query("UPDATE committee_pages SET draft = $1, published = $1 WHERE committee = 'tech'")
+        .bind(&doc)
+        .execute(&db)
+        .await
+        .unwrap();
+    let page = editor(&app, &anish, "tech").await;
+    for body in [
+        &page["draft"]["blocks"][text]["props"]["body"],
+        &page["published"]["blocks"][text]["props"]["body"],
+    ] {
+        let body = body.as_str().unwrap();
+        assert!(
+            !body.contains("onerror") && !body.contains('\u{202E}'),
+            "{body}"
+        );
+    }
+    let (_, public) = testing::get(&app, "/api/public/committees/tech", None).await;
+    let body = public["blocks"][text]["props"]["body"].as_str().unwrap();
+    assert!(
+        !body.contains("onerror") && !body.contains('\u{202E}'),
+        "{body}"
+    );
+
+    let mut doc = page["draft"].clone();
+    doc["blocks"][text]["props"]["body"] =
+        json!("<p><a href=\"https://evil.example/\">https://scottylabs.org&#x202E;</a></p>");
+    let (status, body) = save(&app, &anish, "tech", &doc, &page["draftVersion"]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"][format!("blocks.{text}.body")],
+        "Remove the special characters that change the direction of the text."
+    );
+    let mut doc = page["draft"].clone();
+    doc["blocks"][0]["props"]["image"]["alt"] = json!("Students\nat a table");
+    let (status, body) = save(&app, &anish, "tech", &doc, &page["draftVersion"]).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(
+        body["error"]["fields"]["blocks.0.image"],
+        "Keep the image description on one line."
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn publishing_keeps_what_visitors_saw_before_and_after(db: PgPool) {
+    let app = setup(&db).await;
+    let anish = testing::persona(&db, "apallati").await;
+    let page = editor(&app, &anish, "tech").await;
+    let before: Value =
+        sqlx::query_scalar("SELECT published FROM committee_pages WHERE committee = 'tech'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let changed = stats_first(&page["draft"]);
+    let (status, saved) = save(&app, &anish, "tech", &changed, &page["draftVersion"]).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let (status, body) = testing::post(
+        &app,
+        "/api/committee-pages/tech/publish",
+        Some(&anish),
+        json!({ "draftVersion": saved["draftVersion"] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let details: Value =
+        sqlx::query_scalar("SELECT details FROM audit_log WHERE action = 'committee_page.publish'")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(details["before"], before);
+    assert_eq!(details["after"]["blocks"][1]["type"], "stats");
+}

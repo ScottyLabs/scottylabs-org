@@ -1,4 +1,6 @@
 //! The audit log behind "Recent activity". Write an entry in the same transaction as the change.
+//!
+//! The log only grows: a database trigger (migration 0801) skips updates and refuses deletes, except that `expire_audit_log()` removes entries more than two years old. Changes whose before and after values matter (roles, settings and addresses, publishes, approvals, deletions) also store them as `details`, with [`record_details`]; Recent activity shows only the sentence.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -17,7 +19,18 @@ pub mod subject {
     pub const PROJECT: &str = "project";
     pub const PERSON: &str = "person";
     pub const APPROVAL: &str = "approval";
+    pub const MEDIA: &str = "media";
 }
+
+/// Uploads and the cleanup's deletions are logged with their details for review, but Recent activity leaves them out: an editor adding a gallery would fill it. Admins review uploads with `GET /api/media`.
+const HIDDEN_FROM_ACTIVITY: &[&str] = &["media.upload", "media.expire"];
+
+/// Actions about an announcement while it waits for approval. Their summaries quote what was sent, which only its author and those who manage its source may read, even after a later version goes live.
+const WAITING_ANNOUNCEMENT_ACTIONS: &[&str] = &[
+    "announcement.submit",
+    "announcement.resubmit",
+    "announcement.send_back",
+];
 
 /// One change, described for people, for example "Published the Tech page".
 pub struct Entry<'a> {
@@ -31,9 +44,26 @@ pub struct Entry<'a> {
 }
 
 pub async fn record(conn: &mut PgConnection, entry: Entry<'_>) -> AppResult<()> {
+    insert(conn, entry, None).await
+}
+
+/// [`record`] with the values the change replaced and the ones it set, such as `{ "before": { "slug": "nova" }, "after": { "slug": "nova-hack" } }`, so the change can be reconstructed later. Never put secrets or session data in `details`.
+pub async fn record_details(
+    conn: &mut PgConnection,
+    entry: Entry<'_>,
+    details: serde_json::Value,
+) -> AppResult<()> {
+    insert(conn, entry, Some(details)).await
+}
+
+async fn insert(
+    conn: &mut PgConnection,
+    entry: Entry<'_>,
+    details: Option<serde_json::Value>,
+) -> AppResult<()> {
     sqlx::query(
-        "INSERT INTO audit_log (id, actor_id, action, subject_type, subject_id, committee, summary)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO audit_log (id, actor_id, action, subject_type, subject_id, committee, summary, details)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(Uuid::now_v7())
     .bind(entry.actor)
@@ -42,9 +72,15 @@ pub async fn record(conn: &mut PgConnection, entry: Entry<'_>) -> AppResult<()> 
     .bind(entry.subject_id)
     .bind(entry.committee)
     .bind(entry.summary)
+    .bind(details)
     .execute(conn)
     .await?;
     Ok(())
+}
+
+/// `{ "before": before, "after": after }`, the usual shape of `details`.
+pub fn change(before: impl serde::Serialize, after: impl serde::Serialize) -> serde_json::Value {
+    serde_json::json!({ "before": before, "after": after })
 }
 
 /// One row of "Recent activity". Mirrors `ActivityEntry` in types.ts.
@@ -90,27 +126,30 @@ pub async fn recent<'e>(
         .map(Uuid::to_string)
         .collect();
     // Each branch reads its own index and stops at `limit`, instead of one filter over the whole log.
-    // In committees the viewer only belongs to, an announcement shows while it is not waiting for approval or is the viewer's own (they manage no source there), and a project only when the viewer may open it.
+    // In committees the viewer only belongs to, entries follow what each one reveals, not only what its subject is now. An announcement entry shows when the viewer wrote the announcement, or when it is open to everyone (not waiting) and the entry was not written while it waited: a version sent back and rewritten stays private after a later version goes live. A project entry shows only for a project the viewer may open, and an entry about a person only when it is about the viewer, since leads cannot open People.
     let rows = sqlx::query_as::<_, ActivityRow>(
         "WITH picked AS (
-             (SELECT a.* FROM audit_log a WHERE $1
+             (SELECT a.* FROM audit_log a WHERE $1 AND NOT (a.action = ANY($10))
               ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
              UNION
-             (SELECT a.* FROM audit_log a WHERE a.actor_id = $3
-              ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
-             UNION
-             (SELECT a.* FROM audit_log a WHERE a.committee = ANY($2)
+             (SELECT a.* FROM audit_log a WHERE a.actor_id = $3 AND NOT (a.action = ANY($10))
               ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
              UNION
              (SELECT a.* FROM audit_log a
-              WHERE a.committee = ANY($4)
+              WHERE a.committee = ANY($2) AND NOT (a.action = ANY($10))
+              ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
+             UNION
+             (SELECT a.* FROM audit_log a
+              WHERE a.committee = ANY($4) AND NOT (a.action = ANY($10))
                 AND CASE a.subject_type
                       WHEN 'announcement' THEN EXISTS (
                           SELECT 1 FROM announcements n
                           WHERE n.id = CASE WHEN a.subject_id ~* $8 THEN a.subject_id::uuid END
-                            AND (n.state NOT IN ('pending_approval', 'sent_back')
-                                 OR n.created_by = $3))
+                            AND (n.created_by = $3
+                                 OR (n.state NOT IN ('pending_approval', 'sent_back')
+                                     AND NOT (a.action = ANY($9)))))
                       WHEN 'project' THEN $5 OR a.subject_id = ANY($6)
+                      WHEN 'person' THEN a.subject_id = $3::text
                       ELSE true
                     END
               ORDER BY a.created_at DESC, a.id DESC LIMIT $7)
@@ -129,6 +168,8 @@ pub async fn recent<'e>(
     .bind(&projects)
     .bind(limit.clamp(1, MAX_ACTIVITY))
     .bind(UUID_PATTERN)
+    .bind(WAITING_ANNOUNCEMENT_ACTIONS)
+    .bind(HIDDEN_FROM_ACTIVITY)
     .fetch_all(db)
     .await?;
     Ok(rows.into_iter().map(|row| row.into_entry(viewer)).collect())

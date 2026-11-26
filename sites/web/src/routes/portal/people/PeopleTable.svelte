@@ -12,6 +12,7 @@
     ROLE_LABELS,
     appointedText,
     canEditText,
+    governanceNote,
   } from "./people.ts";
 
   let {
@@ -106,6 +107,9 @@
                 </span>
                 {#if !person.hasSignedIn}
                   <span class="people-table__pending">Not signed in yet</span>
+                {/if}
+                {#if view === "admin" && governanceNote(assignment) !== null}
+                  <span class="people-table__pending">{governanceNote(assignment)}</span>
                 {/if}
               </span>
             </span>

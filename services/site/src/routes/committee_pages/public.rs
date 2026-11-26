@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
-use super::{PageRow, all_pages, committee_from_slug, one_page};
+use super::{PageRow, all_pages, cleaned_for_reading, committee_from_slug, one_page};
 use crate::blocks::{Block, CommitteePageDoc, CommitteeSettings};
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, ImageRef};
@@ -98,7 +98,7 @@ pub(super) async fn page(
     let projects = published_cards(&mut *conn, Some(committee)).await?;
     Ok(public_json(PublicCommitteePageResponse {
         committee: CommitteeSummary::new(&row, published),
-        blocks: published.blocks.clone(),
+        blocks: cleaned_for_reading(published.clone()).blocks,
         projects,
         published_at: row.published_at,
     }))
