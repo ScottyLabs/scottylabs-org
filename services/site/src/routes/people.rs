@@ -824,6 +824,8 @@ async fn remove_assignment(
     if let Some(committee) = current.committee {
         governance::opt_out(&mut tx, current.user_id, committee).await?;
     }
+    // Someone left with no role is signed out everywhere, so a copied cookie stops working and no session gets an admin role back from the Keycloak group.
+    crate::auth::session::end_if_roleless(&mut *tx, current.user_id).await?;
     let shown = display_name(&current.name, &current.andrew_id);
     record(
         &mut tx,

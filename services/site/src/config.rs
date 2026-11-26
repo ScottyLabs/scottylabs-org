@@ -1,4 +1,5 @@
 use std::env;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 use anyhow::{Context, bail};
@@ -30,6 +31,8 @@ pub struct OidcSettings {
     pub oauth_relay_url: String,
     pub project_group: String,
     pub project_admin_group: String,
+    /// `ANDREW_ID_CLAIM`: an ID token claim that holds the Andrew ID, for example one a Keycloak mapper fills from CMU's directory. When set it decides alone; otherwise `preferred_username` counts only when the token's email is that Andrew ID at cmu.edu or andrew.cmu.edu.
+    pub andrew_id_claim: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +89,7 @@ impl Config {
         };
 
         let static_dir = var("STATIC_DIR").map(PathBuf::from);
-        let oidc = oidc_settings(&var);
+        let oidc = oidc_settings(&var).and_then(|settings| relay_guard(&app_url, settings));
         let s3 = s3_settings(&var)?;
 
         let dev_login = dev_login_mode(
@@ -137,6 +140,64 @@ impl Config {
     pub fn origin(&self) -> String {
         self.app_url.origin().ascii_serialization()
     }
+
+    /// Dev sign-in needs the switch and the seeded personas it signs in as.
+    pub fn dev_login_available(&self) -> bool {
+        self.dev_login != DevLogin::Off && self.seed_demo
+    }
+
+    /// Whether the service listens on a loopback address only, so every connection comes from this host. Rate limits trust a proxy's `CF-Connecting-IP` only then.
+    pub fn binds_loopback(&self) -> bool {
+        is_loopback_bind(&self.bind_addr)
+    }
+}
+
+/// `<APP_URL>/api/auth/callback`, where sign-in comes back to.
+pub fn sign_in_callback_url(app_url: &Url) -> String {
+    let mut url = app_url.clone();
+    url.set_path("/api/auth/callback");
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+/// Whether Keycloak may send this site's sign-in codes through the shared Ricochet relay: local development and `*.scottylabs.net` previews and staging. Every other host is production. The relay forwards a code to any host on its allowlist, which holds every `*.scottylabs.net` deployment, so a production code must come straight back to the site's own callback.
+pub fn may_use_shared_relay(app_url: &Url) -> bool {
+    match app_url.host() {
+        Some(url::Host::Domain(host)) => host == "localhost" || host.ends_with(".scottylabs.net"),
+        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+        None => false,
+    }
+}
+
+/// Keeps Keycloak sign-in off on a production host whose `OAUTH_RELAY_URL` is not its own callback, with one error line saying what governance must change.
+fn relay_guard(app_url: &Url, settings: OidcSettings) -> Option<OidcSettings> {
+    if may_use_shared_relay(app_url) {
+        return Some(settings);
+    }
+    let callback = sign_in_callback_url(app_url);
+    let direct =
+        Url::parse(&settings.oauth_relay_url).is_ok_and(|relay| relay.as_str() == callback);
+    if direct {
+        return Some(settings);
+    }
+    tracing::error!(
+        oauth_relay_url = %settings.oauth_relay_url,
+        client_id = %settings.client_id,
+        "Keycloak sign-in is off: on a production host Keycloak must redirect straight to this site's callback, not through the shared relay, which also forwards codes to every *.scottylabs.net deployment. In governance, give this prod client the redirect URI {callback} (oidc_client redirect_uris) and set its prod OAUTH_RELAY_URL to the same URL"
+    );
+    None
+}
+
+/// `127.0.0.1:8080`, `[::1]:8080` or `localhost:8080`.
+fn is_loopback_bind(addr: &str) -> bool {
+    match addr.parse::<SocketAddr>() {
+        Ok(socket) => socket.ip().is_loopback(),
+        Err(_) => addr
+            .rsplit_once(':')
+            .is_some_and(|(host, _)| host.eq_ignore_ascii_case("localhost")),
+    }
 }
 
 /// Keycloak sign-in, when all seven variables are set. Some but not all of them is a mistake worth a warning, since sign-in then stays off.
@@ -167,6 +228,7 @@ fn oidc_settings(var: &impl Fn(&str) -> Option<String>) -> Option<OidcSettings> 
         oauth_relay_url: next(),
         project_group: next(),
         project_admin_group: next(),
+        andrew_id_claim: var("ANDREW_ID_CLAIM").map(|claim| claim.trim().to_owned()),
     })
 }
 
@@ -317,8 +379,13 @@ mod tests {
     fn keycloak_needs_all_seven_settings() {
         let mut all: Vec<(&str, &str)> = BASE.to_vec();
         all.extend(OIDC_VARIABLES.iter().map(|name| (*name, "x")));
-        all.retain(|(name, _)| *name != "KEYCLOAK_URL");
+        all.retain(|(name, _)| !matches!(*name, "KEYCLOAK_URL" | "OAUTH_RELAY_URL"));
         all.push(("KEYCLOAK_URL", "https://idp.cmu.edu/"));
+        // Production: Keycloak redirects straight to the site.
+        all.push((
+            "OAUTH_RELAY_URL",
+            "https://scottylabs.org/api/auth/callback",
+        ));
         let oidc = Config::from_vars(vars(&all)).unwrap().oidc.unwrap();
         assert_eq!(oidc.keycloak_url, "https://idp.cmu.edu");
         assert_eq!(oidc.project_admin_group, "x");
@@ -363,6 +430,136 @@ mod tests {
         assert!(governance_sync_enabled(Some("1"), &DevLogin::Open).unwrap());
         assert!(!governance_sync_enabled(Some("0"), &DevLogin::Off).unwrap());
         assert!(governance_sync_enabled(Some("yes"), &DevLogin::Off).is_err());
+    }
+
+    fn with_keycloak(app_url: &str, relay: &str) -> Vec<(&'static str, String)> {
+        let mut all: Vec<(&'static str, String)> = vec![
+            ("DATABASE_URL", "postgresql:///site".into()),
+            ("APP_URL", app_url.into()),
+        ];
+        all.extend(OIDC_VARIABLES.iter().map(|name| (*name, "x".to_owned())));
+        all.retain(|(name, _)| *name != "OAUTH_RELAY_URL");
+        all.push(("OAUTH_RELAY_URL", relay.into()));
+        all
+    }
+
+    fn keycloak_on(pairs: &[(&'static str, String)]) -> bool {
+        let pairs: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        Config::from_vars(vars(&pairs)).unwrap().oidc.is_some()
+    }
+
+    #[test]
+    fn production_needs_a_direct_callback_instead_of_the_shared_relay() {
+        const RELAY: &str = "https://oauth.scottylabs.org/oauth2/callback";
+        // Production hosts: the shared relay turns Keycloak sign-in off.
+        for app_url in [
+            "https://scottylabs.org",
+            "https://www.scottylabs.org",
+            "https://events.example.org",
+            "https://scottylabs.net",
+            "https://scottylabs.net.evil.example",
+        ] {
+            assert!(!keycloak_on(&with_keycloak(app_url, RELAY)), "{app_url}");
+        }
+        // Its own callback works, with or without a trailing slash on APP_URL.
+        assert!(keycloak_on(&with_keycloak(
+            "https://scottylabs.org",
+            "https://scottylabs.org/api/auth/callback"
+        )));
+        assert!(keycloak_on(&with_keycloak(
+            "https://scottylabs.org/",
+            "https://scottylabs.org/api/auth/callback"
+        )));
+        // Another site's callback, or a lookalike path, is not its own.
+        for relay in [
+            "https://www.scottylabs.org/api/auth/callback",
+            "https://scottylabs.org/api/auth/callback/",
+            "https://scottylabs.org/api/auth/callback?x=1",
+            "http://scottylabs.org/api/auth/callback",
+            "not a url",
+        ] {
+            assert!(
+                !keycloak_on(&with_keycloak("https://scottylabs.org", relay)),
+                "{relay}"
+            );
+        }
+        // Previews, staging and local development may use the relay.
+        for app_url in [
+            "https://scottylabs-org-site-pr-3.scottylabs.net",
+            "https://scottylabs-org-staging.scottylabs.net",
+            "http://localhost:5173",
+            "http://127.0.0.1:8080",
+            "http://[::1]:8080",
+        ] {
+            assert!(keycloak_on(&with_keycloak(app_url, RELAY)), "{app_url}");
+        }
+    }
+
+    #[test]
+    fn the_callback_is_on_the_app_origin() {
+        assert_eq!(
+            sign_in_callback_url(&url("https://scottylabs.org/portal/?x=1#y")),
+            "https://scottylabs.org/api/auth/callback"
+        );
+        assert_eq!(
+            sign_in_callback_url(&url("http://localhost:5173")),
+            "http://localhost:5173/api/auth/callback"
+        );
+    }
+
+    #[test]
+    fn the_andrew_id_claim_is_optional() {
+        let pairs = with_keycloak(
+            "https://scottylabs-org-site-pr-3.scottylabs.net",
+            "https://oauth.scottylabs.org/oauth2/callback",
+        );
+        let plain: Vec<(&str, &str)> = pairs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        let oidc = Config::from_vars(vars(&plain)).unwrap().oidc.unwrap();
+        assert_eq!(oidc.andrew_id_claim, None);
+        let mut with_claim = plain.clone();
+        with_claim.push(("ANDREW_ID_CLAIM", " andrew_id "));
+        let oidc = Config::from_vars(vars(&with_claim)).unwrap().oidc.unwrap();
+        assert_eq!(oidc.andrew_id_claim.as_deref(), Some("andrew_id"));
+    }
+
+    #[test]
+    fn loopback_binds_are_recognised() {
+        let config = |bind: &str| {
+            let mut pairs = BASE.to_vec();
+            pairs.push(("SITE_BIND_ADDR", bind));
+            Config::from_vars(vars(&pairs)).unwrap()
+        };
+        assert!(config("127.0.0.1:8080").binds_loopback());
+        assert!(config("[::1]:8080").binds_loopback());
+        assert!(config("localhost:8080").binds_loopback());
+        assert!(!config("0.0.0.0:8080").binds_loopback());
+        assert!(!config("[::]:8080").binds_loopback());
+        assert!(!config("10.0.0.5:8080").binds_loopback());
+        let mut pairs = BASE.to_vec();
+        pairs.push(("PORT", "3000"));
+        let kennel = Config::from_vars(vars(&pairs)).unwrap();
+        assert_eq!(
+            kennel.binds_loopback(),
+            kennel.bind_addr.starts_with("127.")
+        );
+    }
+
+    #[test]
+    fn dev_login_needs_the_demo_personas() {
+        let mut pairs = BASE.to_vec();
+        pairs[1] = ("APP_URL", "http://localhost:5173");
+        pairs.push(("PORTAL_DEV_LOGIN", "1"));
+        assert!(
+            !Config::from_vars(vars(&pairs))
+                .unwrap()
+                .dev_login_available()
+        );
+        pairs.push(("SEED_DEMO_CONTENT", "1"));
+        assert!(
+            Config::from_vars(vars(&pairs))
+                .unwrap()
+                .dev_login_available()
+        );
     }
 
     #[test]

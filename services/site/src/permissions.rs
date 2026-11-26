@@ -214,6 +214,11 @@ pub fn can_sync_governance(viewer: &Viewer) -> bool {
     is_admin(viewer)
 }
 
+/// End someone's sessions everywhere, or reset the link between their Andrew ID and a Keycloak account (sign-in recovery).
+pub fn can_manage_sign_in(viewer: &Viewer) -> bool {
+    is_admin(viewer)
+}
+
 /// Which audit entries "Recent activity" shows. Entries name what they are about, so they follow the rules for opening it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActivityScope {
@@ -515,5 +520,20 @@ pub(crate) mod tests {
         assert_eq!(ticker_posting(&v, TickerSource::Events), None);
         assert!(ticker_sources(&v).is_empty());
         assert!(!summary(&v).ticker_needs_approval);
+    }
+
+    #[test]
+    fn only_admins_manage_sign_in() {
+        assert!(can_manage_sign_in(&viewer(
+            &[(Role::Admin, None, true)],
+            vec![]
+        )));
+        for roles in [
+            vec![(Role::Director, Some(Committee::Events), true)],
+            vec![(Role::Lead, Some(Committee::Events), true)],
+            vec![],
+        ] {
+            assert!(!can_manage_sign_in(&viewer(&roles, vec![])));
+        }
     }
 }
