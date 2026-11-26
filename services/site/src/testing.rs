@@ -57,6 +57,7 @@ pub fn config() -> Config {
         dev_login: DevLogin::Open,
         seed_demo: true,
         governance_sync: false,
+        analytics_origin: None,
     }
 }
 

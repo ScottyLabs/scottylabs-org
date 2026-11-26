@@ -43,6 +43,7 @@ Local development runs Vite on port 5173 and the service on 127.0.0.1:8080. Vite
 | `PORTAL_DEV_LOGIN_KEY` | OpenBao, preview profile only | optional |
 | `SEED_DEMO_CONTENT` | dev shell and preview profile | optional |
 | `RUST_LOG` | anywhere | optional |
+| `PUBLIC_POSTHOG_KEY`, `PUBLIC_POSTHOG_HOST` | governance `posthog` feature, prod profile; kennel serves them to the browser in `/_app/env.js` and passes them to the service | optional. Page views on public pages are sent only when both are set (see Changes, "security audit fixes: client-side security and privacy"); the service then lets public pages connect to the host |
 
 Dev login rules, enforced in the service:
 
@@ -154,12 +155,23 @@ The governance sync runs from the admin Sync button, at startup (in the backgrou
 ### Sessions
 
 - Cookie `__Host-sl_session` when `APP_URL` is https, otherwise `sl_session`. `HttpOnly`, `Path=/`, `SameSite=Lax`, `Secure` on https. Value is 32 random bytes, base64url. The database stores only its SHA-256.
+
 - Expires after 12 hours without a request, and 7 days after creation at most (dev sessions: 8 hours). Refresh `last_seen_at` at most once a minute.
+
 - **Checked with Keycloak.** A Keycloak session keeps Keycloak's refresh token and latest ID token in its row (never sent to a browser). At most every 15 minutes, a request on it starts a refresh-token grant in the background, 5 seconds at most, one at a time per session across processes (`validation_retry_at`). `invalid_grant` (account disabled, signed out of Keycloak, or Keycloak's own session over) or a token for another `sub` ends the session at once (`auth.session_end`, no actor). Otherwise the new ID token's `groups` add or remove the admin role from `PROJECT_ADMIN_GROUP`, as at sign-in. When Keycloak cannot be reached the session is kept and asked again 5 minutes later, but an admin role that came only from the group stops counting 24 hours after the last confirmation (sign-in or refresh) until one succeeds; `/api/me` still lists the role while `permissions.isAdmin` is false. Dev sessions are never checked. Sessions from before this, without a refresh token, are never checked, so their group admin lapses 24 hours after sign-in. In practice a Keycloak session also ends when Keycloak's own session ends (its idle or maximum time), at the first check after that.
+
 - Residual risk: the refresh token is stored in plain text. Using it also needs the client secret, which is not in the database; whoever has both the database and the secret can act as a signed-in person with Keycloak until the token expires.
+
 - Signing in (Keycloak or dev) ends the session the browser already had.
+
 - `POST /api/auth/logout` deletes the session and clears the cookie. It answers 204, or 200 `LogoutResponse` `{ "endSessionUrl" }` when the session came from Keycloak and Keycloak's discovery lists an `end_session_endpoint` on its own origin: the URL carries `id_token_hint` and `client_id` and no return address (none is registered), so the browser can end the Keycloak session too.
+
 - Admins can sign a person out everywhere (`DELETE /api/people/:id/sessions`, `auth.sessions_end`) and reset the link between their Andrew ID and a Keycloak account (`DELETE /api/people/:id/keycloak-link`, `auth.link_reset`, which also ends their sessions). Removing someone's last role on the People page ends their sessions too. Recovery steps are in `sign-in-recovery.md`.
+
+- Expires after 12 hours without a request, and 7 days after creation at most. Refresh `last_seen_at` at most once a minute.
+
+- `POST /api/auth/logout` deletes the session and clears the cookie (204). Signing out also clears work kept in the tab, and when the answer is `200` with `{ "endSessionUrl": "https://..." }` the browser goes there to end the Keycloak session too (see Changes, "security audit fixes: client-side security and privacy").
+
 - When a portal call gets a 401, the web sends the person to sign in and back to the page, and editors keep work the service does not have yet in the tab until then (see Changes, "2026-11-25, follow-ups after the final review").
 
 ### CSRF and origin checks
@@ -331,7 +343,7 @@ For a request outside `/api` and `/media`, with `STATIC_DIR` set:
    - `/portal/` and below: status 200, `Cache-Control: no-store`.
    - Anything else: status 404 (SvelteKit renders its error page).
 
-Headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`, and HSTS when `APP_URL` is https. `/_app/immutable/*`: `public, max-age=31536000, immutable`. HTML: `no-cache`. Other static files: `public, max-age=3600`.
+Headers on every response: `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, `X-Frame-Options: DENY`, `Permissions-Policy: camera=(), microphone=(), geolocation=()`, a `Content-Security-Policy` (HTML pages get theirs with the hashes of their own inline scripts; see Changes, "security audit fixes: client-side security and privacy"), and HSTS when `APP_URL` is https. `/_app/immutable/*`: `public, max-age=31536000, immutable`. HTML: `no-cache`. Other static files: `public, max-age=3600`.
 
 ## Limits on requests
 
@@ -426,6 +438,29 @@ Fixes for the audit's authorization, governance and data protection findings. Mi
   - Directors open every project, drafts included (`permissions::can_view_project`), as "GET /api/projects" above grants; edits stay limited to their committee's.
   - Any director may reorder the whole live ticker, as the matrix above grants ("Reorder live announcements"); it is one shared loop (spec TK-3) and every reorder is audited.
   - One director may fill all six ticker slots (CRIT-5): the slots are shared first come, first served (spec TK-7, F6), and admins end announcements when they must. No per-committee quota.
+
+### 2026-11-25, security audit fixes: client-side security and privacy
+
+Fixes for the audit findings on the web app and the page headers (DP-1, WEB-PRIV-1, PRIV-1, CSP-1, WEB-HARD-1, WEB-XSS-1, XSS-1, WEB-PRIV-2, the web part of DP-4, WEB-HARD-2, DEP-1).
+
+- **Analytics (PostHog) count page views on public pages and nothing else.** Rules in `src/lib/site/analytics.ts`, applied by the root layout:
+  - PostHog loads only when the page load starts on a public page, both `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` are set, and the browser sends neither Do Not Track nor Global Privacy Control. A page load that starts under `/portal` never loads it, even after the person moves on to public pages.
+  - With PostHog in the page, every navigation into `/portal` (link, `goto`, form) is a full page load, so the portal never runs with it.
+  - Options: page views on history changes and page leaves only. Off: autocapture (so no element text, attributes or form fields), rage clicks, dead clicks, heatmaps, exceptions, web vitals, session recording, surveys, product tours, conversations and web experiments. `advanced_disable_flags` stops the remote config and feature flag requests, so the analytics host cannot turn any of these on, and `disable_external_dependency_loading` stops every script from it (config.js, surveys.js, recorder.js, toolbar.js). `mask_all_text` and `mask_all_element_attributes` as a backstop, `respect_dnt`, `persistence: "localStorage"` (no analytics cookie on requests to the service) and `cross_subdomain_cookie: false`.
+  - `before_send` drops any event whose `$current_url`, or the browser's current path, is under `/portal`, and cuts portal addresses in the other properties (`$referrer`, `$initial_referrer`, `$prev_pageview_pathname`, `$set_once` and so on) to `<origin>/portal/` or `/portal/`.
+  - Ops, outside this repo: keep session replay off in the PostHog project, and add `/portal` to its replay URL blocklist in case it is ever turned on. A short privacy note naming PostHog on the public site is a product decision still open.
+- **Content-Security-Policy.** `vite.config.ts` turns on SvelteKit's `csp` in `hash` mode with `script-src 'self' 'unsafe-hashes' 'sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I='`, `object-src 'none'` and `base-uri 'self'`, so every prerendered page and `200.html` carries a `<meta>` policy with the hash of its start-up script. The service sends the full policy as a header (`static_files::content_security_policy`); browsers enforce both:
+  - `default-src 'self'; script-src 'self' 'unsafe-hashes' 'sha256-7dQw...' <page hashes>; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self' data: blob: https://assets.scottylabs.org; connect-src 'self' [analytics host]; frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://calendar.google.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self' [Keycloak origin]; object-src 'none'`.
+  - For an HTML file or the `200.html` shell, `<page hashes>` are computed from the inline scripts in that response (`inline_script_hashes`: no `src`, and no `type` other than JavaScript or `module`), so they always equal the ones SvelteKit wrote; a `304` carries the same header. Other responses get the policy without page hashes.
+  - The one inline event handler allowed is Svelte's `this.__e=event`, which it writes on prerendered images with an `onload` or `onerror` handler so the event survives hydration; it can do nothing else.
+  - `style-src-attr 'unsafe-inline'`: Svelte writes style attributes into prerendered pages and into the markup it creates in the browser (`style:` directives, `style="..."`), and removing them all is not practical. A style attribute cannot load anything the other directives refuse. Stylesheets and `<style>` elements must come from this origin.
+  - The analytics host is in `connect-src` only for public pages (`Audience::Public`), and only when the service has both PostHog values (`Config::analytics_origin`, from `PUBLIC_POSTHOG_HOST`). Portal pages cannot connect to it, and no page can load a script from it.
+  - The Google Calendar frame is the events calendar on the home page; the video hosts load only after a visitor presses Play.
+- **The rich text editor writes only sanitized markup.** Every write into the editable element goes through `ShownRichText` (`src/lib/editor/shown.ts`), which runs `sanitize()` on the value from outside (load, kept work, undo) and on what it puts back when focus leaves. Before, leaving the field without typing put the API's raw value into the page. The server half, sanitizing rich text on read in the editor responses as `approvals.rs` does, belongs to the API owners.
+- **Kept work is cleared** (`clearKeptChanges` in `src/lib/portal/kept-changes.ts`, called from `PortalSession`): all of it when the person signs out; everything but that person's when their session ends, and whenever `GET /api/me` answers, so a different person signing in on the tab never finds someone else's work there.
+- **Signing out follows Keycloak's end-session address** when `POST /api/auth/logout` answers `200` with `{ "endSessionUrl": "<url>" }` (an absolute https address, or http on localhost); otherwise, including the current `204`, the person goes to `/portal/sign-in/?signedOut=1` as before. The sign-in track owns the server side.
+- **New-tab links** all carry `rel="noopener noreferrer"`; `tests/links.test.ts` reads every component's markup and fails on a `target="_blank"` (or a passed-through target) without it. `Button` and `IconButton` add it themselves.
+- **Dependencies:** `@sveltejs/kit` 3.1.1 and `@sveltejs/adapter-static` 4.0.1, the first releases without the published advisories (none of which applied here). Drop-in; `deno.lock` updated.
 
 ### 2026-11-25, follow-ups after the final review
 

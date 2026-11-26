@@ -6,6 +6,8 @@
 //! 404 everywhere else, so SvelteKit renders its error page.
 //!
 //! The project tags carry [`INJECTED_ATTRIBUTE`], so the app removes them once it writes the head itself (`src/lib/site/head.ts`): crawlers that do not run scripts read them, and a visitor never gets two descriptions or the first project's tags after moving to another page.
+//!
+//! Every HTML page gets a Content-Security-Policy that allows its own inline scripts by hash (see [`content_security_policy`]).
 
 use std::path::{Path, PathBuf};
 
@@ -19,6 +21,8 @@ use axum::http::header::{
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use sha2::{Digest, Sha256};
 use sqlx::{FromRow, PgPool};
 
@@ -55,7 +59,7 @@ pub async fn serve(State(state): State<AppState>, request: Request) -> Response 
     };
 
     let response = match lookup(root, &path).await {
-        Lookup::File(file) => serve_file(&file, &path, request.headers()).await,
+        Lookup::File(file) => serve_file(&state.config, &file, &path, request.headers()).await,
         Lookup::AddSlash => redirect_with_slash(raw_path, query),
         Lookup::Missing => fallback(&state, root, &path, raw_path, query).await,
     };
@@ -208,12 +212,16 @@ fn matches_etag(request: &HeaderMap, tag: &str) -> bool {
         .any(|candidate| candidate == tag || candidate == "*")
 }
 
-async fn serve_file(file: &Path, path: &str, request: &HeaderMap) -> Response {
+async fn serve_file(config: &Config, file: &Path, path: &str, request: &HeaderMap) -> Response {
     let Ok(bytes) = tokio::fs::read(file).await else {
         return plain(StatusCode::NOT_FOUND, "Not found");
     };
     let cache = cache_policy(path, file);
     let tag = (cache != IMMUTABLE).then(|| etag(&bytes));
+    // A 304 carries it too: browsers update the stored response's headers from it.
+    let policy = is_html(file)
+        .then(|| page_policy(config, Audience::of(path), &String::from_utf8_lossy(&bytes)))
+        .flatten();
     let mut response = match &tag {
         Some(tag) if matches_etag(request, tag) => StatusCode::NOT_MODIFIED.into_response(),
         _ => {
@@ -232,7 +240,14 @@ async fn serve_file(file: &Path, path: &str, request: &HeaderMap) -> Response {
     if let Some(value) = tag.and_then(|tag| HeaderValue::from_str(&tag).ok()) {
         headers.insert(ETAG, value);
     }
+    if let Some(value) = policy {
+        headers.insert(CONTENT_SECURITY_POLICY, value);
+    }
     response
+}
+
+fn is_html(file: &Path) -> bool {
+    file.extension().is_some_and(|ext| ext == "html")
 }
 
 /// The slug of a project page path, `/projects/<slug>/` or `/projects/<slug>`.
@@ -265,20 +280,24 @@ async fn fallback(
         tracing::error!(dir = %root.display(), "the build has no {FALLBACK_PAGE}");
         return plain(StatusCode::NOT_FOUND, "Not found");
     };
-    if is_portal(path) {
-        return html(StatusCode::OK, NO_STORE, shell);
+    let config = &state.config;
+    let audience = Audience::of(path);
+    if audience == Audience::Portal {
+        return html(config, audience, StatusCode::OK, NO_STORE, shell);
     }
     let Some(slug) = project_slug(path) else {
-        return html(StatusCode::NOT_FOUND, REVALIDATE, shell);
+        return html(config, audience, StatusCode::NOT_FOUND, REVALIDATE, shell);
     };
     if !path.ends_with('/') {
         return redirect_with_slash(raw_path, query);
     }
     match project_page(&state.db, slug).await {
         Ok(ProjectPage::Published(meta)) => html(
+            config,
+            audience,
             StatusCode::OK,
             REVALIDATE,
-            inject_meta(&shell, &meta, &state.config),
+            inject_meta(&shell, &meta, config),
         ),
         Ok(ProjectPage::Moved(new_slug)) => {
             let mut response = StatusCode::PERMANENT_REDIRECT.into_response();
@@ -287,15 +306,30 @@ async fn fallback(
             }
             response
         }
-        Ok(ProjectPage::Missing) => html(StatusCode::NOT_FOUND, REVALIDATE, shell),
+        Ok(ProjectPage::Missing) => {
+            html(config, audience, StatusCode::NOT_FOUND, REVALIDATE, shell)
+        }
         Err(error) => {
             tracing::error!(error = ?error, slug, "could not look up a project page");
-            html(StatusCode::SERVICE_UNAVAILABLE, NO_STORE, shell)
+            html(
+                config,
+                audience,
+                StatusCode::SERVICE_UNAVAILABLE,
+                NO_STORE,
+                shell,
+            )
         }
     }
 }
 
-fn html(status: StatusCode, cache: &'static str, body: String) -> Response {
+fn html(
+    config: &Config,
+    audience: Audience,
+    status: StatusCode,
+    cache: &'static str,
+    body: String,
+) -> Response {
+    let policy = page_policy(config, audience, &body);
     let mut response = (status, body).into_response();
     let headers = response.headers_mut();
     headers.insert(
@@ -303,6 +337,9 @@ fn html(status: StatusCode, cache: &'static str, body: String) -> Response {
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     headers.insert(CACHE_CONTROL, HeaderValue::from_static(cache));
+    if let Some(value) = policy {
+        headers.insert(CONTENT_SECURITY_POLICY, value);
+    }
     response
 }
 
@@ -460,7 +497,9 @@ pub async fn security_headers(
     request: Request,
     next: Next,
 ) -> Response {
-    let is_api = request.uri().path().starts_with("/api/");
+    let path = request.uri().path();
+    let is_api = path.starts_with("/api/");
+    let audience = Audience::of(path);
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     set_default(headers, X_CONTENT_TYPE_OPTIONS, "nosniff");
@@ -471,7 +510,9 @@ pub async fn security_headers(
         HeaderName::from_static("permissions-policy"),
         "camera=(), microphone=(), geolocation=()",
     );
-    if let Ok(value) = HeaderValue::from_str(&content_security_policy(&state.config)) {
+    // HTML pages set their own, with their inline scripts' hashes.
+    if let Ok(value) = HeaderValue::from_str(&content_security_policy(&state.config, audience, &[]))
+    {
         headers.entry(CONTENT_SECURITY_POLICY).or_insert(value);
     }
     if state.config.is_https() {
@@ -489,9 +530,64 @@ fn set_default(headers: &mut HeaderMap, name: HeaderName, value: &'static str) {
         .or_insert(HeaderValue::from_static(value));
 }
 
-/// Locks down framing, plugins, `<base>` and form targets. Scripts are not restricted yet, because
-/// SvelteKit inlines its start-up script.
-pub fn content_security_policy(config: &Config) -> String {
+/// Who a page is for. Public pages may send page views to PostHog. The portal never loads it (`src/lib/site/analytics.ts`), so its pages may not connect to the analytics host either.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Audience {
+    Public,
+    Portal,
+}
+
+impl Audience {
+    pub fn of(path: &str) -> Self {
+        if is_portal(path) {
+            Self::Portal
+        } else {
+            Self::Public
+        }
+    }
+}
+
+/// Team and history photos (`src/lib/data/README.md`). Uploads are served from this origin under `/media/`.
+const IMAGE_HOSTS: [&str; 1] = ["https://assets.scottylabs.org"];
+
+/// The video players, which load only after a visitor presses Play (`src/lib/media/video.ts`), and the events calendar on the home page.
+const FRAME_HOSTS: [&str; 3] = [
+    "https://www.youtube-nocookie.com",
+    "https://player.vimeo.com",
+    "https://calendar.google.com",
+];
+
+/// The hash of `this.__e=event`, the only inline event handler allowed (with `'unsafe-hashes'`). Svelte writes it on prerendered images that have an `onload` or `onerror` handler, to keep the event for after hydration; the same pair is in `csp` in `vite.config.ts`.
+const SVELTE_EVENT_REPLAY: &str = "sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I=";
+
+/// The policy for an HTML page, allowing the inline scripts it carries.
+fn page_policy(config: &Config, audience: Audience, html: &str) -> Option<HeaderValue> {
+    let hashes = inline_script_hashes(html);
+    HeaderValue::from_str(&content_security_policy(config, audience, &hashes)).ok()
+}
+
+/// The Content-Security-Policy. Scripts come only from this origin, plus the inline scripts whose `script_hashes` (`sha256-...`, from [`inline_script_hashes`]) are given: SvelteKit starts each page with one, and writes the same hashes into a `<meta>` policy of its own (`csp` in `vite.config.ts`). Browsers enforce both policies. No other inline code runs, except Svelte's one-statement event handler ([`SVELTE_EVENT_REPLAY`]).
+///
+/// Style attributes are allowed inline (`style-src-attr`): Svelte writes them into prerendered pages and into the markup it creates in the browser, for `style:` directives and the like, and a style attribute cannot load anything that the other directives refuse. Stylesheets and `<style>` elements must come from this origin.
+///
+/// Connections go to this origin, and from public pages also to the PostHog host when analytics are on. Frames, plugins, `<base>` and form targets are locked down as before, with the Keycloak origin as a form target when sign-in is configured.
+pub fn content_security_policy(
+    config: &Config,
+    audience: Audience,
+    script_hashes: &[String],
+) -> String {
+    let mut script_src = vec![
+        "'self'".to_owned(),
+        "'unsafe-hashes'".to_owned(),
+        format!("'{SVELTE_EVENT_REPLAY}'"),
+    ];
+    script_src.extend(script_hashes.iter().map(|hash| format!("'{hash}'")));
+    let mut connect_src = vec!["'self'"];
+    if audience == Audience::Public
+        && let Some(origin) = config.analytics_origin.as_deref()
+    {
+        connect_src.push(origin);
+    }
     let keycloak = config
         .oidc
         .as_ref()
@@ -502,7 +598,118 @@ pub fn content_security_policy(config: &Config) -> String {
         Some(origin) => format!("'self' {origin}"),
         None => "'self'".to_owned(),
     };
-    format!("frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action {form_action}")
+    [
+        "default-src 'self'".to_owned(),
+        format!("script-src {}", script_src.join(" ")),
+        "style-src 'self'".to_owned(),
+        "style-src-attr 'unsafe-inline'".to_owned(),
+        format!("img-src 'self' data: blob: {}", IMAGE_HOSTS.join(" ")),
+        format!("connect-src {}", connect_src.join(" ")),
+        format!("frame-src {}", FRAME_HOSTS.join(" ")),
+        "frame-ancestors 'none'".to_owned(),
+        "base-uri 'self'".to_owned(),
+        format!("form-action {form_action}"),
+        "object-src 'none'".to_owned(),
+    ]
+    .join("; ")
+}
+
+/// `sha256-<base64>` for each script element in `html` that runs inline code: no `src`, and no `type` other than JavaScript or a module. Data blocks such as SvelteKit's `<script type="application/json">` never run, so they need no hash.
+pub fn inline_script_hashes(html: &str) -> Vec<String> {
+    let lower = html.to_ascii_lowercase();
+    let mut hashes = Vec::new();
+    let mut from = 0;
+    while let Some(found) = lower[from..].find("<script") {
+        let start = from + found;
+        let after_name = start + "<script".len();
+        // `<scripts>` or `<script-x>` is another element.
+        if !lower[after_name..]
+            .starts_with(|c: char| c == '>' || c == '/' || c.is_ascii_whitespace())
+        {
+            from = after_name;
+            continue;
+        }
+        let Some(tag_end) = tag_end(&lower, after_name) else {
+            break;
+        };
+        let content_start = tag_end + 1;
+        let Some(length) = lower[content_start..].find("</script") else {
+            break;
+        };
+        let content_end = content_start + length;
+        if runs_inline(&lower[after_name..tag_end]) {
+            let digest = Sha256::digest(&html.as_bytes()[content_start..content_end]);
+            hashes.push(format!("sha256-{}", BASE64.encode(digest)));
+        }
+        from = content_end;
+    }
+    hashes
+}
+
+/// The index of the `>` that closes a start tag whose attributes begin at `from`, skipping quoted values.
+fn tag_end(html: &str, from: usize) -> Option<usize> {
+    let mut quote = None;
+    for (offset, byte) in html.as_bytes()[from..].iter().enumerate() {
+        match (quote, byte) {
+            (None, b'"' | b'\'') => quote = Some(*byte),
+            (Some(open), _) if *byte == open => quote = None,
+            (None, b'>') => return Some(from + offset),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Whether a script with these (lowercased) attributes runs the code inside it.
+fn runs_inline(attributes: &str) -> bool {
+    let attributes = parse_attributes(attributes);
+    if attributes.iter().any(|(name, _)| name == "src") {
+        return false;
+    }
+    match attributes.iter().find(|(name, _)| name == "type") {
+        None => true,
+        Some((_, value)) => matches!(
+            value.trim(),
+            "" | "module" | "text/javascript" | "application/javascript"
+        ),
+    }
+}
+
+/// Attribute names and values, enough to tell `src` and `type` apart from text inside other values.
+fn parse_attributes(text: &str) -> Vec<(String, String)> {
+    let mut attributes = Vec::new();
+    let mut rest = text.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+    while !rest.is_empty() {
+        let name_end = rest
+            .find(|c: char| c.is_ascii_whitespace() || c == '=' || c == '/')
+            .unwrap_or(rest.len());
+        let name = rest[..name_end].to_owned();
+        rest = rest[name_end..].trim_start_matches(|c: char| c.is_ascii_whitespace());
+        let mut value = String::new();
+        if let Some(after_equals) = rest.strip_prefix('=') {
+            let after_equals = after_equals.trim_start_matches(|c: char| c.is_ascii_whitespace());
+            let (found, remaining) = match after_equals.chars().next() {
+                Some(quote @ ('"' | '\'')) => {
+                    let inner = &after_equals[1..];
+                    let close = inner.find(quote).unwrap_or(inner.len());
+                    (&inner[..close], inner.get(close + 1..).unwrap_or(""))
+                }
+                _ => {
+                    let end = after_equals
+                        .find(|c: char| c.is_ascii_whitespace())
+                        .unwrap_or(after_equals.len());
+                    after_equals.split_at(end)
+                }
+            };
+            value = found.to_owned();
+            rest = remaining;
+        }
+        if !name.is_empty() {
+            attributes.push((name, value));
+        }
+        rest = rest.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '/');
+    }
+    attributes
 }
 
 #[cfg(test)]

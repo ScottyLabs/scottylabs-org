@@ -13,6 +13,20 @@ export default defineConfig(({ mode }) => {
       // Pages that are not prerendered (project pages and the portal) load from 200.html, which the site service returns for those paths.
       sveltekit({
         adapter: adapter({ fallback: "200.html" }),
+        // Each page starts with an inline script. SvelteKit hashes it into a <meta> policy that allows only scripts from this origin and that one. The site service sends the full policy as a header with the same hashes (services/site/src/static_files.rs); the directives that depend on the deployment, such as the analytics host, live there.
+        // The one inline event handler allowed is the one Svelte writes on prerendered images with an onload or onerror handler, `this.__e=event`, which keeps the event for after hydration.
+        csp: {
+          mode: "hash",
+          directives: {
+            "script-src": [
+              "self",
+              "unsafe-hashes",
+              "sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I=",
+            ],
+            "object-src": ["none"],
+            "base-uri": ["self"],
+          },
+        },
         prerender: {
           // Prerendered pages preload their content from the site service (/api/...), which the build does not run, so the crawler finds nothing there. Anything else still fails.
           handleHttpError: ({ path, status, message }) => {

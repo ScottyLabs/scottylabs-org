@@ -46,9 +46,9 @@
     escapeHtml,
     normalizeRichText,
     plainTextLength,
-    sanitize,
     textToHtml,
   } from "./sanitize.ts";
+  import { ShownRichText } from "./shown.ts";
 
   let {
     value = $bindable(""),
@@ -110,8 +110,9 @@
   let viewportWidth = $state(0);
   let viewportHeight = $state(0);
 
-  // The value this editor last showed or sent, so outside changes can be told from our own.
-  let shown: string | null = null;
+  // The value this editor last showed or sent, so outside changes can be told from our own. It
+  // sanitizes everything it writes into the text, including the value as it came from outside.
+  const shown = new ShownRichText();
   let savedRange: Range | null = null;
   let draggingInside = false;
 
@@ -159,11 +160,7 @@
     const element = root;
     if (element === undefined) return;
     untrack(() => {
-      if (next === shown) return;
-      shown = next;
-      // Safe: sanitize() keeps only the allowed tags and checked links.
-      element.innerHTML = sanitize(next);
-      refresh(element, next);
+      if (shown.show(element, next)) refresh(element, shown.html);
     });
   });
 
@@ -213,8 +210,7 @@
     if (root === undefined) return;
     const html = normalizeRichText(root.innerHTML);
     refresh(root, html);
-    if (html === shown) return;
-    shown = html;
+    if (!shown.record(html)) return;
     value = html;
     onchange?.(html);
   }
@@ -393,12 +389,9 @@
     toolbarFocused = false;
     hasSelection = false;
     link = null;
-    // Show exactly what was saved, so leftovers such as an empty paragraph disappear.
-    if (root !== undefined && root.innerHTML !== (shown ?? "")) {
-      // Safe: `shown` came from normalizeRichText() or sanitize().
-      root.innerHTML = shown ?? "";
-      empty = isVisuallyEmpty(root);
-    }
+    // Show exactly what was saved, so leftovers such as an empty paragraph disappear. Only
+    // sanitized markup is ever put back.
+    if (root !== undefined && shown.restore(root)) empty = isVisuallyEmpty(root);
   }
 </script>
 

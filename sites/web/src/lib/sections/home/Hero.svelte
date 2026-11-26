@@ -33,7 +33,7 @@
       </div>
 
       <div class="action-buttons">
-        <a href="https://tartanconnect.cmu.edu/scottylabs/club_signup" target="_blank">
+        <a href="https://tartanconnect.cmu.edu/scottylabs/club_signup" target="_blank" rel="noopener noreferrer">
           <Button label="Join our mailing list" variant="primary" />
         </a>
         <a href="mailto:hello@scottylabs.org">

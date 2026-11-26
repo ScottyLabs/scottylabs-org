@@ -1,4 +1,4 @@
-// Unsaved work kept in this tab when the session ends while someone is editing (spec S-5). Editors keep it from PortalSession.onEnd, before the portal sends the person to sign in and back to the same page, which puts the work back. Kept work lives in sessionStorage: it belongs to this tab, is gone when the tab closes, and is only handed back to the person who made it. Plain logic, so it can be tested without a browser.
+// Unsaved work kept in this tab when the session ends while someone is editing (spec S-5). Editors keep it from PortalSession.onEnd, before the portal sends the person to sign in and back to the same page, which puts the work back. Kept work lives in sessionStorage: it belongs to this tab, is gone when the tab closes, and is only handed back to the person who made it. Signing out clears it, and someone else signing in on the tab clears what is not theirs. Plain logic, so it can be tested without a browser.
 
 const PREFIX = "sl:kept-changes:";
 
@@ -21,7 +21,10 @@ export interface KeptChanges<T> {
 /** The parts of Storage used here, so tests can pass a stand-in. */
 export type KeptStore = Pick<Storage, "getItem" | "setItem" | "removeItem">;
 
-function tabStore(): KeptStore | null {
+/** What clearing needs on top: a way to list what is kept. */
+export type KeptListStore = KeptStore & Pick<Storage, "key" | "length">;
+
+function tabStore(): Storage | null {
   try {
     return globalThis.sessionStorage;
   } catch {
@@ -77,6 +80,42 @@ export function forgetChanges(key: string, store: KeptStore | null = tabStore())
     store?.removeItem(PREFIX + key);
   } catch {
     // Nothing to forget when storage is blocked.
+  }
+}
+
+/**
+ * Removes the work kept in this tab, all of it or all but `keepFor`'s. Signing out clears all of
+ * it, and when a session ends or someone signs in, only that person's work stays (PortalSession),
+ * so one person's unsaved work never waits in the tab for whoever uses it next.
+ */
+export function clearKeptChanges(
+  keepFor: string | null = null,
+  store: KeptListStore | null = tabStore(),
+): void {
+  if (store === null) return;
+  try {
+    const keys: string[] = [];
+    for (let index = 0; index < store.length; index += 1) {
+      const key = store.key(index);
+      if (key?.startsWith(PREFIX) === true) keys.push(key);
+    }
+    for (const key of keys) {
+      if (keepFor !== null && keptBy(store.getItem(key)) === keepFor) continue;
+      store.removeItem(key);
+    }
+  } catch {
+    // Storage blocked by the browser's settings: nothing was kept.
+  }
+}
+
+/** Who kept the work stored as `raw`, or null when it cannot be read. */
+function keptBy(raw: string | null): string | null {
+  if (raw === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) && typeof parsed.userId === "string" ? parsed.userId : null;
+  } catch {
+    return null;
   }
 }
 

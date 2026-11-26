@@ -98,7 +98,7 @@
 <section class="main-container">
   <div class="centered-section">
     <h1 class="header">We host Pittsburgh&apos;s largest annual hackathon,</h1>
-    <a class="tartanhacks-logo-link" href="https://tartanhacks.com" target="_blank" rel="noreferrer">
+    <a class="tartanhacks-logo-link" href="https://tartanhacks.com" target="_blank" rel="noopener noreferrer">
       <img class="tartanhacks-logo" src={tartanhacksLogo} alt="TartanHacks" />
     </a>
   </div>

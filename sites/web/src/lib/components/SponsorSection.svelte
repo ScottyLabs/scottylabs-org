@@ -8,7 +8,7 @@
 </script>
 
 {#snippet sponsorTile({ imageUrl, websiteUrl }: { imageUrl: string; websiteUrl: string })}
-  <a href={websiteUrl} target="_blank" rel="noreferrer" class="sponsor">
+  <a href={websiteUrl} target="_blank" rel="noopener noreferrer" class="sponsor">
     {#if imageUrl}
       <img src={imageUrl} alt={imageUrl} />
     {/if}
@@ -19,7 +19,7 @@
   <h2 class="header">Thank you to our 2026 Sponsors!</h2>
   <div class="title-sponsor-container">
     <h2>TITLE SPONSOR</h2>
-    <a href="https://www.applovin.com/en" target="_blank" rel="noreferrer">
+    <a href="https://www.applovin.com/en" target="_blank" rel="noopener noreferrer">
       <img src={appLovin} alt="AppLovin" />
     </a>
   </div>

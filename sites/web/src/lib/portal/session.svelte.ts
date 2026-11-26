@@ -6,8 +6,10 @@ import { goto } from "$app/navigation";
 import { ApiError, get, isApiError, post, setCsrfToken } from "../api/client.ts";
 import type { MeResponse, Permissions, RoleAssignment } from "../api/types.ts";
 import type { AccessState, SessionStatus, SignedOutReason } from "./access.ts";
+import { clearKeptChanges } from "./kept-changes.ts";
 import { replaceLocation } from "./navigation.ts";
 import { SIGN_IN_PATH, isBarePortalPath } from "./paths.ts";
+import { endSessionUrl } from "./sign-out.ts";
 
 export type { SessionStatus, SignedOutReason } from "./access.ts";
 
@@ -61,15 +63,24 @@ export class PortalSession implements AccessState {
     return this.#fetch(true);
   }
 
-  /** Ends the session on the server, forgets it here and goes to the sign-in page. */
+  /**
+   * Ends the session on the server, forgets it here, and goes to Keycloak to end its session too
+   * when the server names the address, or else to the sign-in page.
+   */
   async signOut(): Promise<void> {
+    let answer: unknown = null;
     try {
-      await post("/auth/logout", undefined, { redirectOnUnauthenticated: false });
+      answer = await post<unknown>("/auth/logout", undefined, { redirectOnUnauthenticated: false });
     } catch (error) {
       // Already signed out is fine. Anything else is worth telling the person about.
       if (!isApiError(error) || error.status !== 401) throw error;
     }
     this.markSignedOut("signed_out");
+    const keycloak = endSessionUrl(answer);
+    if (keycloak !== null) {
+      location.assign(keycloak);
+      return;
+    }
     await replaceLocation(
       `${SIGN_IN_PATH}?signedOut=1`,
       () => !isBarePortalPath(location.pathname),
@@ -91,7 +102,10 @@ export class PortalSession implements AccessState {
     };
   }
 
-  /** Forgets the session locally, for example after a 401. */
+  /**
+   * Forgets the session locally, for example after a 401. Work kept in the tab goes with it when
+   * the person signed out; when the session ended, only theirs stays, for them to sign back in to.
+   */
   markSignedOut(reason: SignedOutReason): void {
     if (reason === "expired" && this.me !== null) {
       for (const keep of this.#onEnd) {
@@ -102,7 +116,9 @@ export class PortalSession implements AccessState {
           reportError(error);
         }
       }
+      clearKeptChanges(this.me.user.id);
     }
+    if (reason === "signed_out") clearKeptChanges();
     this.me = null;
     this.error = null;
     this.signedOutReason = reason;
@@ -123,6 +139,8 @@ export class PortalSession implements AccessState {
   async #request(): Promise<MeResponse | null> {
     try {
       const me = await get<MeResponse>("/me", { redirectOnUnauthenticated: false });
+      // Someone else may have signed in on this tab: their work is the only kind kept here now.
+      clearKeptChanges(me.user.id);
       this.me = me;
       this.error = null;
       this.signedOutReason = null;
