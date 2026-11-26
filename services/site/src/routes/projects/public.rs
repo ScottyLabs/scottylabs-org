@@ -1,13 +1,17 @@
 //! What visitors see: GET /api/public/projects and GET /api/public/projects/:slug. Only published projects, read from their published version.
 //!
-//! The list takes `committee` and `q` (see `search`), each optional.
+//! The list takes `committee` and `q` (see `search`), each optional. Cards and searches read each project's description once per published version (`search::read`). Searches are limited per visitor and only a few run at once.
 
-use axum::extract::{Path, RawQuery, State};
-use axum::http::HeaderValue;
-use axum::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use axum::extract::{ConnectInfo, Path, RawQuery, State};
+use axum::http::header::{ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, RETRY_AFTER};
+use axum::http::{HeaderMap, HeaderValue};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use axum::{Json, Router};
+use axum::{Extension, Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use sqlx::types::Json as JsonColumn;
@@ -18,8 +22,12 @@ use super::doc::{ProjectDoc, ProjectKind, ProjectStatus, check_slug};
 use super::search;
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, ImageRef};
+use crate::ratelimit::{Class, client_ip};
 use crate::routes::common::{PUBLIC_CACHE, blocking, query_param};
 use crate::state::AppState;
+
+/// How long a search waits for one of the search slots before answering 503.
+const SEARCH_WAIT: Duration = Duration::from_secs(2);
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -48,13 +56,14 @@ pub struct ProjectCard {
 }
 
 impl ProjectCard {
+    /// Reads the description the first time a version is seen (see `search::read`), so callers with many cards build them off the async runtime.
     pub fn new(id: Uuid, slug: String, featured: bool, doc: &ProjectDoc) -> Self {
         Self {
             id,
             slug,
             name: doc.name.clone(),
             summary: doc.summary.clone(),
-            excerpt: doc.excerpt(),
+            excerpt: search::read(id, doc).excerpt.clone(),
             committee: doc.committee,
             status: doc.status,
             kind: doc.kind,
@@ -116,7 +125,12 @@ pub async fn published_cards<'e>(
     committee: Option<Committee>,
 ) -> AppResult<Vec<ProjectCard>> {
     let rows = published_rows(db, committee).await?;
-    Ok(rows.iter().map(PublishedRow::card).collect())
+    cards(rows).await
+}
+
+/// Cards for `rows`, in their order, built on the blocking pool: a version read for the first time parses its description.
+async fn cards(rows: Vec<PublishedRow>) -> AppResult<Vec<ProjectCard>> {
+    blocking(move || rows.iter().map(PublishedRow::card).collect()).await
 }
 
 async fn published_rows<'e>(
@@ -135,15 +149,28 @@ async fn published_rows<'e>(
     Ok(rows)
 }
 
-/// The rows that match a search, in their order.
-async fn search_rows(q: String, rows: Vec<PublishedRow>) -> AppResult<Vec<PublishedRow>> {
-    // Reading every description as plain text parses its HTML, and folding it walks every character: CPU work.
+/// The rows that match a search, in their order. Only a few searches run at once; one that waits too long for its turn answers 503.
+async fn search_rows(
+    state: &AppState,
+    q: String,
+    rows: Vec<PublishedRow>,
+) -> AppResult<Vec<PublishedRow>> {
+    let slot = tokio::time::timeout(SEARCH_WAIT, Arc::clone(&state.search_slots).acquire_owned())
+        .await
+        .map_err(|_| {
+            AppError::Unavailable(
+                "Many searches are running right now. Try again in a moment.".into(),
+            )
+        })?
+        .map_err(|_| AppError::Internal(anyhow::anyhow!("the search slots were closed")))?;
+    // The slot moves into the blocking task, so a visitor who leaves does not free it while the search still runs.
     blocking(move || {
-        let texts: Vec<String> = rows
+        let texts: Vec<_> = rows
             .iter()
-            .map(|row| search::searchable_text(&row.published))
+            .map(|row| search::read(row.id, &row.published))
             .collect();
-        let hits = search::matches(&q, &texts);
+        let hits = search::matches_folded(&q, texts.iter().map(|text| text.folded.as_str()));
+        drop(slot);
         rows.into_iter()
             .zip(hits)
             .filter_map(|(row, hit)| hit.then_some(row))
@@ -164,8 +191,26 @@ fn public(result: AppResult<Response>) -> Response {
     response
 }
 
-async fn list(State(state): State<AppState>, RawQuery(query): RawQuery) -> Response {
-    public(list_projects(&state, query.as_deref()).await)
+async fn list(
+    State(state): State<AppState>,
+    peer: Option<Extension<ConnectInfo<SocketAddr>>>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
+    let query = query.as_deref();
+    if query_param(query, "q").is_some() {
+        // Each visitor gets a number of searches a minute (`ratelimit::Class::Search`); the list itself is not limited.
+        let peer = peer.map(|Extension(ConnectInfo(peer))| peer.ip());
+        let client = client_ip(peer, &headers);
+        if let Err(wait) = state.limits.check(Class::Search, client, Instant::now()) {
+            let mut response = public(Err(AppError::RateLimited));
+            response
+                .headers_mut()
+                .insert(RETRY_AFTER, HeaderValue::from(wait.as_secs().max(1)));
+            return response;
+        }
+    }
+    public(list_projects(&state, query).await)
 }
 
 async fn list_projects(state: &AppState, query: Option<&str>) -> AppResult<Response> {
@@ -179,9 +224,9 @@ async fn list_projects(state: &AppState, query: Option<&str>) -> AppResult<Respo
     let q = query_param(query, "q").map(|q| search::capped(&q));
     let mut rows = published_rows(&state.db, committee).await?;
     if let Some(q) = q {
-        rows = search_rows(q, rows).await?;
+        rows = search_rows(state, q, rows).await?;
     }
-    let projects = rows.iter().map(PublishedRow::card).collect();
+    let projects = cards(rows).await?;
     Ok(Json(PublicProjectsResponse { projects }).into_response())
 }
 

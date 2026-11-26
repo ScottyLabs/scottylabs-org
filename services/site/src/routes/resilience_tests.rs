@@ -1,4 +1,4 @@
-//! The site through database outages: the static pages without a database, the API's 503s, the health check, and the last good copies of public answers.
+//! The site through database outages: the static pages without a database, the API's 503s, the health check, the last good copies of public answers, and the limits on searches.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -148,4 +148,52 @@ async fn public_answers_survive_a_database_outage(db: PgPool) {
         assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_eq!(res.code(), "unavailable", "{path}");
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn searches_are_limited_per_visitor_and_in_number(db: PgPool) {
+    testing::ensure_committees(&db).await;
+    let state = AppState::new(db, Arc::new(testing::config()))
+        .await
+        .unwrap();
+    let app = super::router(state.clone());
+
+    // Requests without a client address share one visitor.
+    for _ in 0..crate::ratelimit::Class::Search.per_minute() {
+        let res = Req::get("/api/public/projects?q=maps").send(&app).await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+    let limited = Req::get("/api/public/projects?q=maps").send(&app).await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(limited.code(), "rate_limited");
+    assert!(limited.header("retry-after").is_some());
+    assert_eq!(limited.header("access-control-allow-origin"), Some("*"));
+    // The list itself is not limited.
+    assert_eq!(
+        Req::get("/api/public/projects").send(&app).await.status,
+        StatusCode::OK
+    );
+
+    // While every search slot is busy, a search waits briefly and is then told to retry. A state of its own starts with a full allowance.
+    let state = AppState::new(state.db.clone(), Arc::new(testing::config()))
+        .await
+        .unwrap();
+    let app = super::router(state.clone());
+    let busy = Arc::clone(&state.search_slots)
+        .acquire_many_owned(u32::try_from(state.search_slots.available_permits()).unwrap())
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let waited = Req::get("/api/public/projects?q=maps").send(&app).await;
+    assert_eq!(waited.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(waited.code(), "unavailable");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    drop(busy);
+    assert_eq!(
+        Req::get("/api/public/projects?q=maps")
+            .send(&app)
+            .await
+            .status,
+        StatusCode::OK
+    );
 }

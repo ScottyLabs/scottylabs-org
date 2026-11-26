@@ -1,9 +1,79 @@
 //! Searching published projects for the Projects page (spec P-5). It mirrors `matchesSearch` in sites/web/src/lib/projects/filter.ts, which filters the cards the page has loaded: every word of the search must appear, ignoring case and accents, in the name, summary, description, committee, kind or status. Cards carry only the start of the description, so the page also asks the service, which looks through the whole of it.
 
+use std::collections::HashMap;
+use std::hash::{BuildHasher, RandomState};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
+
 use unicode_normalization::UnicodeNormalization;
+use uuid::Uuid;
 
 use super::doc::ProjectDoc;
 use crate::richtext;
+
+/// Projects whose text is kept at most. Past this the cache starts over; a site has far fewer published projects.
+const MAX_KEPT: usize = 4096;
+
+/// What reading a published project's description gives: the excerpt on its card and the folded text a search looks through. Both parse the description's HTML, so they are kept per project in memory and worked out again only when the text changes; neither a list nor a search parses anything for a project already read.
+pub struct ReadText {
+    pub excerpt: String,
+    /// [`searchable_text`], folded.
+    pub folded: String,
+}
+
+struct Kept {
+    /// Of every field the text comes from, so an edit to any of them is noticed.
+    fingerprint: u64,
+    text: Arc<ReadText>,
+}
+
+struct TextCache {
+    /// Keyed per process, so nobody can pick texts that collide.
+    hasher: RandomState,
+    kept: Mutex<HashMap<Uuid, Kept>>,
+}
+
+static TEXTS: LazyLock<TextCache> = LazyLock::new(|| TextCache {
+    hasher: RandomState::new(),
+    kept: Mutex::new(HashMap::new()),
+});
+
+/// The excerpt and folded text of project `id` in the version `doc`. CPU bound the first time a version is read, so callers run it off the async runtime.
+pub fn read(id: Uuid, doc: &ProjectDoc) -> Arc<ReadText> {
+    let cache = &*TEXTS;
+    let fingerprint = cache.hasher.hash_one((
+        doc.name.as_str(),
+        doc.summary.as_str(),
+        doc.description.as_str(),
+        doc.committee.name(),
+        doc.kind.label(),
+        doc.status.label(),
+    ));
+    {
+        let kept = cache.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(entry) = kept
+            .get(&id)
+            .filter(|entry| entry.fingerprint == fingerprint)
+        {
+            return Arc::clone(&entry.text);
+        }
+    }
+    let text = Arc::new(ReadText {
+        excerpt: doc.excerpt(),
+        folded: fold(&searchable_text(doc)),
+    });
+    let mut kept = cache.kept.lock().unwrap_or_else(PoisonError::into_inner);
+    if kept.len() >= MAX_KEPT && !kept.contains_key(&id) {
+        kept.clear();
+    }
+    kept.insert(
+        id,
+        Kept {
+            fingerprint,
+            text: Arc::clone(&text),
+        },
+    );
+    text
+}
 
 /// The longest search read; the rest is ignored. The Projects page keeps at most 80 characters.
 pub const MAX_QUERY_CHARS: usize = 100;
@@ -27,15 +97,19 @@ pub fn searchable_text(doc: &ProjectDoc) -> String {
 }
 
 /// Which of `texts` (from [`searchable_text`]) hold every word of `q`, in order. Everything matches a search without words.
+#[cfg(test)]
 pub fn matches(q: &str, texts: &[String]) -> Vec<bool> {
+    let folded: Vec<String> = texts.iter().map(|text| fold(text)).collect();
+    matches_folded(q, folded.iter().map(String::as_str))
+}
+
+/// [`matches`] for texts already folded, such as [`ReadText::folded`]. Folding is per character, and a word never holds a space, so folding the joined fields equals joining the folded fields.
+pub fn matches_folded<'a>(q: &str, folded: impl IntoIterator<Item = &'a str>) -> Vec<bool> {
     let q = fold(q);
     let words: Vec<&str> = q.split(is_space).filter(|word| !word.is_empty()).collect();
-    texts
-        .iter()
-        .map(|text| {
-            let text = fold(text);
-            words.iter().all(|word| text.contains(word))
-        })
+    folded
+        .into_iter()
+        .map(|text| words.iter().all(|word| text.contains(word)))
         .collect()
 }
 
@@ -148,6 +222,34 @@ mod tests {
         assert_eq!(matches("maps tech", &texts), [false, false]);
         assert_eq!(matches(" \t ", &texts), [true, true]);
         assert!(matches("maps", &[]).is_empty());
+    }
+
+    #[test]
+    fn read_text_is_kept_until_the_project_changes() {
+        use crate::models::Committee;
+
+        let id = Uuid::now_v7();
+        let mut doc = ProjectDoc::new("Caf\u{e9} finder".into(), Committee::Tech);
+        doc.description = "<p>Find <strong>coffee</strong> near you.</p>".into();
+        let first = read(id, &doc);
+        assert_eq!(first.excerpt, "Find coffee near you.");
+        assert!(first.folded.starts_with("cafe finder"));
+        assert!(
+            Arc::ptr_eq(&first, &read(id, &doc)),
+            "read once per version"
+        );
+        assert_eq!(
+            matches_folded("COFFEE cafe", [first.folded.as_str()]),
+            [true]
+        );
+
+        doc.description = "<p>Find tea.</p>".into();
+        let edited = read(id, &doc);
+        assert!(!Arc::ptr_eq(&first, &edited));
+        assert_eq!(edited.excerpt, "Find tea.");
+        assert_eq!(matches_folded("coffee", [edited.folded.as_str()]), [false]);
+        doc.summary = "Hot drinks".into();
+        assert!(read(id, &doc).folded.contains("hot drinks"));
     }
 
     #[test]

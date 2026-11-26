@@ -1,4 +1,4 @@
-//! Per-IP request limits, kept in memory: sign-in and dev login 20 a minute, uploads 30, other writes 120. Reads are not limited.
+//! Per-IP request limits, kept in memory: sign-in and dev login 20 a minute, uploads 30, other writes 120, and searches of the public project list 60, which its handler counts. Other reads are not limited.
 //!
 //! Each (class, client) pair has a token bucket that refills evenly over a minute. Idle buckets are pruned once a minute and the table has a hard size cap, so memory stays bounded however many addresses show up.
 
@@ -26,6 +26,8 @@ pub enum Class {
     SignIn,
     Write,
     Upload,
+    /// `GET /api/public/projects?q=`, counted by its handler, since `classify` sees no query.
+    Search,
 }
 
 impl Class {
@@ -34,6 +36,7 @@ impl Class {
             Self::SignIn => 20,
             Self::Write => 120,
             Self::Upload => 30,
+            Self::Search => 60,
         }
     }
 

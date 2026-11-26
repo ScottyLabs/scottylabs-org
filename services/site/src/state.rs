@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::Context;
 use sqlx::PgPool;
+use tokio::sync::Semaphore;
 
 use crate::auth::oidc::OidcProvider;
 use crate::config::Config;
@@ -10,6 +11,9 @@ use crate::db::{Phase, Readiness};
 use crate::last_good::LastGood;
 use crate::media::MediaStore;
 use crate::ratelimit::RateLimiter;
+
+/// Searches of published projects that run at once. Each reads every published project's text, so a burst of them waits here instead of taking every worker.
+const CONCURRENT_SEARCHES: usize = 4;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -24,6 +28,7 @@ pub struct AppState {
     pub limits: Arc<RateLimiter>,
     /// The last good answer of each public endpoint, served when the database fails.
     pub last_good: Arc<LastGood>,
+    pub search_slots: Arc<Semaphore>,
 }
 
 impl AppState {
@@ -53,6 +58,7 @@ impl AppState {
             media,
             limits: Arc::new(RateLimiter::new()),
             last_good: Arc::new(LastGood::default()),
+            search_slots: Arc::new(Semaphore::new(CONCURRENT_SEARCHES)),
         })
     }
 
