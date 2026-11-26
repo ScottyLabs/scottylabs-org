@@ -2,6 +2,8 @@
 
 import type {
   CommitteeSlug,
+  GovernanceSyncStatus,
+  PeopleRoleAssignment,
   PersonRow,
   ProjectAdminSummary,
   Role,
@@ -9,13 +11,54 @@ import type {
 } from "../../../lib/api/types.ts";
 import { COMMITTEE_SLUGS } from "../../../lib/api/types.ts";
 import { committeeName } from "../../../lib/portal/committees.ts";
-import { formatUpdated } from "../../../lib/portal/dates.ts";
+import { formatAbsolute, formatUpdated } from "../../../lib/portal/dates.ts";
 
 /** One role of one person, as a table row. */
 export interface AssignmentRow {
   person: PersonRow["person"];
-  assignment: RoleAssignment;
+  assignment: PeopleRoleAssignment;
   isMe: boolean;
+}
+
+/** Shown under a director or lead whom governance did not list at the last sync, so admins can review the role. */
+export function governanceNote(assignment: PeopleRoleAssignment): string | null {
+  if (assignment.governanceListed !== false) return null;
+  return assignment.role === "director"
+    ? "Not the director in governance"
+    : "Not a head in governance";
+}
+
+/** The service syncs every six hours; a day without a successful sync means something is wrong. */
+const STALE_SYNC_MS = 24 * 60 * 60 * 1000;
+
+/** What admins should know about the last governance sync, or null when all is well. */
+export function syncNotice(
+  status: GovernanceSyncStatus | undefined,
+  now: Date,
+): { tone: "warning" | "info"; title: string; text: string } | null {
+  if (status === undefined) return null;
+  const last =
+    status.lastSuccessAt === null
+      ? "Directors and heads have not been synced from governance yet."
+      : `Directors and heads were last synced from governance ${formatAbsolute(status.lastSuccessAt, now)}.`;
+  if (status.lastError !== null) {
+    return {
+      tone: "warning",
+      title: "The last governance sync did not work",
+      text: `${status.lastError} ${last}`,
+    };
+  }
+  if (status.lastSuccessAt === null) {
+    return { tone: "info", title: "Not synced yet", text: last };
+  }
+  if (now.getTime() - new Date(status.lastSuccessAt).getTime() > STALE_SYNC_MS) {
+    return {
+      tone: "warning",
+      title: "Governance roles may be out of date",
+      text: `${last} The site syncs every six hours, so roles may not match governance. Sync now to check.`,
+    };
+  }
+  return null;
 }
 
 export const ROLE_LABELS: Readonly<Record<Role, string>> = {

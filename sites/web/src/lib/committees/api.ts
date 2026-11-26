@@ -48,6 +48,11 @@ export function takeLock(slug: CommitteeSlug): Promise<EditLock> {
   return post<EditLock>(`${pagePath(slug)}/lock`);
 }
 
+/** Admins only: takes the lock from whoever holds it, for an urgent fix. The service records it. */
+export function takeOverLock(slug: CommitteeSlug): Promise<EditLock> {
+  return post<EditLock>(`${pagePath(slug)}/lock/take-over`);
+}
+
 export function releaseLock(slug: CommitteeSlug): Promise<void> {
   return del(`${pagePath(slug)}/lock`);
 }

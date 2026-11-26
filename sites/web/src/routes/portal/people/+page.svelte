@@ -11,6 +11,7 @@
   import type {
     CommitteeSlug,
     GovernanceSyncResponse,
+    GovernanceSyncStatus,
     PeopleResponse,
     PersonRow,
     ProjectAdminSummary,
@@ -31,6 +32,7 @@
     assignmentRows,
     peopleIn,
     projectNames,
+    syncNotice,
     withPerson,
     withoutAssignment,
   } from "./people.ts";
@@ -56,7 +58,12 @@
   let highlightTimer: ReturnType<typeof setTimeout> | undefined;
   let now = $state(new Date());
   let syncMessages = $state<string[]>([]);
+  let syncTitle = $state("What the sync changed");
+  /** The messages were dismissed; a reload does not bring the same ones back. */
+  let dismissed = false;
+  let governance = $state.raw<GovernanceSyncStatus | undefined>();
   let table = $state<ReturnType<typeof PeopleTable> | null>(null);
+  const notice = $derived(syncNotice(governance, now));
 
   const rows = $derived(
     people === null || me === null
@@ -71,6 +78,12 @@
       const response = await get<PeopleResponse>("/people");
       people = response.people;
       now = new Date();
+      // Admins also see what the last sync, by the button or by the service, said.
+      governance = response.governance;
+      if (governance !== undefined && !dismissed && syncMessages.length === 0) {
+        syncTitle = "From the last governance sync";
+        syncMessages = governance.messages;
+      }
     } catch (error) {
       loadError = isApiError(error) ? error.message : "We could not load people. Try again.";
     }
@@ -155,7 +168,14 @@
     }
   }
 
+  function dismissMessages() {
+    syncMessages = [];
+    dismissed = true;
+  }
+
   function synced(result: GovernanceSyncResponse) {
+    syncTitle = "What the sync changed";
+    dismissed = false;
     toasts.success(
       `Synced from governance: ${result.added} directors added, ${result.updated} changed, ${result.headsAdded} heads made leads, ${result.headsRemoved} leads removed.`,
     );
@@ -203,13 +223,21 @@
 
   <div class="people">
     <div class="people__main">
+      {#if notice !== null}
+        <Callout tone={notice.tone} title={notice.title}>
+          {notice.text}
+          {#snippet actions()}
+            <Button variant="outline" size="sm" onclick={() => (syncOpen = true)}>Sync now</Button>
+          {/snippet}
+        </Callout>
+      {/if}
       {#if syncMessages.length > 0}
-        <Callout tone="info" title="What the sync changed">
+        <Callout tone="info" title={syncTitle}>
           <ul class="people__messages">
             {#each syncMessages as message, index (index)}<li>{message}</li>{/each}
           </ul>
           {#snippet actions()}
-            <Button variant="outline" size="sm" onclick={() => (syncMessages = [])}>Dismiss</Button>
+            <Button variant="outline" size="sm" onclick={dismissMessages}>Dismiss</Button>
           {/snippet}
         </Callout>
       {/if}
