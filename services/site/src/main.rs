@@ -26,6 +26,7 @@ mod testing;
 
 use std::io::IsTerminal;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Context;
 use tracing_subscriber::EnvFilter;
@@ -33,8 +34,25 @@ use tracing_subscriber::EnvFilter;
 use crate::config::Config;
 use crate::state::AppState;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+/// After `server::serve` returns, work on the blocking pool (image decodes, searches) gets this long before the process exits anyway. The graceful shutdown already took up to 8 seconds, and kennel waits 10 for a unit to stop.
+const BLOCKING_WORK_GRACE: Duration = Duration::from_secs(1);
+
+fn main() -> anyhow::Result<()> {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?;
+    let result = runtime.block_on(run());
+    stop(runtime, BLOCKING_WORK_GRACE);
+    result
+}
+
+/// Stops the runtime, waiting at most `grace` for blocking tasks. Dropping it instead would wait for every running `spawn_blocking` task, however long it takes.
+fn stop(runtime: tokio::runtime::Runtime, grace: Duration) {
+    runtime.shutdown_timeout(grace);
+}
+
+async fn run() -> anyhow::Result<()> {
     // html5ever warns once per node it cannot place while ammonia sanitizes, which anyone can trigger thousands of times per request, so it logs only errors, whatever RUST_LOG says.
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,site=debug"))
@@ -101,5 +119,26 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn stopping_does_not_wait_for_long_blocking_work() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            // Like an image decode that is still running when the shutdown grace ends.
+            tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_secs(5)));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        });
+        let started = Instant::now();
+        super::stop(runtime, Duration::from_millis(200));
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }

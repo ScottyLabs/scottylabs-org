@@ -216,11 +216,12 @@ impl MediaStore {
             .delete(url)
             .send()
             .await
-            .with_context(|| format!("deleting {key}"))?;
+            .map_err(|error| s3_failed("deleting", s3, &key, error))?;
         if !response.status().is_success() && response.status() != reqwest::StatusCode::NOT_FOUND {
             return Err(AppError::Internal(anyhow!(
-                "S3 answered {} when deleting {key}",
-                response.status()
+                "S3 answered {} when deleting {key} in bucket {}",
+                response.status(),
+                s3.bucket.name()
             )));
         }
         Ok(())
@@ -676,12 +677,20 @@ pub(crate) mod tests {
         else {
             panic!("the upload should fail");
         };
-        let logged = format!("{cause:#}");
-        assert!(logged.contains("in bucket media"), "{logged}");
-        assert!(logged.contains("could not connect"), "{logged}");
-        for secret in ["X-Amz", "GKtestaccess", "Signature", "127.0.0.1:9/", "?"] {
-            assert!(!logged.contains(secret), "{secret} in {logged}");
+        let Err(AppError::Internal(deleting)) = store
+            .remove_objects(Uuid::now_v7(), "s3", &[480, 960])
+            .await
+        else {
+            panic!("the delete should fail");
+        };
+        for logged in [format!("{cause:#}"), format!("{deleting:#}")] {
+            assert!(logged.contains("in bucket media"), "{logged}");
+            assert!(logged.contains("could not connect"), "{logged}");
+            for secret in ["X-Amz", "GKtestaccess", "Signature", "127.0.0.1:9/", "?"] {
+                assert!(!logged.contains(secret), "{secret} in {logged}");
+            }
         }
+        assert!(format!("{deleting:#}").starts_with("deleting media/"));
     }
 
     #[tokio::test]

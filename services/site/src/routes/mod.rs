@@ -61,6 +61,10 @@ pub fn router(state: AppState) -> Router {
         .fallback(api_not_found)
         .layer(middleware::from_fn_with_state(
             state.clone(),
+            share_the_pool,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
             crate::auth::csrf::require_csrf,
         ))
         .layer(middleware::from_fn_with_state(
@@ -144,6 +148,18 @@ async fn require_database(State(state): State<AppState>, request: Request, next:
         return next.run(request).await;
     }
     AppError::database_unavailable().into_response()
+}
+
+/// Public endpoints wait for one of [`AppState::public_slots`], so visitors can never hold every database connection; past the wait they answer 503, and `last_good` sends its copy.
+async fn share_the_pool(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    if !full_path(&request).starts_with("/api/public/") {
+        return next.run(request).await;
+    }
+    let Some(_slot) = state.public_slot().await else {
+        return AppError::Unavailable("The site is busy right now. Try again in a moment.".into())
+            .into_response();
+    };
+    next.run(request).await
 }
 
 async fn api_not_found() -> AppError {

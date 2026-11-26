@@ -291,7 +291,12 @@ async fn fallback(
     if !path.ends_with('/') {
         return redirect_with_slash(raw_path, query);
     }
-    match project_page(&state.db, slug).await {
+    // Anonymous visitors share the public slots with the public API (see `AppState::public_slots`).
+    let looked_up = match state.public_slot().await {
+        Some(_slot) => project_page(&state.db, slug).await,
+        None => Err(sqlx::Error::PoolTimedOut),
+    };
+    match looked_up {
         Ok(ProjectPage::Published(meta)) => html(
             config,
             audience,

@@ -71,6 +71,9 @@ struct PublicAnnouncement {
     committee: TickerSource,
     message: String,
     link_url: Option<String>,
+    /// Not sent: it bounds how long the service may serve its last good copy of the ticker.
+    #[serde(skip)]
+    expires_at: DateTime<Utc>,
 }
 
 #[derive(Serialize)]
@@ -81,14 +84,21 @@ struct PublicTickerResponse {
 /// Live announcements at request time, so expiry needs no deploy and no scheduled job.
 async fn public_ticker(State(state): State<AppState>) -> AppResult<Response> {
     let announcements = sqlx::query_as::<_, PublicAnnouncement>(
-        "SELECT id, kind, committee, message, link_url FROM announcements
+        "SELECT id, kind, committee, message, link_url, expires_at FROM announcements
          WHERE state = 'live' AND ended_at IS NULL AND starts_at <= $1 AND expires_at > $1
          ORDER BY position, starts_at, id",
     )
     .bind(Utc::now())
     .fetch_all(&state.db)
     .await?;
+    // Through an outage, the kept copy shows only while every announcement in it is still live.
+    let first_expiry = announcements.iter().map(|a| a.expires_at).min();
     let mut response = Json(PublicTickerResponse { announcements }).into_response();
+    if let Some(first_expiry) = first_expiry {
+        response
+            .extensions_mut()
+            .insert(crate::last_good::KeepUntil(first_expiry));
+    }
     let headers = response.headers_mut();
     headers.insert(
         CACHE_CONTROL,

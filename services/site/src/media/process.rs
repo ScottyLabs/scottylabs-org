@@ -101,7 +101,9 @@ pub fn target_widths(original: u32) -> Vec<u32> {
 
 pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
     let format = sniff(bytes).ok_or(ProcessError::Unsupported)?;
-    let (mut current, orientation) = decode(bytes, format)?;
+    let (decoded, orientation) = decode(bytes, format)?;
+    // Every variant is stored with 8 bits per channel, so a 16-bit original is narrowed first: each copy made from here on takes half the memory.
+    let mut current = eight_bits(decoded);
     // A quarter or three quarter turn swaps width and height, and the widths are for the image as it is shown.
     let turned = matches!(
         orientation,
@@ -122,9 +124,9 @@ pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
     if widest != shown_width {
         let shown_height = scaled_height(shown_width, shown_height, widest);
         current = if turned {
-            shrink_to(&current, shown_height, widest)
+            shrink_to(current, shown_height, widest)
         } else {
-            shrink_to(&current, widest, shown_height)
+            shrink_to(current, widest, shown_height)
         };
     }
     current.apply_orientation(orientation);
@@ -134,7 +136,7 @@ pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
     let mut variants = Vec::with_capacity(widths.len());
     for width in widths.iter().rev() {
         if current.width() != *width {
-            current = shrink(&current, *width);
+            current = shrink(current, *width);
         }
         // The widest version decides the format for all of them.
         let format = *output.get_or_insert_with(|| {
@@ -157,17 +159,34 @@ pub fn process(bytes: &[u8]) -> Result<Processed, ProcessError> {
     })
 }
 
+/// The image with 8 bits per channel, keeping its channels; 8-bit images are returned as they are. The original is freed once the copy exists.
+fn eight_bits(image: DynamicImage) -> DynamicImage {
+    match image {
+        DynamicImage::ImageLuma8(_)
+        | DynamicImage::ImageLumaA8(_)
+        | DynamicImage::ImageRgb8(_)
+        | DynamicImage::ImageRgba8(_) => image,
+        wide if wide.color().has_alpha() => DynamicImage::ImageRgba8(wide.into_rgba8()),
+        wide => DynamicImage::ImageRgb8(wide.into_rgb8()),
+    }
+}
+
 /// `image` scaled down to `width`, keeping its proportions.
-fn shrink(image: &DynamicImage, width: u32) -> DynamicImage {
+fn shrink(image: DynamicImage, width: u32) -> DynamicImage {
     let height = scaled_height(image.width(), image.height(), width);
     shrink_to(image, width, height)
 }
 
-/// `image` scaled down to `width` by `height`.
-fn shrink_to(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
+/// `image` scaled down to `width` by `height`. Takes the image so that a large original is freed before the resampling filter builds its copy: at most two full-size buffers exist at once.
+fn shrink_to(image: DynamicImage, width: u32, height: u32) -> DynamicImage {
     // Most of a large original is first averaged down to twice the size with the fast integer box filter, which looks the same at that ratio and needs no floating point copy of the original.
-    let halfway = (image.width() > 2 * width).then(|| image.thumbnail_exact(2 * width, 2 * height));
-    let source = halfway.as_ref().unwrap_or(image);
+    let source = if image.width() > 2 * width {
+        let halfway = image.thumbnail_exact(2 * width, 2 * height);
+        drop(image);
+        halfway
+    } else {
+        image
+    };
     let resample_bytes = u64::from(source.width()) * u64::from(height) * 16;
     if resample_bytes > RESAMPLE_BUDGET_BYTES {
         // Very tall images: the filter's copy would be too large.
@@ -485,8 +504,39 @@ pub(crate) mod tests {
         let sizes: Vec<(u32, u32)> = wide.variants.iter().map(|v| (v.width, v.height)).collect();
         assert_eq!(sizes, [(480, 12), (960, 24), (1920, 48)]);
         // Too tall for the filter's floating point copy, so the box filter does it.
-        let tall = shrink(&DynamicImage::new_rgb8(1_921, 5_500), 1_920);
+        let tall = shrink(DynamicImage::new_rgb8(1_921, 5_500), 1_920);
         assert_eq!((tall.width(), tall.height()), (1_920, 5_497));
+    }
+
+    #[test]
+    fn sixteen_bit_images_are_narrowed_before_resizing() {
+        let wide = DynamicImage::ImageRgba16(image::ImageBuffer::from_pixel(
+            6,
+            4,
+            image::Rgba([65_535u16, 0, 0, 32_768]),
+        ));
+        let narrowed = eight_bits(wide);
+        assert_eq!(narrowed.color(), image::ColorType::Rgba8);
+        assert_eq!(narrowed.to_rgba8().get_pixel(0, 0).0, [255, 0, 0, 128]);
+        let opaque = eight_bits(DynamicImage::ImageRgb16(image::ImageBuffer::new(2, 2)));
+        assert_eq!(opaque.color(), image::ColorType::Rgb8);
+        let gray = DynamicImage::new_luma8(2, 2);
+        assert_eq!(eight_bits(gray).color(), image::ColorType::L8);
+
+        let mut bytes = Vec::new();
+        DynamicImage::ImageRgb16(image::ImageBuffer::from_pixel(
+            2_400,
+            1_000,
+            image::Rgb([40_000u16, 20_000, 10_000]),
+        ))
+        .write_with_encoder(PngEncoder::new(&mut bytes))
+        .unwrap();
+        let processed = process(&bytes).unwrap();
+        assert_eq!(processed.format, OutputFormat::Jpeg);
+        assert_eq!(
+            processed.largest().map(|v| (v.width, v.height)),
+            Some((1_920, 800))
+        );
     }
 
     #[test]

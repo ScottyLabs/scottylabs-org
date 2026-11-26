@@ -11,6 +11,7 @@ use url::Url;
 
 use crate::config::Config;
 use crate::db::{self, Phase};
+use crate::models::Role;
 use crate::state::AppState;
 use crate::testing::{self, Req};
 
@@ -149,6 +150,143 @@ async fn public_answers_survive_a_database_outage(db: PgPool) {
         assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_eq!(res.code(), "unavailable", "{path}");
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn copies_never_bring_back_what_was_taken_down(db: PgPool) {
+    testing::ensure_committees(&db).await;
+    crate::seed::run(&db, &testing::config()).await.unwrap();
+    let admin = testing::user(&db, "outageadmin", &[(Role::Admin, None)]).await;
+    let pool = db::request_pool((*db.connect_options()).clone(), 2);
+    let state = AppState::new(pool.clone(), Arc::new(testing::config()))
+        .await
+        .unwrap();
+    let app = super::router(state);
+    let project_id = |slug: &'static str| {
+        let db = db.clone();
+        async move {
+            sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM projects WHERE slug = $1")
+                .bind(slug)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+
+    for path in [
+        "/api/public/projects/cmu-maps",
+        "/api/public/projects/nova",
+        "/api/public/committees/tech",
+    ] {
+        assert_eq!(
+            Req::get(path).send(&app).await.status,
+            StatusCode::OK,
+            "{path}"
+        );
+    }
+    // Made-up spellings of real pages answer, but are not kept, so they cannot push the real copies out.
+    for _ in 0..300 {
+        let res = Req::get("/api/public/committees/te%63h").send(&app).await;
+        assert_eq!(res.status, StatusCode::OK);
+    }
+
+    // Archived through the portal: every copy goes, the archived project's with them.
+    let res = Req::post(&format!(
+        "/api/projects/{}/archive",
+        project_id("cmu-maps").await
+    ))
+    .user(&admin)
+    .send(&app)
+    .await;
+    assert_eq!(res.status, StatusCode::OK, "{}", res.text());
+    assert_eq!(
+        Req::get("/api/public/committees/tech")
+            .send(&app)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    // Unpublished elsewhere (another replica, or by hand): the 404 drops this copy.
+    assert_eq!(
+        Req::get("/api/public/projects/nova")
+            .send(&app)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    sqlx::query("UPDATE projects SET state = 'archived' WHERE slug = 'nova'")
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        Req::get("/api/public/projects/nova")
+            .send(&app)
+            .await
+            .status,
+        StatusCode::NOT_FOUND
+    );
+
+    pool.close().await;
+    for path in ["/api/public/projects/cmu-maps", "/api/public/projects/nova"] {
+        let res = Req::get(path).send(&app).await;
+        assert_eq!(res.status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        assert_eq!(res.header("x-content-stale"), None, "{path}");
+    }
+    let tech = Req::get("/api/public/committees/tech").send(&app).await;
+    assert_eq!(tech.status, StatusCode::OK);
+    assert_eq!(tech.header("x-content-stale"), Some("true"));
+    // Refreshed after the archive, so its project cards leave the archived project out.
+    assert!(
+        !tech.text().contains("\"slug\":\"cmu-maps\""),
+        "{}",
+        tech.text()
+    );
+    let encoded = Req::get("/api/public/committees/te%63h").send(&app).await;
+    assert_eq!(encoded.status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn visitors_never_hold_every_database_connection(db: PgPool) {
+    testing::ensure_committees(&db).await;
+    let director = testing::user(
+        &db,
+        "pooldirector",
+        &[(Role::Director, Some(crate::models::Committee::Tech))],
+    )
+    .await;
+    let pool = db::request_pool((*db.connect_options()).clone(), 4);
+    let state = AppState::new(pool, Arc::new(testing::config()))
+        .await
+        .unwrap();
+    assert_eq!(state.public_slots.available_permits(), 2);
+    let app = super::router(state.clone());
+
+    // Visitors' requests already hold half the pool, say behind a held lock.
+    let busy = Arc::clone(&state.public_slots)
+        .acquire_many_owned(2)
+        .await
+        .unwrap();
+    let started = Instant::now();
+    let ticker = Req::get("/api/public/ticker").send(&app).await;
+    assert_eq!(ticker.status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(ticker.code(), "unavailable");
+    assert!(started.elapsed() < Duration::from_secs(4));
+    // The rest of the pool still answers the health check and the portal at once.
+    let started = Instant::now();
+    assert_eq!(
+        Req::get("/api/health").send(&app).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        Req::get("/api/me").user(&director).send(&app).await.status,
+        StatusCode::OK
+    );
+    assert!(started.elapsed() < Duration::from_secs(1));
+    drop(busy);
+    assert_eq!(
+        Req::get("/api/public/ticker").send(&app).await.status,
+        StatusCode::OK
+    );
 }
 
 #[sqlx::test(migrations = "./migrations")]
