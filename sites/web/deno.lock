@@ -2,9 +2,9 @@
   "version": "5",
   "specifiers": {
     "npm:@lucide/svelte@^1.55.0": "1.55.0_svelte@5.57.2",
-    "npm:@sveltejs/adapter-static@4": "4.0.0_@sveltejs+kit@3.0.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4",
-    "npm:@sveltejs/kit@*": "3.0.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4",
-    "npm:@sveltejs/kit@^3.0.1": "3.0.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4",
+    "npm:@sveltejs/adapter-static@^4.0.1": "4.0.1_@sveltejs+kit@3.1.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4",
+    "npm:@sveltejs/kit@*": "3.1.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4",
+    "npm:@sveltejs/kit@^3.1.1": "3.1.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4",
     "npm:@sveltejs/vite-plugin-svelte@^7.3.1": "7.3.1_svelte@5.57.2_vite@8.3.4",
     "npm:embla-carousel-svelte@^8.6.0": "8.6.0_svelte@5.57.2",
     "npm:posthog-js@^1.438.7": "1.438.7",
@@ -319,14 +319,14 @@
         "acorn"
       ]
     },
-    "@sveltejs/adapter-static@4.0.0_@sveltejs+kit@3.0.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4": {
-      "integrity": "sha512-aF1J23R1ebKqUxQ4/qLr/Lxu63NFmLAtg8UZl3HFLxaoA1D/nhTVGcD9lTqx65iUbjNR2iOL0TgOxSX82x6Paw==",
+    "@sveltejs/adapter-static@4.0.1_@sveltejs+kit@3.1.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4": {
+      "integrity": "sha512-svOU1OcBiJ9Kn1cdxHDmJIsBy1/iQe9STPvUFkO2/iinxPFS7r8fc9TiCaWWUgbrE+7ox6Bt4MURv3RPi7sunQ==",
       "dependencies": [
         "@sveltejs/kit"
       ]
     },
-    "@sveltejs/kit@3.0.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4": {
-      "integrity": "sha512-8JMCCq7ZUJELi3hbhb0+c9Rs8qnbHW90vhOfM+t1FSF4fhIpG9/FOsH4IYgcITMhbdkSrrn+Kvd9G+q8A+UO6Q==",
+    "@sveltejs/kit@3.1.1_@sveltejs+vite-plugin-svelte@7.3.1_svelte@5.57.2_typescript@6.0.3_vite@8.3.4": {
+      "integrity": "sha512-BiEMvekYXE9Gu/YhWJ/yJ0WDLH1PX/dmjuAeFp5rrtdmgdzkjt7DvimlSP+/U4tgposl7pkE20luHpcnc6BgRw==",
       "dependencies": [
         "@rolldown/pluginutils",
         "@standard-schema/spec",
@@ -385,8 +385,8 @@
     "commander@11.1.0": {
       "integrity": "sha512-yPVavfyCcRhmorC7rWlkHn15b4wDVgVmBA7kV4QVBsF7kv/9TKJAbAXVTxvTnwP8HHKjRCJDClKbciiYS7p0DQ=="
     },
-    "cookie@2.0.1": {
-      "integrity": "sha512-yuToqVvRrj6pfDXREyQAAv8SkAEk/8GS3jQRTiUMm66TVtBYmqQeoEjL2Lmq8Rpo6271vH76InTChTitEAm65w=="
+    "cookie@2.0.2": {
+      "integrity": "sha512-SL0cVuEdETEp7pN0FuZb01toc3vnODEfVUCooxG1SJN0yIirh7JMb9X9bvfCFf0vzzbT68RdbKDHYTiWy7a7iw=="
     },
     "core-js@3.50.0": {
       "integrity": "sha512-BRWgOLKkFeCgRudR6zrs8p9XJZcE14grzKMMssoYrk6krtuEZ7MTKPIY5RzOnqsEKIR9kst7wNzphttraT+Yqw==",
@@ -842,8 +842,8 @@
     "packageJson": {
       "dependencies": [
         "npm:@lucide/svelte@^1.55.0",
-        "npm:@sveltejs/adapter-static@4",
-        "npm:@sveltejs/kit@^3.0.1",
+        "npm:@sveltejs/adapter-static@^4.0.1",
+        "npm:@sveltejs/kit@^3.1.1",
         "npm:@sveltejs/vite-plugin-svelte@^7.3.1",
         "npm:embla-carousel-svelte@^8.6.0",
         "npm:posthog-js@^1.438.7",
