@@ -1,6 +1,6 @@
-// Tests for the public site's plain TypeScript helpers. Run from sites/web with `deno test tests/`.
+// Tests for the public site's plain TypeScript helpers. Run from sites/web with `deno test -A tests/`.
 // The type-aware linter cannot see Deno's globals or node:assert's types, so calls on them read as untyped here.
-/* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access */
+/* oxlint-disable typescript/no-unsafe-call, typescript/no-unsafe-member-access, typescript/no-unsafe-assignment */
 
 import assert from "node:assert/strict";
 import { INJECTED_ATTRIBUTE, removeInjectedHeadTags } from "../src/lib/site/head.ts";
@@ -63,4 +63,16 @@ Deno.test("https-only link hosts leave out plain http", () => {
   assert.equal(linkHost("https://cmumaps.com", { httpsOnly: true }), "cmumaps.com");
   assert.equal(linkHost("http://example.com", { httpsOnly: true }), null);
   assert.equal(linkHost("javascript:alert(1)", { httpsOnly: true }), null);
+});
+
+Deno.test("both security policies allow Svelte's event replay handler by its hash", async () => {
+  // Svelte writes onload="this.__e=event" on prerendered images with a load handler.
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("this.__e=event"));
+  const hash = `sha256-${btoa(String.fromCodePoint(...new Uint8Array(digest)))}`;
+  const config: string = await Deno.readTextFile(new URL("../vite.config.ts", import.meta.url));
+  const service: string = await Deno.readTextFile(
+    new URL("../../../services/site/src/static_files.rs", import.meta.url),
+  );
+  assert.ok(config.includes('"unsafe-hashes"') && config.includes(`"${hash}"`), "vite.config.ts");
+  assert.ok(service.includes(`"${hash}"`), "static_files.rs");
 });

@@ -19,6 +19,8 @@ pub struct Config {
     pub seed_demo: bool,
     /// Sync directors and heads from governance at startup and every six hours.
     pub governance_sync: bool,
+    /// The PostHog host's origin when public pages send page views, which needs both `PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST`. Only public pages may connect to it (`static_files::content_security_policy`).
+    pub analytics_origin: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -108,6 +110,7 @@ impl Config {
             dev_login,
             seed_demo: var("SEED_DEMO_CONTENT").as_deref() == Some("1"),
             governance_sync,
+            analytics_origin: analytics_origin(&var),
         })
     }
 
@@ -239,6 +242,23 @@ pub fn governance_sync_enabled(
     }
 }
 
+/// Where public pages send page views. The web app loads PostHog only when the key and the host are both set, so the origin counts only then too.
+fn analytics_origin(var: &impl Fn(&str) -> Option<String>) -> Option<String> {
+    var("PUBLIC_POSTHOG_KEY")?;
+    let host = var("PUBLIC_POSTHOG_HOST")?;
+    match Url::parse(host.trim()) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => {
+            Some(url.origin().ascii_serialization())
+        }
+        _ => {
+            tracing::warn!(
+                "PUBLIC_POSTHOG_HOST is not an http or https address, so the site's security policy blocks analytics"
+            );
+            None
+        }
+    }
+}
+
 fn optional(name: &str) -> Option<String> {
     env::var(name).ok().filter(|value| !value.trim().is_empty())
 }
@@ -311,6 +331,43 @@ mod tests {
 
         let partial = [BASE[0], BASE[1], ("S3_BUCKET", "scottylabs-org")];
         assert!(Config::from_vars(vars(&partial)).unwrap().s3.is_none());
+    }
+
+    #[test]
+    fn analytics_needs_the_key_and_a_web_host() {
+        let with = |pairs: &[(&'static str, &'static str)]| {
+            let mut all: Vec<(&str, &str)> = BASE.to_vec();
+            all.extend_from_slice(pairs);
+            Config::from_vars(vars(&all)).unwrap().analytics_origin
+        };
+        assert_eq!(
+            with(&[
+                ("PUBLIC_POSTHOG_KEY", "phc_test"),
+                ("PUBLIC_POSTHOG_HOST", " https://v.scottylabs.org/ingest/ "),
+            ])
+            .as_deref(),
+            Some("https://v.scottylabs.org")
+        );
+        assert_eq!(with(&[]), None);
+        assert_eq!(
+            with(&[("PUBLIC_POSTHOG_HOST", "https://v.scottylabs.org")]),
+            None
+        );
+        assert_eq!(with(&[("PUBLIC_POSTHOG_KEY", "phc_test")]), None);
+        for bad in [
+            "v.scottylabs.org",
+            "javascript:alert(1)",
+            "data:text/plain,x",
+        ] {
+            assert_eq!(
+                with(&[
+                    ("PUBLIC_POSTHOG_KEY", "phc_test"),
+                    ("PUBLIC_POSTHOG_HOST", bad)
+                ]),
+                None,
+                "{bad}"
+            );
+        }
     }
 
     #[test]

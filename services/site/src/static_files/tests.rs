@@ -8,6 +8,9 @@ use super::*;
 use crate::models::Committee;
 use crate::testing::{self, Req};
 
+/// What every policy allows besides this origin: Svelte's event replay handler.
+const REPLAY: &str = "'unsafe-hashes' 'sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I='";
+
 const SHELL: &str = "<!doctype html>\n<html lang=\"en\">\n  <head>\n    <meta charset=\"utf-8\" />\n  </head>\n  <body><div id=\"app\"></div></body>\n</html>\n";
 
 /// A small SvelteKit-like build in a fresh directory, removed when dropped.
@@ -401,6 +404,7 @@ async fn every_response_carries_security_headers(db: PgPool) {
         );
         let csp = res.header("content-security-policy").unwrap();
         for directive in [
+            "default-src 'self'",
             "frame-ancestors 'none'",
             "base-uri 'self'",
             "object-src 'none'",
@@ -408,7 +412,8 @@ async fn every_response_carries_security_headers(db: PgPool) {
         ] {
             assert!(csp.contains(directive), "{path}: {csp}");
         }
-        assert!(!csp.contains("script-src"));
+        assert!(csp.contains("script-src 'self'"), "{path}: {csp}");
+        assert!(!csp.contains("unsafe-eval"), "{path}: {csp}");
         assert!(res.header("strict-transport-security").is_none(), "{path}");
     }
 
@@ -426,9 +431,8 @@ async fn every_response_carries_security_headers(db: PgPool) {
 #[test]
 fn keycloak_may_receive_sign_in_forms() {
     let mut config = testing::config();
-    assert_eq!(
-        content_security_policy(&config),
-        "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'"
+    assert!(
+        content_security_policy(&config, Audience::Public, &[]).contains("; form-action 'self'; ")
     );
     config.oidc = Some(crate::config::OidcSettings {
         keycloak_url: "https://idp.scottylabs.org".into(),
@@ -439,7 +443,218 @@ fn keycloak_may_receive_sign_in_forms() {
         project_group: "/g".into(),
         project_admin_group: "/g/admins".into(),
     });
-    assert!(
-        content_security_policy(&config).ends_with("form-action 'self' https://idp.scottylabs.org")
+    for audience in [Audience::Public, Audience::Portal] {
+        assert!(
+            content_security_policy(&config, audience, &[])
+                .contains("; form-action 'self' https://idp.scottylabs.org; ")
+        );
+    }
+}
+
+#[test]
+fn the_policy_allows_only_what_the_site_uses() {
+    let mut config = testing::config();
+    let hashes = ["sha256-abc=".to_owned(), "sha256-def=".to_owned()];
+    assert_eq!(
+        content_security_policy(&config, Audience::Public, &hashes),
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-hashes' 'sha256-7dQwUgLau1NFCCGjfn9FsYptB6ZtWxJin6VohGIu20I=' 'sha256-abc=' 'sha256-def='; \
+         style-src 'self'; \
+         style-src-attr 'unsafe-inline'; \
+         img-src 'self' data: blob: https://assets.scottylabs.org; \
+         connect-src 'self'; \
+         frame-src https://www.youtube-nocookie.com https://player.vimeo.com https://calendar.google.com; \
+         frame-ancestors 'none'; \
+         base-uri 'self'; \
+         form-action 'self'; \
+         object-src 'none'"
     );
+
+    // Page views go to PostHog from public pages only; the portal never loads it.
+    config.analytics_origin = Some("https://v.scottylabs.org".into());
+    let public = content_security_policy(&config, Audience::Public, &[]);
+    assert!(public.contains("; connect-src 'self' https://v.scottylabs.org; "));
+    let portal = content_security_policy(&config, Audience::Portal, &[]);
+    assert!(portal.contains("; connect-src 'self'; "));
+    assert!(!portal.contains("v.scottylabs.org"));
+    // Nothing from the analytics host may run, on either.
+    for policy in [&public, &portal] {
+        assert!(
+            policy.contains(&format!("; script-src 'self' {REPLAY}; ")),
+            "{policy}"
+        );
+    }
+
+    assert_eq!(Audience::of("/portal"), Audience::Portal);
+    assert_eq!(Audience::of("/portal/people/"), Audience::Portal);
+    assert_eq!(Audience::of("/portals/"), Audience::Public);
+    assert_eq!(Audience::of("/"), Audience::Public);
+    assert_eq!(Audience::of("/api/me"), Audience::Public);
+}
+
+#[test]
+fn the_one_inline_handler_allowed_is_sveltes_event_replay() {
+    let digest = Sha256::digest(b"this.__e=event");
+    assert_eq!(
+        SVELTE_EVENT_REPLAY,
+        format!("sha256-{}", BASE64.encode(digest))
+    );
+}
+
+/// A page as SvelteKit 3 writes it with `csp.mode = "hash"` (`build/200.html`, preloads trimmed).
+const SVELTEKIT_PAGE: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" href="/favicon.ico" type="image/x-icon" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="content-security-policy" content="object-src 'none'; script-src 'self' 'sha256-I3kauuOv960cxGexGAz5QucKjjsQUOwvC4jX/2fxn9E='; base-uri 'self'">
+		<link href="/_app/immutable/entry/start.udRJaNJZ.js" rel="modulepreload">
+		<link href="/_app/env.js" rel="modulepreload">
+		<link href="/_app/immutable/assets/0.ti9kapTY.css" rel="stylesheet">
+  </head>
+  <body>
+    <div style="display: contents">
+			<script>
+				{
+					__sveltekit_l05zi4 = {
+						base: "",
+						version: "1795651979143",
+						env: null
+					};
+
+					const element = document.currentScript.parentElement;
+
+					import("/_app/env.js").then(({ env }) => {
+						__sveltekit_l05zi4.env = env;
+
+						import("/_app/immutable/entry/start.udRJaNJZ.js").then(async (kit) => {
+							kit.init(__sveltekit_l05zi4);
+							const app = await import("/_app/immutable/entry/app.CD9TpiCO.js");
+							kit.start(app, element);
+						});
+					});
+				}
+			</script>
+		</div>
+  </body>
+</html>
+"#;
+
+#[test]
+fn inline_scripts_get_the_hashes_sveltekit_writes() {
+    assert_eq!(
+        inline_script_hashes(SVELTEKIT_PAGE),
+        ["sha256-I3kauuOv960cxGexGAz5QucKjjsQUOwvC4jX/2fxn9E="]
+    );
+}
+
+#[test]
+fn only_scripts_that_run_inline_are_hashed() {
+    let html = concat!(
+        "<SCRIPT>alert(1)</SCRIPT>",
+        "<script type=\"module\">alert(1)</script>",
+        "<script src=\"/_app/x.js\"></script>",
+        "<script type=\"module\" src=\"/_app/y.js\"></script>",
+        "<script type=\"application/json\" data-sveltekit-fetched data-url=\"/api/a>b\">{\"a\":1}</script>",
+        "<script data-note='src=\"/x.js\" >'>console.log(\"caf\u{e9}\")</script>",
+        "<scripts>alert(2)</scripts>",
+        "<script>\n\t\t\t\t{\n\t\t\t\t\tstart();\n\t\t\t\t}\n\t\t\t</script >",
+        "<script>never closed",
+    );
+    assert_eq!(
+        inline_script_hashes(html),
+        [
+            "sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI=",
+            "sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI=",
+            "sha256-xn3zX0uObYsS3tR7jSGPmVmqPkKIVCfQdIV5/1C1cjw=",
+            "sha256-hi2YLOJzkVD56HGxlofhCnm/keV8duiuUS0ucOAoZP0=",
+        ]
+    );
+    assert!(inline_script_hashes("<p>No scripts</p>").is_empty());
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn pages_allow_their_own_inline_scripts(db: PgPool) {
+    let build = Build::new();
+    std::fs::write(build.0.join("200.html"), SVELTEKIT_PAGE).unwrap();
+    std::fs::write(
+        build.0.join("index.html"),
+        "<!doctype html><title>Home</title><script>alert(1)</script>",
+    )
+    .unwrap();
+    let mut config = testing::config();
+    config.static_dir = Some(build.0.clone());
+    config.analytics_origin = Some("https://v.scottylabs.org".into());
+    let app = testing::app_with(db.clone(), config).await;
+    let shell_hash = "'sha256-I3kauuOv960cxGexGAz5QucKjjsQUOwvC4jX/2fxn9E='";
+    let home_hash = "'sha256-bhHHL3z2vDgxUt0W3dWQOrprscmda2Y5pLsLg4GF+pI='";
+
+    // A prerendered page, and its 304: browsers update the stored headers from the 304.
+    let home = Req::get("/").send(&app).await;
+    let csp = home.header("content-security-policy").unwrap().to_owned();
+    assert!(
+        csp.contains(&format!("script-src 'self' {REPLAY} {home_hash};")),
+        "{csp}"
+    );
+    assert!(
+        csp.contains("connect-src 'self' https://v.scottylabs.org;"),
+        "{csp}"
+    );
+    let etag = home.header("etag").unwrap().to_owned();
+    let again = Req::get("/")
+        .header("if-none-match", &etag)
+        .send(&app)
+        .await;
+    assert_eq!(again.status, StatusCode::NOT_MODIFIED);
+    assert_eq!(again.header("content-security-policy"), Some(csp.as_str()));
+
+    // The shell, for the portal and for addresses with no page.
+    for (path, analytics) in [
+        ("/portal/", false),
+        ("/portal/people/", false),
+        ("/no-such-page/", true),
+    ] {
+        let res = Req::get(path).send(&app).await;
+        let csp = res.header("content-security-policy").unwrap();
+        assert!(
+            csp.contains(&format!("script-src 'self' {REPLAY} {shell_hash};")),
+            "{path}: {csp}"
+        );
+        assert_eq!(csp.contains("v.scottylabs.org"), analytics, "{path}: {csp}");
+    }
+
+    // Files that are not pages get the policy without hashes.
+    let script = Req::get("/_app/immutable/entry/start.abc123.js")
+        .send(&app)
+        .await;
+    let csp = script.header("content-security-policy").unwrap();
+    assert!(
+        csp.contains(&format!("script-src 'self' {REPLAY};")),
+        "{csp}"
+    );
+    let me = Req::get("/api/me").send(&app).await;
+    let csp = me.header("content-security-policy").unwrap();
+    assert!(
+        csp.contains(&format!("script-src 'self' {REPLAY};")),
+        "{csp}"
+    );
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn project_pages_allow_the_shell_script(db: PgPool) {
+    let build = Build::new();
+    std::fs::write(build.0.join("200.html"), SVELTEKIT_PAGE).unwrap();
+    let app = app_for(&db, &build).await;
+    testing::published_project(&db, Committee::Events, "nova", json!({ "name": "Nova" })).await;
+    for path in ["/projects/nova/", "/projects/unknown/"] {
+        let res = Req::get(path).send(&app).await;
+        let csp = res.header("content-security-policy").unwrap();
+        assert!(
+            csp.contains(&format!(
+                "script-src 'self' {REPLAY} 'sha256-I3kauuOv960cxGexGAz5QucKjjsQUOwvC4jX/2fxn9E=';"
+            )),
+            "{path}: {csp}"
+        );
+    }
 }
