@@ -1,7 +1,8 @@
 <script lang="ts">
   // One project's page (Figma 10:217, 44:5275; phone 11:520; spec P-8 to P-12). Loaded in the
   // browser from /api/public/projects/<slug>. A renamed project's old address moves to the new
-  // one; unpublished and archived projects show the not-found message.
+  // one; unpublished and archived projects show the not-found message. When the project cannot
+  // load, the page shows it as it was on the last visit, with a note.
   import { tick } from "svelte";
   import { goto } from "$app/navigation";
   import { page } from "$app/state";
@@ -15,15 +16,20 @@
   } from "#lib/api/types.ts";
   import Skeleton from "#lib/portal/ui/Skeleton.svelte";
   import ProjectPage from "#lib/projects/ProjectPage.svelte";
+  import LastGoodNote from "#lib/site/LastGoodNote.svelte";
+  import { forget, isRecord, recall, remember } from "#lib/site/last-good.ts";
   import { projectsIndexHref, relatedProjects } from "#lib/projects/filter.ts";
 
   type View =
     | { kind: "loading" }
-    | { kind: "ready"; project: ProjectDetail }
+    /** `savedAt` is set when the project comes from the last visit's copy. */
+    | { kind: "ready"; project: ProjectDetail; savedAt?: number }
     | { kind: "missing" }
     | { kind: "failed" };
 
   const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
+  const isProject = (value: unknown): value is ProjectDetail =>
+    isRecord(value) && typeof value.slug === "string" && typeof value.name === "string" && Array.isArray(value.media);
   const MOVED_TO = /^\/projects\/[a-z0-9]+(-[a-z0-9]+)*\/$/u;
 
   let view = $state<View>({ kind: "loading" });
@@ -67,15 +73,23 @@
         return;
       }
       if (response.project === null) {
+        forget(`project:${current}`);
         view = { kind: "missing" };
         return;
       }
       view = { kind: "ready", project: response.project };
+      remember(`project:${current}`, response.project);
       void revealTarget();
       void loadRelated(response.project, signal);
     } catch (error) {
       if (isAbortError(error)) return;
-      view = isApiError(error) && error.status === 404 ? { kind: "missing" } : { kind: "failed" };
+      if (isApiError(error) && error.status === 404) {
+        forget(`project:${current}`);
+        view = { kind: "missing" };
+        return;
+      }
+      const saved = recall(`project:${current}`, isProject);
+      view = saved === null ? { kind: "failed" } : { kind: "ready", project: saved.value, savedAt: saved.savedAt };
     }
   }
 
@@ -118,6 +132,9 @@
 
 <div class="project centered-section" aria-busy={view.kind === "loading"}>
   {#if view.kind === "ready"}
+    {#if view.savedAt !== undefined}
+      <LastGoodNote savedAt={view.savedAt} onretry={() => (attempt += 1)} />
+    {/if}
     <ProjectPage project={view.project} {related} {indexHref} />
   {:else if view.kind === "loading"}
     <div class="skeleton" aria-hidden="true">

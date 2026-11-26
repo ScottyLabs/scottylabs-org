@@ -1,7 +1,10 @@
 <script lang="ts">
   // One committee's page (spec C-6 to C-11): the published blocks, loaded in the browser. A
-  // skeleton holds the space while it loads; a page that is not published yet says so.
+  // skeleton holds the space while it loads; a page that is not published yet says so. When the
+  // content cannot load, the page shows what loaded before, in this visit or the last one, with a
+  // note, and an error only when it has nothing.
   import "#lib/committees/committees.css";
+  import { untrack } from "svelte";
   import Lock from "@lucide/svelte/icons/lock";
   import { isAbortError, isApiError } from "#lib/api/client.ts";
   import type { PublicCommitteePageResponse } from "#lib/api/types.ts";
@@ -9,6 +12,8 @@
   import CommitteePage from "#lib/committees/CommitteePage.svelte";
   import PageSkeleton from "#lib/committees/PageSkeleton.svelte";
   import { COMMITTEES } from "#lib/portal/committees.ts";
+  import LastGoodNote from "#lib/site/LastGoodNote.svelte";
+  import { forget, isRecord, recall, remember } from "#lib/site/last-good.ts";
   import type { PageProps } from "./$types";
 
   let { data }: PageProps = $props();
@@ -18,21 +23,47 @@
   let status = $state<"loading" | "ready" | "missing" | "error">("loading");
   let problem = $state("");
   let attempt = $state(0);
+  /** Shown from a saved copy: when it was saved, null for what loaded earlier in this visit. */
+  let stale = $state<{ savedAt: number | null } | null>(null);
+
+  const isPage = (value: unknown): value is PublicCommitteePageResponse =>
+    isRecord(value) && isRecord(value.committee) && Array.isArray(value.blocks) && Array.isArray(value.projects);
 
   $effect(() => {
     const slug = data.slug;
     void attempt;
     const controller = new AbortController();
-    status = "loading";
+    const key = `committee:${slug}`;
+    // What this visit already shows of the same committee stays if a retry fails. Read without
+    // tracking, so loading the page does not run this again.
+    const before = untrack(() => (page?.committee.slug === slug ? page : null));
+    const staleBefore = untrack(() => stale);
+    status = before === null ? "loading" : "ready";
     loadPublicPage(slug, controller.signal).then(
       (response) => {
         page = response;
+        stale = null;
         status = "ready";
+        remember(key, response);
       },
       (error: unknown) => {
         if (isAbortError(error)) return;
         if (isApiError(error) && error.status === 404) {
+          forget(key);
+          stale = null;
           status = "missing";
+          return;
+        }
+        if (before !== null) {
+          stale = staleBefore ?? { savedAt: null };
+          status = "ready";
+          return;
+        }
+        const saved = recall(key, isPage);
+        if (saved !== null) {
+          page = saved.value;
+          stale = { savedAt: saved.savedAt };
+          status = "ready";
           return;
         }
         problem = isApiError(error) && error.code !== "network" ? error.message : "Check your connection and try again.";
@@ -55,6 +86,9 @@
 
 <div class="page cb-scope" style:--cb-accent={style.color}>
   {#if status === "ready" && page}
+    {#if stale !== null}
+      <LastGoodNote savedAt={stale.savedAt} onretry={() => (attempt += 1)} />
+    {/if}
     <CommitteePage
       committee={{ slug: page.committee.slug, name: page.committee.name, color: page.committee.color, tint: page.committee.tint }}
       settings={page.committee}
