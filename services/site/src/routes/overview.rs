@@ -213,6 +213,7 @@ impl PageRow {
 fn image(value: Option<serde_json::Value>) -> Option<ImageRef> {
     value
         .and_then(|value| serde_json::from_value::<ImageRef>(value).ok())
+        .map(ImageRef::readable)
         .filter(|image| image.check(false).is_ok())
 }
 

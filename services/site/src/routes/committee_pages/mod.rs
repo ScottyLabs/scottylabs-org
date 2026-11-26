@@ -7,6 +7,9 @@ mod public;
 #[cfg(test)]
 mod tests;
 
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex, PoisonError};
+
 use axum::Router;
 use axum::routing::{get, post, put};
 use chrono::{DateTime, Utc};
@@ -19,6 +22,7 @@ use crate::blocks::{BlockContent, CommitteePageDoc};
 use crate::error::{AppError, AppResult};
 use crate::models::{Committee, without_direction_controls};
 use crate::richtext;
+use crate::routes::common::blocking;
 use crate::state::AppState;
 
 pub fn router() -> Router<AppState> {
@@ -52,6 +56,57 @@ fn cleaned_for_reading(mut doc: CommitteePageDoc) -> CommitteePageDoc {
         }
     }
     doc
+}
+
+/// The text bodies of a page, in order.
+fn text_bodies(doc: &CommitteePageDoc) -> Vec<String> {
+    doc.blocks
+        .iter()
+        .filter_map(|block| match &block.content {
+            BlockContent::Text(text) => Some(text.body.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `doc` with its text bodies replaced, in order, by `bodies`.
+fn with_text_bodies(mut doc: CommitteePageDoc, bodies: &[String]) -> CommitteePageDoc {
+    let mut bodies = bodies.iter();
+    for block in &mut doc.blocks {
+        if let BlockContent::Text(text) = &mut block.content
+            && let Some(body) = bodies.next()
+        {
+            text.body.clone_from(body);
+        }
+    }
+    doc
+}
+
+/// For each committee, the text bodies of its published page as stored and as [`cleaned_for_reading`] made them.
+type CleanedBodies = HashMap<Committee, (Vec<String>, Vec<String>)>;
+static PUBLISHED_TEXT: LazyLock<Mutex<CleanedBodies>> = LazyLock::new(Mutex::default);
+
+/// A committee's published page, [`cleaned_for_reading`]. The sanitizer runs on the blocking pool, and only when the stored text differs from the last time, so visitors reading the page cost a comparison instead of a sanitizer run per block.
+async fn published_for_reading(
+    committee: Committee,
+    doc: CommitteePageDoc,
+) -> AppResult<CommitteePageDoc> {
+    let stored = text_bodies(&doc);
+    let kept = PUBLISHED_TEXT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(&committee)
+        .filter(|(raw, _)| *raw == stored)
+        .map(|(_, cleaned)| cleaned.clone());
+    if let Some(cleaned) = kept {
+        return Ok(with_text_bodies(doc, &cleaned));
+    }
+    let cleaned = blocking(move || cleaned_for_reading(doc)).await?;
+    PUBLISHED_TEXT
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(committee, (stored, text_bodies(&cleaned)));
+    Ok(cleaned)
 }
 
 fn committee_from_slug(slug: &str) -> AppResult<Committee> {

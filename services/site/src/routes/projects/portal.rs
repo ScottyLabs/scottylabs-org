@@ -348,7 +348,12 @@ fn cleaned_for_reading(mut doc: ProjectDoc) -> ProjectDoc {
     doc.site_url = doc.site_url.and_then(|url| check_https_url(&url).ok());
     doc.repo_url = doc.repo_url.and_then(|url| check_https_url(&url).ok());
     doc.video_url = doc.video_url.and_then(|url| check_video_url(&url).ok());
-    doc.media.retain(|image| image.check(false).is_ok());
+    doc.media = doc
+        .media
+        .into_iter()
+        .map(ImageRef::readable)
+        .filter(|image| image.check(false).is_ok())
+        .collect();
     doc
 }
 

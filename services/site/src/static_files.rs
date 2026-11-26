@@ -438,7 +438,8 @@ fn meta_tags(meta: &ProjectMeta, config: &Config) -> String {
             alt: meta.cover_alt.clone().unwrap_or_default(),
             width: None,
             height: None,
-        };
+        }
+        .readable();
         image.check(false).ok()?;
         let src = if image.media_id().is_some() {
             format!("{src}?w=1920")

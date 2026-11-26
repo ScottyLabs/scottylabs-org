@@ -323,6 +323,35 @@ async fn erasing_a_person_keeps_their_entries_without_them(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn who_did_something_stays_while_they_exist(db: PgPool) {
+    testing::ensure_committees(&db).await;
+    let still_here = testing::user(&db, "stayer", &[]).await;
+    let entry = Uuid::now_v7();
+    sqlx::query(
+        "INSERT INTO audit_log (id, actor_id, action, subject_type, summary)
+         VALUES ($1, $2, 'test.action', 'person', 'Did something')",
+    )
+    .bind(entry)
+    .bind(still_here.id)
+    .execute(&db)
+    .await
+    .unwrap();
+    // Only deleting the person clears their name from an entry; a plain UPDATE is skipped.
+    let changed = sqlx::query("UPDATE audit_log SET actor_id = NULL WHERE id = $1")
+        .bind(entry)
+        .execute(&db)
+        .await
+        .unwrap();
+    assert_eq!(changed.rows_affected(), 0);
+    let actor: Option<Uuid> = sqlx::query_scalar("SELECT actor_id FROM audit_log WHERE id = $1")
+        .bind(entry)
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(actor, Some(still_here.id));
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn a_second_replica_skips_the_run(db: PgPool) {
     testing::ensure_committees(&db).await;
     let mut other = db.begin().await.unwrap();

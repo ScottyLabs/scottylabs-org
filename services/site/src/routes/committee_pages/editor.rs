@@ -16,7 +16,7 @@ use serde_json::json;
 
 use super::{
     CommitteeRef, PageRow, PageStatus, all_pages, cleaned_for_reading, committee_from_slug,
-    one_page,
+    one_page, published_for_reading,
 };
 use crate::audit::{self, subject};
 use crate::auth::{PortalViewer, Viewer};
@@ -175,14 +175,20 @@ async fn editor_response(
 ) -> AppResult<EditorResponse> {
     let row = one_page(&mut *conn, committee).await?;
     let projects = published_cards(&mut *conn, Some(committee)).await?;
+    let draft = row.draft.0.clone();
+    let draft = blocking(move || cleaned_for_reading(draft)).await?;
+    let published = match &row.published {
+        Some(json) => Some(published_for_reading(committee, json.0.clone()).await?),
+        None => None,
+    };
     Ok(EditorResponse {
         committee: row.committee_ref(),
         status: row.status(),
         lock: lock_of(&row, viewer),
         draft_version: row.draft_version,
         can_edit: permissions::can_edit_page(viewer, committee),
-        draft: cleaned_for_reading(row.draft.0),
-        published: row.published.map(|json| cleaned_for_reading(json.0)),
+        draft,
+        published,
         projects,
     })
 }

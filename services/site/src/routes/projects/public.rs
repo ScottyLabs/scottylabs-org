@@ -21,7 +21,7 @@ use uuid::Uuid;
 use super::doc::{ProjectDoc, ProjectKind, ProjectStatus, check_slug};
 use super::search;
 use crate::error::{AppError, AppResult};
-use crate::models::{Committee, ImageRef};
+use crate::models::{Committee, ImageRef, without_direction_controls};
 use crate::ratelimit::{Class, client_ip};
 use crate::routes::common::{PUBLIC_CACHE, blocking, query_param};
 use crate::state::AppState;
@@ -252,9 +252,10 @@ async fn project_page(state: &AppState, raw_slug: &str) -> AppResult<Response> {
         let body = PublicProjectResponse {
             project: Some(ProjectDetail {
                 card: row.card(),
-                description: doc.description.clone(),
+                // Saved descriptions refuse bidirectional controls; versions published before that may hold some.
+                description: without_direction_controls(&doc.description),
                 built_with: doc.built_with.clone(),
-                media: doc.media.clone(),
+                media: doc.media.iter().cloned().map(ImageRef::readable).collect(),
                 published_at: row.published_at.unwrap_or_else(Utc::now),
             }),
             redirect_to: None,

@@ -17,6 +17,7 @@ use crate::error::{AppError, AppResult};
 use crate::json::Json as JsonBody;
 use crate::models::{
     Committee, ImageRef, PersonRef, TickerSource, check_https_url, check_video_url,
+    without_direction_controls,
 };
 use crate::permissions;
 use crate::richtext;
@@ -117,11 +118,16 @@ impl AnnouncementSnapshot {
 
 impl ProjectSnapshot {
     fn cleaned(mut self) -> Self {
-        self.description = richtext::sanitize(&self.description);
+        self.description = without_direction_controls(&richtext::sanitize(&self.description));
         self.site_url = safe_link(self.site_url, check_https_url);
         self.repo_url = safe_link(self.repo_url, check_https_url);
         self.video_url = safe_link(self.video_url, check_video_url);
-        self.media.retain(|image| image.check(false).is_ok());
+        self.media = self
+            .media
+            .into_iter()
+            .map(ImageRef::readable)
+            .filter(|image| image.check(false).is_ok())
+            .collect();
         self
     }
 }

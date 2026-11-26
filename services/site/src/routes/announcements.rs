@@ -770,6 +770,8 @@ async fn create(
     let now = Utc::now();
     let valid = validate(&input, now)?;
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, share-locked until this transaction ends, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let row = post_new(&mut tx, &viewer, &valid, now).await?;
     let announcement = describe_one(&mut tx, &viewer, row, now).await?;
     tx.commit().await?;
@@ -794,6 +796,8 @@ async fn update(
     let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, share-locked until this transaction ends, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let row = lock(&mut tx, id).await?;
     if !can_see(&viewer, &row) {
         return Err(AppError::not_found("announcement"));
@@ -899,6 +903,8 @@ async fn extend(
     }
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, share-locked until this transaction ends, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let row = lock(&mut tx, id).await?;
     require_manage(&viewer, row.committee)?;
     if !row.is_live(now) {
@@ -956,6 +962,8 @@ async fn end(
     let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, share-locked until this transaction ends, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let row = lock(&mut tx, id).await?;
     require_manage(&viewer, row.committee)?;
     if !row.is_live(now) {
@@ -1000,6 +1008,8 @@ async fn repost(
     let id = parse_id(&id)?;
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, share-locked until this transaction ends, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let original = find(&mut tx, id, false)
         .await?
         .ok_or_else(|| AppError::not_found("announcement"))?;
@@ -1039,6 +1049,12 @@ async fn reorder(
     }
     let now = Utc::now();
     let mut tx = state.db.begin().await?;
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
+    if !permissions::can_reorder_ticker(&viewer) {
+        return Err(AppError::Forbidden(
+            "Only admins and directors can change the order of the ticker.".into(),
+        ));
+    }
     lock_live_set(&mut tx).await?;
     let live: Vec<Uuid> = sqlx::query_scalar(&format!(
         "SELECT id FROM announcements WHERE {LIVE} ORDER BY id FOR UPDATE"
@@ -1088,6 +1104,8 @@ async fn remove(
 ) -> AppResult<StatusCode> {
     let id = parse_id(&id)?;
     let mut tx = state.db.begin().await?;
+    // The viewer's roles as they are now, share-locked until this transaction ends, in case one was removed while this request ran.
+    let viewer = permissions::recheck(&mut tx, &viewer).await?;
     let row = lock(&mut tx, id).await?;
     if !can_see(&viewer, &row) {
         return Err(AppError::not_found("announcement"));
@@ -1189,6 +1207,7 @@ pub async fn apply_approval(
     approval: &ApprovalRow,
     approver: &Viewer,
 ) -> AppResult<()> {
+    let approver = &permissions::recheck(conn, approver).await?;
     let row = lock_submission(conn, approval, approver, ApprovalStatus::Approved).await?;
     let now = Utc::now();
     let snapshot: AnnouncementInput = serde_json::from_value(approval.snapshot.clone())?;
@@ -1238,6 +1257,7 @@ pub async fn apply_send_back(
     approval: &ApprovalRow,
     approver: &Viewer,
 ) -> AppResult<()> {
+    let approver = &permissions::recheck(conn, approver).await?;
     let row = lock_submission(conn, approval, approver, ApprovalStatus::SentBack).await?;
     let updated = sqlx::query_as::<_, Row>(&format!(
         "UPDATE announcements SET state = 'sent_back', updated_at = now() WHERE id = $1 RETURNING {}",

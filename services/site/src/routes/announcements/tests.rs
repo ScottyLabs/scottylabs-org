@@ -1155,6 +1155,24 @@ async fn approving_publishes_the_snapshot_at_the_end_of_the_loop(db: PgPool) {
 }
 
 #[sqlx::test(migrations = "./migrations")]
+async fn approvers_removed_mid_request_cannot_decide(db: PgPool) {
+    let c = cast(&db).await;
+    let id = posted(&c.app, &c.lead, "events", "Approve me").await;
+    // Loaded as director when the request started; an admin removed the role before it got this far.
+    let director = viewer(&c.events_director, Role::Director, Some(Committee::Events));
+    sqlx::query("DELETE FROM role_assignments WHERE user_id = $1")
+        .bind(c.events_director.id)
+        .execute(&db)
+        .await
+        .unwrap();
+    for approve in [true, false] {
+        let err = decide(&db, id, &director, approve).await.unwrap_err();
+        assert_eq!(err.code(), "forbidden");
+    }
+    assert_eq!(state_of(&db, id).await, "pending_approval");
+}
+
+#[sqlx::test(migrations = "./migrations")]
 async fn approving_needs_a_free_slot_and_a_future_expiry(db: PgPool) {
     let c = cast(&db).await;
     let director = viewer(&c.events_director, Role::Director, Some(Committee::Events));

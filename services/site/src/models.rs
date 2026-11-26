@@ -230,6 +230,12 @@ impl ImageRef {
         Ok(())
     }
 
+    /// The image with its description fitted to the one-line rules (see [`one_line`]), for images stored before those rules. Reading them back cleans the description instead of dropping the image, so an editor's next save keeps it.
+    pub fn readable(mut self) -> Self {
+        self.alt = one_line(&self.alt, MAX_ALT_LEN);
+        self
+    }
+
     /// The uploaded media id, if this is an upload.
     pub fn media_id(&self) -> Option<Uuid> {
         self.src
@@ -365,6 +371,25 @@ pub fn check_line(raw: &str, min: usize, max: usize, label: &str) -> Result<Stri
     Ok(value)
 }
 
+/// Stored text made to pass [`check_line`]: line breaks, tabs and the line and paragraph separators become spaces, the other characters it refuses are dropped, and the result is trimmed and cut to `max` characters.
+pub fn one_line(text: &str, max: usize) -> String {
+    let spaced: String = text
+        .chars()
+        .filter_map(|c| match c {
+            '\n' | '\r' | '\t' | '\u{2028}' | '\u{2029}' => Some(' '),
+            c if is_hidden_control(c) => None,
+            c => Some(c),
+        })
+        .collect();
+    spaced
+        .trim()
+        .chars()
+        .take(max)
+        .collect::<String>()
+        .trim_end()
+        .to_owned()
+}
+
 /// Characters a one-line field refuses besides line breaks: control characters such as NUL and tab, the Unicode line and paragraph separators, the bidirectional embeddings, overrides and isolates, which can make text read backwards or spoof what it says, and invisible characters that split words without showing (zero width space, word joiner, the byte order mark and the Mongolian vowel separator). Joiners inside emoji and the directional marks stay, since real names and emoji use them.
 fn is_hidden_control(c: char) -> bool {
     c.is_control()
@@ -392,6 +417,28 @@ pub fn without_direction_controls(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_descriptions_are_made_readable_instead_of_dropped() {
+        let legacy = ImageRef {
+            src: "/seed/photos/c09.jpg".into(),
+            alt: "  Four Nova\u{200B} winners\non stage\t\u{202E}today\u{2028} ".into(),
+            width: None,
+            height: None,
+        };
+        assert!(legacy.check(false).is_err());
+        let readable = legacy.readable();
+        assert_eq!(readable.alt, "Four Nova winners on stage today");
+        assert!(readable.check(false).is_ok());
+        assert_eq!(
+            one_line(&"x".repeat(MAX_ALT_LEN + 5), MAX_ALT_LEN).len(),
+            MAX_ALT_LEN
+        );
+        assert_eq!(
+            one_line("Ana \u{200D} \u{1F44B}", 50),
+            "Ana \u{200D} \u{1F44B}"
+        );
+    }
 
     #[test]
     fn committees_round_trip() {
